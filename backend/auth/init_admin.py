@@ -3,9 +3,9 @@
 用于设置或重置管理员密码
 """
 import sys
-from database import get_db
+from db.database import get_db
 from sqlalchemy import text
-from auth import get_password_hash
+from auth.auth import get_password_hash
 
 def init_admin(username: str = "admin", password: str = "admin123"):
     """初始化或更新管理员用户"""

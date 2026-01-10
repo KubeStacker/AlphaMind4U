@@ -1,19 +1,25 @@
 import React, { useState, useEffect } from 'react'
-import { Input, Card, Spin, message } from 'antd'
+import { Input, Card, Spin, message, AutoComplete, Tag } from 'antd'
 import { SearchOutlined } from '@ant-design/icons'
 import ReactECharts from 'echarts-for-react'
 import { stockApi, StockDailyData, CapitalFlowData } from '../api/stock'
 
 const Tab1: React.FC = () => {
   const [selectedStock, setSelectedStock] = useState<string>('688072')
+  const [selectedStockName, setSelectedStockName] = useState<string>('')
   const [dailyData, setDailyData] = useState<StockDailyData[]>([])
   const [capitalFlowData, setCapitalFlowData] = useState<CapitalFlowData[]>([])
   const [loading, setLoading] = useState(false)
   const [isMobile, setIsMobile] = useState(false)
+  const [searchOptions, setSearchOptions] = useState<Array<{ value: string; label: React.ReactNode; code: string; name: string }>>([])
+  const [searchValue, setSearchValue] = useState<string>('')
+  const [searchLoading, setSearchLoading] = useState(false)
 
   // 组件加载时自动加载默认标的数据
   useEffect(() => {
     loadStockData('688072')
+    // 加载默认股票的名称
+    loadStockName('688072')
   }, [])
 
   // 检测移动端
@@ -42,6 +48,19 @@ const Tab1: React.FC = () => {
     return code
   }
 
+  const loadStockName = async (stockCode: string) => {
+    try {
+      const normalizedCode = normalizeStockCode(stockCode)
+      const stocks = await stockApi.searchStocks(normalizedCode)
+      if (stocks && stocks.length > 0) {
+        const matchedStock = stocks.find(s => s.code === normalizedCode) || stocks[0]
+        setSelectedStockName(matchedStock.name || '')
+      }
+    } catch (error) {
+      console.error('获取股票名称失败:', error)
+    }
+  }
+
   const loadStockData = async (stockCode: string) => {
     setLoading(true)
     try {
@@ -54,12 +73,59 @@ const Tab1: React.FC = () => {
       ])
       setDailyData(daily)
       setCapitalFlowData(capitalFlow)
+      
+      // 加载股票名称
+      await loadStockName(normalizedCode)
     } catch (error: any) {
       const errorMsg = error.response?.data?.detail || '加载标的数据失败'
       message.error(errorMsg)
     } finally {
       setLoading(false)
     }
+  }
+
+  // 搜索股票（支持中文和首字母）
+  const handleSearch = async (value: string) => {
+    if (!value || value.trim().length === 0) {
+      setSearchOptions([])
+      return
+    }
+
+    setSearchLoading(true)
+    try {
+      const stocks = await stockApi.searchStocks(value.trim())
+      const options = stocks.map(stock => ({
+        value: `${stock.code} ${stock.name}`,
+        label: (
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span>
+              <Tag color="blue" style={{ marginRight: 8 }}>{stock.code}</Tag>
+              <span style={{ fontWeight: 500 }}>{stock.name}</span>
+            </span>
+            {stock.sector && <Tag color="cyan" style={{ fontSize: 11 }}>{stock.sector}</Tag>}
+          </div>
+        ),
+        code: stock.code,
+        name: stock.name
+      }))
+      setSearchOptions(options)
+    } catch (error) {
+      console.error('搜索失败:', error)
+      setSearchOptions([])
+    } finally {
+      setSearchLoading(false)
+    }
+  }
+
+  // 选择股票
+  const handleStockSelect = async (value: string, option: any) => {
+    const stockCode = option.code || value.split(' ')[0]
+    const stockName = option.name || value.split(' ')[1] || stockCode
+    setSearchValue('')
+    setSearchOptions([])
+    setSelectedStock(stockCode)
+    setSelectedStockName(stockName)
+    await loadStockData(stockCode)
   }
 
   const getKLineOption = () => {
@@ -71,9 +137,13 @@ const Tab1: React.FC = () => {
     const kData = dailyData.map(d => [d.open_price, d.close_price, d.low_price, d.high_price])
     const volumes = dailyData.map(d => d.volume || 0)  // 确保volume不为undefined
 
+    const titleText = selectedStockName 
+      ? `${selectedStockName} (${selectedStock}) - K线图`
+      : `${selectedStock} - K线图`
+
     return {
       title: {
-        text: `${selectedStock} - K线图`,
+        text: titleText,
         left: 'center',
         textStyle: { fontSize: 18, fontWeight: 'bold' },
       },
@@ -255,29 +325,44 @@ const Tab1: React.FC = () => {
   return (
     <div>
       <Card style={{ marginBottom: 24 }}>
-        <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
-          <Input
-            placeholder="输入标的代码（默认：688072）"
-            prefix={<SearchOutlined />}
-            defaultValue="688072"
-            onPressEnter={async (e) => {
-              const value = e.currentTarget.value.trim()
-              if (value) {
-                const normalized = normalizeStockCode(value)
-                setSelectedStock(normalized)
-                await loadStockData(normalized)
-              }
-            }}
-            onBlur={async (e) => {
-              const value = e.target.value.trim()
-              if (value && value !== selectedStock) {
-                const normalized = normalizeStockCode(value)
-                setSelectedStock(normalized)
-                await loadStockData(normalized)
-              }
-            }}
-            style={{ width: 300 }}
-          />
+        <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 16, fontWeight: 'bold' }}>标的搜索：</span>
+          <AutoComplete
+            style={{ flex: 1, minWidth: 300, maxWidth: 500 }}
+            options={searchOptions}
+            onSearch={handleSearch}
+            onSelect={handleStockSelect}
+            value={searchValue}
+            onChange={setSearchValue}
+            placeholder="输入股票代码、中文名称或首字母拼音（如：688072、平安、PA）"
+            allowClear
+            notFoundContent={searchLoading ? <Spin size="small" /> : '未找到匹配的股票'}
+          >
+            <Input
+              prefix={searchLoading ? <Spin size="small" /> : <SearchOutlined />}
+              size="large"
+              allowClear
+              onPressEnter={async (e) => {
+                const value = (e.target as HTMLInputElement).value.trim()
+                if (value) {
+                  // 如果是纯数字代码，直接加载
+                  const normalized = normalizeStockCode(value)
+                  if (normalized.match(/^\d{6}$/)) {
+                    setSelectedStock(normalized)
+                    await loadStockData(normalized)
+                  } else {
+                    // 否则触发搜索
+                    await handleSearch(value)
+                  }
+                }
+              }}
+            />
+          </AutoComplete>
+          {selectedStockName && (
+            <div style={{ fontSize: 14, color: '#666' }}>
+              当前标的：<span style={{ fontWeight: 'bold', color: '#1890ff' }}>{selectedStockName} ({selectedStock})</span>
+            </div>
+          )}
         </div>
       </Card>
 

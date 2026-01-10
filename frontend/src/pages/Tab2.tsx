@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react'
-import { Card, Button, Table, Tag, Collapse, message, Popover, Spin } from 'antd'
+import { Card, Button, Table, Tag, Collapse, message, Popover, Spin, Modal } from 'antd'
 import { ReloadOutlined, FireOutlined } from '@ant-design/icons'
 import ReactECharts from 'echarts-for-react'
 import { hotApi, HotStock, SectorInfo, SectorStock } from '../api/hot'
+import { stockApi, StockDailyData } from '../api/stock'
 
 const { Panel } = Collapse
 
@@ -13,12 +14,16 @@ const Tab2: React.FC = () => {
   const [refreshing, setRefreshing] = useState(false)
   const [sectorChartData, setSectorChartData] = useState<Record<string, any>>({})
   const [sectorStocks, setSectorStocks] = useState<Record<string, SectorStock[]>>({})
-  const [defaultStock, setDefaultStock] = useState<{ code: string; name: string; volume: number } | null>(null)
   const [isMobile, setIsMobile] = useState(false)
+  const [klineModalVisible, setKlineModalVisible] = useState(false)
+  const [selectedStockForKline, setSelectedStockForKline] = useState<{ code: string; name: string } | null>(null)
+  const [klineData, setKlineData] = useState<StockDailyData[]>([])
+  const [klineLoading, setKlineLoading] = useState(false)
+  const [sectorStocksModalVisible, setSectorStocksModalVisible] = useState(false)
+  const [selectedSectorForStocks, setSelectedSectorForStocks] = useState<{ name: string; stocks: SectorStock[] } | null>(null)
 
   useEffect(() => {
     loadData()
-    loadDefaultStock()
   }, [])
 
   // 检测移动端
@@ -31,25 +36,6 @@ const Tab2: React.FC = () => {
     return () => window.removeEventListener('resize', checkMobile)
   }, [])
 
-  const loadDefaultStock = async () => {
-    try {
-      const { stockApi } = await import('../api/stock')
-      const dailyData = await stockApi.getStockDaily('688022')
-      if (dailyData && dailyData.length > 0) {
-        const latest = dailyData[dailyData.length - 1]
-        // 获取股票名称
-        const stocks = await stockApi.searchStocks('688022')
-        const stockName = stocks.length > 0 ? stocks[0].name : '688022'
-        setDefaultStock({
-          code: '688022',
-          name: stockName,
-          volume: latest.volume || 0
-        })
-      }
-    } catch (error) {
-      console.error('加载默认股票信息失败:', error)
-    }
-  }
 
   const loadData = async () => {
     setLoading(true)
@@ -58,10 +44,19 @@ const Tab2: React.FC = () => {
         hotApi.getHotStocks(),
         hotApi.getHotSectors(),
       ])
-      setHotStocks(stocks)
-      setHotSectors(sectors)
-    } catch (error) {
-      message.error('加载数据失败')
+      setHotStocks(stocks || [])
+      setHotSectors(sectors || [])
+      
+      // 调试信息：检查数据格式
+      if (import.meta.env.DEV) {
+        console.log('热门板块数据:', sectors)
+        console.log('热门股票数据:', stocks)
+      }
+    } catch (error: any) {
+      console.error('加载数据失败:', error)
+      message.error(`加载数据失败: ${error?.response?.data?.detail || error?.message || '未知错误'}`)
+      setHotStocks([])
+      setHotSectors([])
     } finally {
       setLoading(false)
     }
@@ -73,8 +68,10 @@ const Tab2: React.FC = () => {
       await hotApi.refreshHotStocks()
       await loadData()
       message.success('热度榜数据已刷新')
-    } catch (error) {
-      message.error('刷新失败')
+    } catch (error: any) {
+      console.error('刷新数据失败:', error)
+      const errorMsg = error?.response?.data?.detail || error?.message || '未知错误'
+      message.error(`刷新失败: ${errorMsg}`)
     } finally {
       setRefreshing(false)
     }
@@ -93,6 +90,20 @@ const Tab2: React.FC = () => {
       setSectorStocks({ ...sectorStocks, [sectorName]: stocks })
     } catch (error) {
       message.error('加载板块数据失败')
+    }
+  }
+
+  const handleSectorStocksClick = async (sectorName: string) => {
+    try {
+      let stocks = sectorStocks[sectorName]
+      if (!stocks || stocks.length === 0) {
+        stocks = await hotApi.getSectorStocks(sectorName)
+        setSectorStocks({ ...sectorStocks, [sectorName]: stocks })
+      }
+      setSelectedSectorForStocks({ name: sectorName, stocks })
+      setSectorStocksModalVisible(true)
+    } catch (error) {
+      message.error('加载板块股票列表失败')
     }
   }
 
@@ -156,6 +167,12 @@ const Tab2: React.FC = () => {
       dataIndex: 'stock_name',
       key: 'stock_name',
       width: 150,
+      render: (name: string, record: HotStock) => (
+        <span style={{ cursor: 'pointer', color: '#1890ff' }} 
+              onClick={() => handleStockClick(record.stock_code, name)}>
+          {name || '-'}
+        </span>
+      ),
     },
     {
       title: '当前价格',
@@ -224,7 +241,7 @@ const Tab2: React.FC = () => {
       dataIndex: 'consecutive_days',
       key: 'consecutive_days',
       width: 120,
-      render: (days: number) => <Tag color="orange">{days} 天</Tag>,
+      render: (days: number) => days ? <Tag color="orange">{days} 天</Tag> : '-',
     },
     {
       title: '成交量',
@@ -249,6 +266,11 @@ const Tab2: React.FC = () => {
       title: '标的名称',
       dataIndex: 'stock_name',
       key: 'stock_name',
+      render: (name: string, record: SectorStock) => (
+        <span style={{ cursor: 'pointer', color: '#1890ff' }}>
+          {name || record.stock_code || '-'}
+        </span>
+      ),
     },
     {
       title: '热度排名',
@@ -263,6 +285,174 @@ const Tab2: React.FC = () => {
       render: (days: number) => <Tag>{days} 天</Tag>,
     },
   ]
+
+  const handleStockClick = async (stockCode: string, stockName: string) => {
+    setSelectedStockForKline({ code: stockCode, name: stockName })
+    setKlineModalVisible(true)
+    setKlineLoading(true)
+    try {
+      const data = await stockApi.getStockDaily(stockCode)
+      setKlineData(data)
+    } catch (error) {
+      message.error('加载K线数据失败')
+      setKlineData([])
+    } finally {
+      setKlineLoading(false)
+    }
+  }
+
+  const getKLineOption = () => {
+    if (!klineData || klineData.length === 0) {
+      return null
+    }
+    
+    const dates = klineData.map(d => d.trade_date)
+    const kData = klineData.map(d => [d.open_price, d.close_price, d.low_price, d.high_price])
+    const volumes = klineData.map(d => d.volume || 0)
+
+    return {
+      title: {
+        text: `${selectedStockForKline?.name || selectedStockForKline?.code} - K线图`,
+        left: 'center',
+        textStyle: { fontSize: 18, fontWeight: 'bold' },
+      },
+      tooltip: {
+        trigger: 'axis',
+        axisPointer: { type: 'cross' },
+      },
+      legend: {
+        data: ['K线', 'MA5', 'MA10', 'MA20', 'MA30', 'MA60', '成交量'],
+        top: 30,
+      },
+      grid: [
+        { left: '10%', right: '8%', top: '15%', height: '50%' },
+        { left: '10%', right: '8%', top: '70%', height: '15%' },
+      ],
+      xAxis: [
+        {
+          type: 'category',
+          data: dates,
+          scale: true,
+          boundaryGap: false,
+          axisLine: { onZero: false },
+          splitLine: { show: false },
+          min: 'dataMin',
+          max: 'dataMax',
+        },
+        {
+          type: 'category',
+          gridIndex: 1,
+          data: dates,
+          scale: true,
+          boundaryGap: false,
+          axisLine: { onZero: false },
+          splitLine: { show: false },
+          min: 'dataMin',
+          max: 'dataMax',
+        },
+      ],
+      yAxis: [
+        {
+          scale: true,
+          splitArea: { show: true },
+        },
+        {
+          scale: true,
+          gridIndex: 1,
+          splitNumber: 2,
+          axisLabel: { show: false },
+          splitLine: { show: false },
+        },
+      ],
+      dataZoom: [
+        {
+          type: 'inside',
+          xAxisIndex: [0, 1],
+          start: 70,
+          end: 100,
+        },
+        {
+          show: true,
+          xAxisIndex: [0, 1],
+          type: 'slider',
+          top: '90%',
+          start: 70,
+          end: 100,
+        },
+      ],
+      series: [
+        {
+          name: 'K线',
+          type: 'candlestick',
+          data: kData,
+          itemStyle: {
+            color: '#ef5350',
+            color0: '#26a69a',
+            borderColor: '#ef5350',
+            borderColor0: '#26a69a',
+          },
+        },
+        {
+          name: 'MA5',
+          type: 'line',
+          data: klineData.map(d => d.ma5),
+          smooth: true,
+          lineStyle: { width: 1 },
+          showSymbol: false,
+        },
+        {
+          name: 'MA10',
+          type: 'line',
+          data: klineData.map(d => d.ma10),
+          smooth: true,
+          lineStyle: { width: 1 },
+          showSymbol: false,
+        },
+        {
+          name: 'MA20',
+          type: 'line',
+          data: klineData.map(d => d.ma20),
+          smooth: true,
+          lineStyle: { width: 1 },
+          showSymbol: false,
+        },
+        {
+          name: 'MA30',
+          type: 'line',
+          data: klineData.map(d => d.ma30),
+          smooth: true,
+          lineStyle: { width: 1 },
+          showSymbol: false,
+        },
+        {
+          name: 'MA60',
+          type: 'line',
+          data: klineData.map(d => d.ma60),
+          smooth: true,
+          lineStyle: { width: 1 },
+          showSymbol: false,
+        },
+        {
+          name: '成交量',
+          type: 'bar',
+          xAxisIndex: 1,
+          yAxisIndex: 1,
+          data: volumes,
+          itemStyle: {
+            color: (params: any) => {
+              const idx = params.dataIndex
+              if (idx > 0 && idx < klineData.length && klineData[idx] && klineData[idx - 1]) {
+                if (klineData[idx].close_price > klineData[idx - 1].close_price) {
+                  return '#ef5350'
+                }
+              }
+              return '#26a69a'
+            },
+          },
+        },
+      ],
+    }
+  }
 
   const xueqiuStocks = hotStocks.filter(s => s.source === 'xueqiu').slice(0, 100)
   const dongcaiStocks = hotStocks.filter(s => s.source === 'dongcai').slice(0, 100)
@@ -292,6 +482,11 @@ const Tab2: React.FC = () => {
           <div style={{ textAlign: 'center', padding: 20 }}>
             <Spin />
           </div>
+        ) : hotSectors.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: 40, color: '#999' }}>
+            <div style={{ fontSize: 16, marginBottom: 8 }}>暂无热门板块数据</div>
+            <div style={{ fontSize: 14 }}>请确保已采集热门股票数据，或点击刷新按钮更新数据</div>
+          </div>
         ) : (
           <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
             {hotSectors.map((sector) => {
@@ -317,23 +512,32 @@ const Tab2: React.FC = () => {
                               pagination={false}
                               size="small"
                               style={{ marginTop: 16 }}
+                              onRow={(record) => ({
+                                onClick: () => handleStockClick(record.stock_code, record.stock_name || record.stock_code),
+                                style: { cursor: 'pointer' }
+                              })}
                             />
                           )}
                         </>
                       ) : (
                         <div style={{ textAlign: 'center', padding: 20 }}>
-                          <Button onClick={() => handleSectorClick(sector.sector_name)}>
-                            加载板块数据
-                          </Button>
+                          <Spin />
+                          <div style={{ marginTop: 10, color: '#999' }}>正在加载板块数据...</div>
                         </div>
                       )}
                     </div>
                   }
                   trigger="click"
                   placement="bottom"
+                  onOpenChange={(open) => {
+                    if (open && !chartOption) {
+                      handleSectorClick(sector.sector_name)
+                    }
+                  }}
                 >
                   <Card
                     hoverable
+                    onClick={() => handleSectorClick(sector.sector_name)}
                     style={{
                       width: isMobile ? '100%' : 280,
                       cursor: 'pointer',
@@ -353,8 +557,15 @@ const Tab2: React.FC = () => {
                         <div style={{ fontSize: 12, marginBottom: 8, opacity: 0.9 }}>热门标的：</div>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                           {sector.hot_stocks.slice(0, 5).map((stock, idx) => (
-                            <div key={stock.stock_code} style={{ fontSize: 12, opacity: 0.9 }}>
-                              {idx + 1}. {stock.stock_name} ({stock.stock_code})
+                            <div 
+                              key={stock.stock_code} 
+                              style={{ fontSize: 12, opacity: 0.9, cursor: 'pointer' }}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                handleStockClick(stock.stock_code, stock.stock_name || stock.stock_code)
+                              }}
+                            >
+                              {idx + 1}. {stock.stock_name || stock.stock_code} ({stock.stock_code})
                               {stock.rank && (
                                 <Tag color="gold" style={{ marginLeft: 4, fontSize: 10 }}>
                                   #{stock.rank}
@@ -363,8 +574,14 @@ const Tab2: React.FC = () => {
                             </div>
                           ))}
                           {sector.hot_stocks.length > 5 && (
-                            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 4 }}>
-                              还有 {sector.hot_stocks.length - 5} 只...
+                            <div 
+                              style={{ fontSize: 11, opacity: 0.9, marginTop: 4, cursor: 'pointer', textDecoration: 'underline' }}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                handleSectorStocksClick(sector.sector_name)
+                              }}
+                            >
+                              查看全部 {sector.hot_stocks.length} 只股票...
                             </div>
                           )}
                         </div>
@@ -377,23 +594,6 @@ const Tab2: React.FC = () => {
           </div>
         )}
       </Card>
-
-      {defaultStock && (
-        <Card style={{ marginBottom: 24 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-            <span style={{ fontSize: 16, fontWeight: 'bold' }}>默认标的：</span>
-            <Tag color="blue" style={{ fontSize: 14, padding: '4px 12px' }}>
-              {defaultStock.code} {defaultStock.name}
-            </Tag>
-            <span style={{ color: '#666' }}>成交量：</span>
-            <Tag color="green" style={{ fontSize: 14, padding: '4px 12px' }}>
-              {defaultStock.volume >= 10000 
-                ? (defaultStock.volume / 10000).toFixed(2) + '万' 
-                : defaultStock.volume.toLocaleString()}
-            </Tag>
-          </div>
-        </Card>
-      )}
 
       <Collapse defaultActiveKey={['xueqiu']} style={{ marginBottom: 24 }}>
         <Panel
@@ -411,6 +611,10 @@ const Tab2: React.FC = () => {
             rowKey={(record) => `${record.source}-${record.stock_code}-${record.rank}`}
             pagination={{ pageSize: 20 }}
             size="small"
+            onRow={(record) => ({
+              onClick: () => handleStockClick(record.stock_code, record.stock_name || record.stock_code),
+              style: { cursor: 'pointer' }
+            })}
           />
         </Panel>
         <Panel
@@ -428,9 +632,70 @@ const Tab2: React.FC = () => {
             rowKey={(record) => `${record.source}-${record.stock_code}-${record.rank}`}
             pagination={{ pageSize: 20 }}
             size="small"
+            onRow={(record) => ({
+              onClick: () => handleStockClick(record.stock_code, record.stock_name || record.stock_code),
+              style: { cursor: 'pointer' }
+            })}
           />
         </Panel>
       </Collapse>
+
+      <Modal
+        title={`${selectedStockForKline?.name || selectedStockForKline?.code} - K线图`}
+        open={klineModalVisible}
+        onCancel={() => setKlineModalVisible(false)}
+        footer={null}
+        width={isMobile ? '95%' : 1200}
+        style={{ top: 20 }}
+      >
+        {klineLoading ? (
+          <div style={{ textAlign: 'center', padding: 50 }}>
+            <Spin size="large" />
+          </div>
+        ) : klineData.length > 0 ? (
+          <ReactECharts
+            option={getKLineOption()}
+            style={{ 
+              height: isMobile ? '400px' : '600px', 
+              width: '100%' 
+            }}
+          />
+        ) : (
+          <div style={{ textAlign: 'center', padding: 50, color: '#999' }}>
+            暂无K线数据
+          </div>
+        )}
+      </Modal>
+
+      <Modal
+        title={`${selectedSectorForStocks?.name} - 全部股票列表`}
+        open={sectorStocksModalVisible}
+        onCancel={() => setSectorStocksModalVisible(false)}
+        footer={null}
+        width={isMobile ? '95%' : 1000}
+        style={{ top: 20 }}
+      >
+        {selectedSectorForStocks && selectedSectorForStocks.stocks.length > 0 ? (
+          <Table
+            dataSource={selectedSectorForStocks.stocks}
+            columns={sectorStocksColumns}
+            rowKey={(record) => record.stock_code}
+            pagination={{ pageSize: 20 }}
+            size="small"
+            onRow={(record) => ({
+              onClick: () => {
+                setSectorStocksModalVisible(false)
+                handleStockClick(record.stock_code, record.stock_name || record.stock_code)
+              },
+              style: { cursor: 'pointer' }
+            })}
+          />
+        ) : (
+          <div style={{ textAlign: 'center', padding: 50, color: '#999' }}>
+            暂无股票数据
+          </div>
+        )}
+      </Modal>
     </div>
   )
 }

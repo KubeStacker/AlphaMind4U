@@ -51,8 +51,14 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     const response = await authApi.login({ username, password })
     localStorage.setItem('token', response.access_token)
     localStorage.setItem('username', response.username)
-    const userInfo = await authApi.getCurrentUser()
-    setUser(userInfo)
+    try {
+      const userInfo = await authApi.getCurrentUser()
+      setUser(userInfo)
+    } catch (error) {
+      // 如果获取用户信息失败，但登录已成功，仍然设置用户信息
+      console.error('获取用户信息失败:', error)
+      setUser({ id: 0, username: response.username })
+    }
   }
 
   const logout = async () => {

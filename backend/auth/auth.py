@@ -8,7 +8,7 @@ import bcrypt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy import text
-from database import get_db
+from db.database import get_db
 import logging
 
 logger = logging.getLogger(__name__)

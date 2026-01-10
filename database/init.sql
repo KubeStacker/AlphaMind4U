@@ -1,147 +1,158 @@
--- 股票数据库初始化脚本
--- 数据库名: stock
--- 字符集: utf8mb4
-
--- 股票基本信息表
-CREATE TABLE IF NOT EXISTS stock_info (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    stock_code VARCHAR(20) NOT NULL COMMENT '股票代码',
-    stock_name VARCHAR(100) NOT NULL COMMENT '股票名称',
-    sector VARCHAR(100) COMMENT '所属板块',
-    market VARCHAR(20) COMMENT '市场（沪深）',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    UNIQUE KEY uk_stock_code (stock_code),
-    INDEX idx_sector (sector)
+-- 数据库表结构设计 - 重构版
+-- 1. stock_basic: 股票基本信息表
+CREATE TABLE IF NOT EXISTS `stock_basic` (
+    `stock_code` VARCHAR(10) NOT NULL COMMENT '股票代码（6位数字）',
+    `stock_name` VARCHAR(50) NOT NULL COMMENT '股票名称',
+    `market` VARCHAR(10) DEFAULT NULL COMMENT '所属市场（SH/SZ）',
+    `industry` VARCHAR(50) DEFAULT NULL COMMENT '所属行业',
+    `list_date` DATE DEFAULT NULL COMMENT '上市日期',
+    `is_active` TINYINT(1) DEFAULT 1 COMMENT '是否有效（1=有效，0=退市）',
+    `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    PRIMARY KEY (`stock_code`),
+    INDEX `idx_stock_name` (`stock_name`),
+    INDEX `idx_market` (`market`),
+    INDEX `idx_is_active` (`is_active`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='股票基本信息表';
 
--- 股票日K数据表
-CREATE TABLE IF NOT EXISTS stock_daily (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    stock_code VARCHAR(20) NOT NULL COMMENT '股票代码',
-    trade_date DATE NOT NULL COMMENT '交易日期',
-    open_price DECIMAL(10, 2) NOT NULL COMMENT '开盘价',
-    close_price DECIMAL(10, 2) NOT NULL COMMENT '收盘价',
-    high_price DECIMAL(10, 2) NOT NULL COMMENT '最高价',
-    low_price DECIMAL(10, 2) NOT NULL COMMENT '最低价',
-    volume BIGINT NOT NULL COMMENT '成交量',
-    amount DECIMAL(20, 2) COMMENT '成交额',
-    ma5 DECIMAL(10, 2) COMMENT '5日均线',
-    ma10 DECIMAL(10, 2) COMMENT '10日均线',
-    ma20 DECIMAL(10, 2) COMMENT '20日均线',
-    ma30 DECIMAL(10, 2) COMMENT '30日均线',
-    ma60 DECIMAL(10, 2) COMMENT '60日均线',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE KEY uk_stock_date (stock_code, trade_date),
-    INDEX idx_trade_date (trade_date),
-    INDEX idx_stock_code (stock_code)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='股票日K数据表';
+-- 2. stock_daily: 股票交易日数据表
+CREATE TABLE IF NOT EXISTS `stock_daily` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `stock_code` VARCHAR(10) NOT NULL COMMENT '股票代码',
+    `trade_date` DATE NOT NULL COMMENT '交易日期',
+    `open_price` DECIMAL(10,2) DEFAULT NULL COMMENT '开盘价',
+    `close_price` DECIMAL(10,2) DEFAULT NULL COMMENT '收盘价',
+    `high_price` DECIMAL(10,2) DEFAULT NULL COMMENT '最高价',
+    `low_price` DECIMAL(10,2) DEFAULT NULL COMMENT '最低价',
+    `volume` BIGINT UNSIGNED DEFAULT 0 COMMENT '成交量（手）',
+    `amount` DECIMAL(20,2) DEFAULT 0 COMMENT '成交额（元）',
+    `turnover_rate` DECIMAL(5,2) DEFAULT NULL COMMENT '换手率（%）',
+    `change_pct` DECIMAL(5,2) DEFAULT NULL COMMENT '涨跌幅（%）',
+    `ma5` DECIMAL(10,2) DEFAULT NULL COMMENT '5日均价',
+    `ma10` DECIMAL(10,2) DEFAULT NULL COMMENT '10日均价',
+    `ma20` DECIMAL(10,2) DEFAULT NULL COMMENT '20日均价',
+    `ma30` DECIMAL(10,2) DEFAULT NULL COMMENT '30日均价',
+    `ma60` DECIMAL(10,2) DEFAULT NULL COMMENT '60日均价',
+    `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_stock_date` (`stock_code`, `trade_date`),
+    INDEX `idx_trade_date` (`trade_date`),
+    INDEX `idx_stock_code_date` (`stock_code`, `trade_date`),
+    INDEX `idx_date_code` (`trade_date`, `stock_code`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='股票交易日数据表';
 
--- 主力资金流入表
-CREATE TABLE IF NOT EXISTS stock_capital_flow (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    stock_code VARCHAR(20) NOT NULL COMMENT '股票代码',
-    trade_date DATE NOT NULL COMMENT '交易日期',
-    main_net_inflow DECIMAL(20, 2) COMMENT '主力净流入（万元）',
-    super_large_inflow DECIMAL(20, 2) COMMENT '超大单净流入（万元）',
-    large_inflow DECIMAL(20, 2) COMMENT '大单净流入（万元）',
-    medium_inflow DECIMAL(20, 2) COMMENT '中单净流入（万元）',
-    small_inflow DECIMAL(20, 2) COMMENT '小单净流入（万元）',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE KEY uk_stock_date_flow (stock_code, trade_date),
-    INDEX idx_trade_date_flow (trade_date),
-    INDEX idx_stock_code_flow (stock_code)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='主力资金流入表';
+-- 3. concept_theme: 概念主题表
+CREATE TABLE IF NOT EXISTS `concept_theme` (
+    `concept_id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `concept_name` VARCHAR(100) NOT NULL COMMENT '概念名称',
+    `concept_code` VARCHAR(50) DEFAULT NULL COMMENT '概念代码',
+    `source` VARCHAR(20) DEFAULT 'ths' COMMENT '数据来源（ths=同花顺，em=东财）',
+    `description` TEXT DEFAULT NULL COMMENT '概念描述',
+    `is_active` TINYINT(1) DEFAULT 1 COMMENT '是否有效',
+    `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    PRIMARY KEY (`concept_id`),
+    UNIQUE KEY `uk_concept_name_source` (`concept_name`, `source`),
+    INDEX `idx_concept_name` (`concept_name`),
+    INDEX `idx_is_active` (`is_active`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='概念主题表';
 
--- 板块信息表
-CREATE TABLE IF NOT EXISTS sector_info (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    sector_code VARCHAR(50) NOT NULL COMMENT '板块代码',
-    sector_name VARCHAR(100) NOT NULL COMMENT '板块名称',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    UNIQUE KEY uk_sector_code (sector_code)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='板块信息表';
+-- 4. stock_concept_mapping: 股票与概念关联关系表（多对多）
+CREATE TABLE IF NOT EXISTS `stock_concept_mapping` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `stock_code` VARCHAR(10) NOT NULL COMMENT '股票代码',
+    `concept_id` INT UNSIGNED NOT NULL COMMENT '概念ID',
+    `weight` DECIMAL(5,2) DEFAULT 1.0 COMMENT '关联权重（用于计算虚拟板块）',
+    `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_stock_concept` (`stock_code`, `concept_id`),
+    INDEX `idx_stock_code` (`stock_code`),
+    INDEX `idx_concept_id` (`concept_id`),
+    INDEX `idx_weight` (`weight`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='股票与概念关联关系表';
 
--- 板块日K数据表
-CREATE TABLE IF NOT EXISTS sector_daily (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    sector_code VARCHAR(50) NOT NULL COMMENT '板块代码',
-    trade_date DATE NOT NULL COMMENT '交易日期',
-    open_price DECIMAL(10, 2) NOT NULL COMMENT '开盘价',
-    close_price DECIMAL(10, 2) NOT NULL COMMENT '收盘价',
-    high_price DECIMAL(10, 2) NOT NULL COMMENT '最高价',
-    low_price DECIMAL(10, 2) NOT NULL COMMENT '最低价',
-    volume BIGINT NOT NULL COMMENT '成交量',
-    amount DECIMAL(20, 2) COMMENT '成交额',
-    change_pct DECIMAL(5, 2) COMMENT '涨跌幅(%)',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE KEY uk_sector_date (sector_code, trade_date),
-    INDEX idx_trade_date_sector (trade_date),
-    INDEX idx_sector_code (sector_code)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='板块日K数据表';
+-- 5. virtual_board_aggregation: 虚拟聚合表（参考sector_mapping）
+CREATE TABLE IF NOT EXISTS `virtual_board_aggregation` (
+    `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `virtual_board_name` VARCHAR(100) NOT NULL COMMENT '虚拟板块名称',
+    `source_concept_name` VARCHAR(100) NOT NULL COMMENT '源概念名称',
+    `weight` DECIMAL(5,2) DEFAULT 1.0 COMMENT '聚合权重',
+    `is_active` TINYINT(1) DEFAULT 1 COMMENT '是否有效',
+    `description` TEXT DEFAULT NULL COMMENT '描述',
+    `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_virtual_source` (`virtual_board_name`, `source_concept_name`),
+    INDEX `idx_virtual_board` (`virtual_board_name`),
+    INDEX `idx_source_concept` (`source_concept_name`),
+    INDEX `idx_is_active` (`is_active`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='虚拟板块聚合表';
 
--- 热度榜数据表
-CREATE TABLE IF NOT EXISTS hot_stocks (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    stock_code VARCHAR(20) NOT NULL COMMENT '股票代码',
-    stock_name VARCHAR(100) NOT NULL COMMENT '股票名称',
-    source VARCHAR(20) NOT NULL COMMENT '数据来源（xueqiu/dongcai）',
-    `rank` INT NOT NULL COMMENT '排名',
-    hot_score DECIMAL(10, 2) COMMENT '热度分数',
-    volume BIGINT DEFAULT 0 COMMENT '成交量',
-    trade_date DATE NOT NULL COMMENT '交易日期',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    INDEX idx_source_date (source, trade_date),
-    INDEX idx_stock_code_hot (stock_code),
-    INDEX idx_trade_date_hot (trade_date),
-    UNIQUE KEY uk_source_rank_date (source, `rank`, trade_date)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='热度榜数据表';
+-- 6. market_hot_rank: 热度数据表
+CREATE TABLE IF NOT EXISTS `market_hot_rank` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `stock_code` VARCHAR(10) NOT NULL COMMENT '股票代码',
+    `stock_name` VARCHAR(50) NOT NULL COMMENT '股票名称',
+    `rank` INT UNSIGNED NOT NULL COMMENT '排名',
+    `source` VARCHAR(20) NOT NULL COMMENT '数据来源（xueqiu/dongcai/ths等）',
+    `trade_date` DATE NOT NULL COMMENT '交易日期',
+    `hot_score` DECIMAL(10,2) DEFAULT NULL COMMENT '热度分数',
+    `volume` BIGINT UNSIGNED DEFAULT 0 COMMENT '成交量（手）',
+    `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_source_date_rank` (`source`, `trade_date`, `rank`),
+    INDEX `idx_stock_code` (`stock_code`),
+    INDEX `idx_trade_date` (`trade_date`),
+    INDEX `idx_source_date` (`source`, `trade_date`),
+    INDEX `idx_rank` (`rank`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='市场热度排名表';
 
--- 涨幅榜数据表
-CREATE TABLE IF NOT EXISTS gainers (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    stock_code VARCHAR(20) NOT NULL COMMENT '股票代码',
-    stock_name VARCHAR(100) NOT NULL COMMENT '股票名称',
-    change_pct DECIMAL(5, 2) NOT NULL COMMENT '涨跌幅(%)',
-    trade_date DATE NOT NULL COMMENT '交易日期',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    INDEX idx_trade_date_gainers (trade_date),
-    INDEX idx_stock_code_gainers (stock_code)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='涨幅榜数据表';
+-- 7. stock_money_flow: 资金流向数据表
+CREATE TABLE IF NOT EXISTS `stock_money_flow` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `stock_code` VARCHAR(10) NOT NULL COMMENT '股票代码',
+    `trade_date` DATE NOT NULL COMMENT '交易日期',
+    `main_net_inflow` DECIMAL(20,2) DEFAULT 0 COMMENT '主力净流入（万元）',
+    `super_large_inflow` DECIMAL(20,2) DEFAULT 0 COMMENT '超大单净流入（万元）',
+    `large_inflow` DECIMAL(20,2) DEFAULT 0 COMMENT '大单净流入（万元）',
+    `medium_inflow` DECIMAL(20,2) DEFAULT 0 COMMENT '中单净流入（万元）',
+    `small_inflow` DECIMAL(20,2) DEFAULT 0 COMMENT '小单净流入（万元）',
+    `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_stock_date` (`stock_code`, `trade_date`),
+    INDEX `idx_trade_date` (`trade_date`),
+    INDEX `idx_stock_code_date` (`stock_code`, `trade_date`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='股票资金流向表';
 
--- 用户表
-CREATE TABLE IF NOT EXISTS users (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    username VARCHAR(50) NOT NULL COMMENT '用户名',
-    password_hash VARCHAR(255) NOT NULL COMMENT '密码哈希',
-    is_active TINYINT(1) DEFAULT 1 COMMENT '是否激活',
-    failed_login_attempts INT DEFAULT 0 COMMENT '失败登录次数',
-    locked_until DATETIME NULL COMMENT '锁定到期时间',
-    last_login DATETIME NULL COMMENT '最后登录时间',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    UNIQUE KEY uk_username (username),
-    INDEX idx_is_active (is_active)
+-- 保留用户表（登录逻辑需要）
+CREATE TABLE IF NOT EXISTS `users` (
+    `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `username` VARCHAR(50) NOT NULL,
+    `password_hash` VARCHAR(255) NOT NULL,
+    `is_active` TINYINT(1) DEFAULT 1,
+    `failed_login_attempts` INT DEFAULT 0,
+    `locked_until` DATETIME DEFAULT NULL,
+    `last_login` DATETIME DEFAULT NULL,
+    `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_username` (`username`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户表';
 
--- 登录日志表（用于安全审计和防暴力破解）
-CREATE TABLE IF NOT EXISTS login_logs (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    username VARCHAR(50) NOT NULL COMMENT '用户名',
-    ip_address VARCHAR(45) COMMENT 'IP地址',
-    user_agent TEXT COMMENT '用户代理',
-    login_status ENUM('success', 'failed') NOT NULL COMMENT '登录状态',
-    failure_reason VARCHAR(100) COMMENT '失败原因',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    INDEX idx_username (username),
-    INDEX idx_created_at (created_at),
-    INDEX idx_login_status (login_status)
+-- 保留登录日志表
+CREATE TABLE IF NOT EXISTS `login_logs` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `username` VARCHAR(50) NOT NULL,
+    `ip_address` VARCHAR(50) DEFAULT NULL,
+    `user_agent` TEXT DEFAULT NULL,
+    `login_status` VARCHAR(20) NOT NULL,
+    `failure_reason` VARCHAR(255) DEFAULT NULL,
+    `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    INDEX `idx_username` (`username`),
+    INDEX `idx_created_at` (`created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='登录日志表';
-
--- 插入默认管理员用户（用户名: admin, 密码: admin123）
--- 密码使用bcrypt加密，默认密码为 admin123
--- 注意：首次部署后需要运行脚本生成正确的密码哈希
-INSERT INTO users (username, password_hash, is_active) 
-VALUES ('admin', '$2b$12$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36WQoeG6Lruj3vjPGga31lW', 1)
-ON DUPLICATE KEY UPDATE username=username;

@@ -43,4 +43,9 @@ export const stockApi = {
     const response = await client.get(`/stocks/${stockCode}/capital-flow`)
     return response.data.data || []
   },
+
+  getStockConcepts: async (stockCode: string): Promise<Array<{ concept_name: string; weight: number }>> => {
+    const response = await client.get(`/stocks/${stockCode}/concepts`)
+    return response.data.concepts || []
+  },
 }

@@ -6,8 +6,10 @@ const client = axios.create({
   baseURL: API_BASE_URL,
   timeout: 30000,
   headers: {
-    'Content-Type': 'application/json',
+    'Content-Type': 'application/json; charset=utf-8',
   },
+  responseType: 'json',
+  responseEncoding: 'utf8',
 })
 
 // 请求拦截器：添加token

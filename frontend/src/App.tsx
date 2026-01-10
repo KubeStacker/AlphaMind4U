@@ -8,7 +8,7 @@ import ProtectedRoute from './components/ProtectedRoute'
 import Login from './pages/Login'
 import Tab1 from './pages/Tab1'
 import Tab2 from './pages/Tab2'
-import Tab3 from './pages/Tab3'
+import SettingsMain from './pages/SettingsMain'
 
 const App: React.FC = () => {
   return (
@@ -22,17 +22,7 @@ const App: React.FC = () => {
               element={
                 <ProtectedRoute>
                   <Layout>
-                    <Navigate to="/recommendations" replace />
-                  </Layout>
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/recommendations"
-              element={
-                <ProtectedRoute>
-                  <Layout>
-                    <Tab3 />
+                    <Navigate to="/stock-analysis" replace />
                   </Layout>
                 </ProtectedRoute>
               }
@@ -53,6 +43,16 @@ const App: React.FC = () => {
                 <ProtectedRoute>
                   <Layout>
                     <Tab2 />
+                  </Layout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/settings/*"
+              element={
+                <ProtectedRoute>
+                  <Layout>
+                    <SettingsMain />
                   </Layout>
                 </ProtectedRoute>
               }
