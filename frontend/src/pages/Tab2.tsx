@@ -1,13 +1,20 @@
 import React, { useState, useEffect } from 'react'
-import { Card, Button, Table, Tag, Collapse, message, Popover, Spin, Modal } from 'antd'
-import { ReloadOutlined, FireOutlined } from '@ant-design/icons'
+import { Card, Button, Table, Tag, Collapse, message, Popover, Spin, Modal, Typography, Space } from 'antd'
+import { ReloadOutlined, FireOutlined, RobotOutlined, BulbOutlined } from '@ant-design/icons'
 import ReactECharts from 'echarts-for-react'
 import { hotApi, HotStock, SectorInfo, SectorStock } from '../api/hot'
 import { stockApi, StockDailyData } from '../api/stock'
+import { aiApi } from '../api/ai'
+import { useAuth } from '../contexts/AuthContext'
+
+const { Paragraph } = Typography
 
 const { Panel } = Collapse
 
 const Tab2: React.FC = () => {
+  const { user } = useAuth()
+  const isAdmin = user?.is_admin || user?.username === 'admin'
+  const canUseAI = isAdmin || user?.can_use_ai_recommend || false
   const [hotStocks, setHotStocks] = useState<HotStock[]>([])
   const [hotSectors, setHotSectors] = useState<SectorInfo[]>([])
   const [loading, setLoading] = useState(false)
@@ -21,9 +28,31 @@ const Tab2: React.FC = () => {
   const [klineLoading, setKlineLoading] = useState(false)
   const [sectorStocksModalVisible, setSectorStocksModalVisible] = useState(false)
   const [selectedSectorForStocks, setSelectedSectorForStocks] = useState<{ name: string; stocks: SectorStock[] } | null>(null)
+  const [aiRecommendModalVisible, setAiRecommendModalVisible] = useState(false)
+  const [aiRecommendLoading, setAiRecommendLoading] = useState(false)
+  const [aiRecommendResult, setAiRecommendResult] = useState<string>('')
+  const [aiAnalyzeModalVisible, setAiAnalyzeModalVisible] = useState(false)
+  const [aiAnalyzeLoading, setAiAnalyzeLoading] = useState(false)
+  const [aiAnalyzeResult, setAiAnalyzeResult] = useState<string>('')
+  const [selectedStockForAnalyze, setSelectedStockForAnalyze] = useState<{ code: string; name: string } | null>(null)
 
   useEffect(() => {
     loadData()
+  }, [])
+
+  // 页面可见性变化时刷新数据
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        // 页面重新可见时刷新数据
+        loadData()
+      }
+    }
+    
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
   }, [])
 
   // 检测移动端
@@ -74,6 +103,39 @@ const Tab2: React.FC = () => {
       message.error(`刷新失败: ${errorMsg}`)
     } finally {
       setRefreshing(false)
+    }
+  }
+
+  const handleAIRecommend = async () => {
+    setAiRecommendModalVisible(true)
+    setAiRecommendLoading(true)
+    setAiRecommendResult('')
+    try {
+      const result = await aiApi.recommendStocks()
+      setAiRecommendResult(result.recommendation)
+    } catch (error: any) {
+      const errorMsg = error?.response?.data?.detail || error?.message || '未知错误'
+      message.error(`AI推荐失败: ${errorMsg}`)
+      setAiRecommendResult(`错误: ${errorMsg}`)
+    } finally {
+      setAiRecommendLoading(false)
+    }
+  }
+
+  const handleAIAnalyze = async (stockCode: string, stockName: string) => {
+    setSelectedStockForAnalyze({ code: stockCode, name: stockName })
+    setAiAnalyzeModalVisible(true)
+    setAiAnalyzeLoading(true)
+    setAiAnalyzeResult('')
+    try {
+      const result = await aiApi.analyzeStock(stockCode)
+      setAiAnalyzeResult(result.analysis)
+    } catch (error: any) {
+      const errorMsg = error?.response?.data?.detail || error?.message || '未知错误'
+      message.error(`AI分析失败: ${errorMsg}`)
+      setAiAnalyzeResult(`错误: ${errorMsg}`)
+    } finally {
+      setAiAnalyzeLoading(false)
     }
   }
 
@@ -168,10 +230,24 @@ const Tab2: React.FC = () => {
       key: 'stock_name',
       width: 150,
       render: (name: string, record: HotStock) => (
-        <span style={{ cursor: 'pointer', color: '#1890ff' }} 
-              onClick={() => handleStockClick(record.stock_code, name)}>
-          {name || '-'}
-        </span>
+        <Space>
+          <span style={{ cursor: 'pointer', color: '#1890ff' }} 
+                onClick={() => handleStockClick(record.stock_code, name)}>
+            {name || '-'}
+          </span>
+          {canUseAI && (
+            <Button
+              type="link"
+              size="small"
+              icon={<BulbOutlined />}
+              onClick={(e) => {
+                e.stopPropagation()
+                handleAIAnalyze(record.stock_code, name || record.stock_code)
+              }}
+              title="AI分析"
+            />
+          )}
+        </Space>
       ),
     },
     {
@@ -467,14 +543,25 @@ const Tab2: React.FC = () => {
               <FireOutlined style={{ marginRight: 8 }} />
               热门板块推荐
             </span>
-            <Button
-              type="primary"
-              icon={<ReloadOutlined />}
-              onClick={handleRefresh}
-              loading={refreshing}
-            >
-              刷新数据
-            </Button>
+            <Space>
+              {canUseAI && (
+                <Button
+                  type="default"
+                  icon={<RobotOutlined />}
+                  onClick={handleAIRecommend}
+                >
+                  AI推荐
+                </Button>
+              )}
+              <Button
+                type="primary"
+                icon={<ReloadOutlined />}
+                onClick={handleRefresh}
+                loading={refreshing}
+              >
+                刷新数据
+              </Button>
+            </Space>
           </div>
         }
       >
@@ -541,7 +628,11 @@ const Tab2: React.FC = () => {
                     style={{
                       width: isMobile ? '100%' : 280,
                       cursor: 'pointer',
-                      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                      background: sector.color === 'red' 
+                        ? 'linear-gradient(135deg, #ff6b6b 0%, #ee5a6f 100%)'
+                        : sector.color === 'orange'
+                        ? 'linear-gradient(135deg, #ffa726 0%, #fb8c00 100%)'
+                        : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
                       color: '#fff',
                     }}
                     bodyStyle={{ padding: isMobile ? 12 : 16 }}
@@ -550,7 +641,7 @@ const Tab2: React.FC = () => {
                       {sector.sector_name}
                     </div>
                     <div style={{ fontSize: 24, fontWeight: 'bold', marginBottom: 12 }}>
-                      {sector.hot_count} 只热门股
+                      {sector.hot_count || sector.hot_score || 0} 只热门股
                     </div>
                     {sector.hot_stocks && sector.hot_stocks.length > 0 && (
                       <div style={{ marginTop: 12, borderTop: '1px solid rgba(255,255,255,0.3)', paddingTop: 12 }}>
@@ -641,7 +732,24 @@ const Tab2: React.FC = () => {
       </Collapse>
 
       <Modal
-        title={`${selectedStockForKline?.name || selectedStockForKline?.code} - K线图`}
+        title={
+          <Space>
+            <span>{selectedStockForKline?.name || selectedStockForKline?.code} - K线图</span>
+            {canUseAI && selectedStockForKline && (
+              <Button
+                type="link"
+                icon={<BulbOutlined />}
+                onClick={() => {
+                  if (selectedStockForKline) {
+                    handleAIAnalyze(selectedStockForKline.code, selectedStockForKline.name)
+                  }
+                }}
+              >
+                AI分析
+              </Button>
+            )}
+          </Space>
+        }
         open={klineModalVisible}
         onCancel={() => setKlineModalVisible(false)}
         footer={null}
@@ -693,6 +801,82 @@ const Tab2: React.FC = () => {
         ) : (
           <div style={{ textAlign: 'center', padding: 50, color: '#999' }}>
             暂无股票数据
+          </div>
+        )}
+      </Modal>
+
+      {/* AI推荐Modal */}
+      <Modal
+        title={
+          <Space>
+            <RobotOutlined />
+            <span>AI股票推荐</span>
+          </Space>
+        }
+        open={aiRecommendModalVisible}
+        onCancel={() => setAiRecommendModalVisible(false)}
+        footer={null}
+        width={isMobile ? '95%' : 800}
+        style={{ top: 20 }}
+      >
+        {aiRecommendLoading ? (
+          <div style={{ textAlign: 'center', padding: 50 }}>
+            <Spin size="large" />
+            <div style={{ marginTop: 16, color: '#999' }}>AI正在分析中，请稍候...</div>
+          </div>
+        ) : aiRecommendResult ? (
+          <Paragraph
+            style={{
+              whiteSpace: 'pre-wrap',
+              lineHeight: '1.8',
+              fontSize: '14px',
+              maxHeight: '70vh',
+              overflow: 'auto'
+            }}
+          >
+            {aiRecommendResult}
+          </Paragraph>
+        ) : (
+          <div style={{ textAlign: 'center', padding: 50, color: '#999' }}>
+            暂无推荐结果
+          </div>
+        )}
+      </Modal>
+
+      {/* AI分析Modal */}
+      <Modal
+        title={
+          <Space>
+            <BulbOutlined />
+            <span>AI股票分析 - {selectedStockForAnalyze?.name || selectedStockForAnalyze?.code}</span>
+          </Space>
+        }
+        open={aiAnalyzeModalVisible}
+        onCancel={() => setAiAnalyzeModalVisible(false)}
+        footer={null}
+        width={isMobile ? '95%' : 800}
+        style={{ top: 20 }}
+      >
+        {aiAnalyzeLoading ? (
+          <div style={{ textAlign: 'center', padding: 50 }}>
+            <Spin size="large" />
+            <div style={{ marginTop: 16, color: '#999' }}>AI正在分析中，请稍候...</div>
+          </div>
+        ) : aiAnalyzeResult ? (
+          <Paragraph
+            style={{
+              whiteSpace: 'pre-wrap',
+              lineHeight: '1.8',
+              fontSize: '14px',
+              maxHeight: '70vh',
+              overflow: 'auto'
+            }}
+          >
+            {aiAnalyzeResult}
+          </Paragraph>
+        ) : (
+          <div style={{ textAlign: 'center', padding: 50, color: '#999' }}>
+            暂无分析结果
           </div>
         )}
       </Modal>

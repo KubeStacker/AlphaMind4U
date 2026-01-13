@@ -48,7 +48,7 @@ class HotRankService:
                 max_date = max_date_result[0]
             
             # 2. 获取热门股票（取前100只，用于板块匹配）
-            hot_stocks = HotRankRepository.get_hot_stocks(limit=100)
+            hot_stocks = HotRankRepository.get_hot_stocks(source=None, limit=100)
             
             if not hot_stocks:
                 return []

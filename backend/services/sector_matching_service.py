@@ -103,39 +103,124 @@ class SectorMatchingService:
                             score = concept_weight * board_weight * hot_weight
                             stock_sector_scores[stock_code][virtual_board] += score
             
-            # 5. 为每个股票分配主板块（选择得分最高的）
+            # 5. 迭代式板块分配：先汇总热度，选择最热板块，然后从剩余股票中剔除
             stock_to_sector = {}
-            for stock_code, sector_scores in stock_sector_scores.items():
-                if not sector_scores:
-                    continue
-                # 选择得分最高的主板块
-                best_sector = max(sector_scores.items(), key=lambda x: x[1])[0]
-                stock_to_sector[stock_code] = best_sector
-            
-            # 6. 按主板块聚合股票，并计算板块加权热度分数
+            unassigned_stocks = set(stock_codes)  # 未分配的股票
             sector_stocks = defaultdict(lambda: {
                 'stocks': [],
                 'best_rank': float('inf'),
                 'weighted_score': 0.0  # 加权热度分数
             })
             
-            for stock in hot_stocks:
-                stock_code = stock['stock_code']
-                if stock_code in stock_to_sector:
-                    sector_name = stock_to_sector[stock_code]
-                    hot_weight = stock_hot_scores.get(stock_code, 1.0)
+            # 迭代分配，直到所有股票都被分配或达到最大板块数
+            while unassigned_stocks and len(sector_stocks) < max_sectors:
+                # 5.1 计算当前未分配股票的板块热度汇总
+                # sector_stock_map: {sector_name: set(stock_codes)} - 每个板块匹配的股票集合
+                sector_stock_map = defaultdict(set)
+                stock_info_map = {}  # 缓存股票信息
+                
+                for stock_code in list(unassigned_stocks):
+                    if stock_code not in stock_sector_scores:
+                        continue
                     
-                    sector_stocks[sector_name]['stocks'].append({
-                        'stock_code': stock_code,
-                        'stock_name': stock.get('stock_name', ''),
-                        'rank': stock.get('rank', 999)
+                    sector_scores = stock_sector_scores[stock_code]
+                    if not sector_scores:
+                        continue
+                    
+                    # 缓存股票信息
+                    if stock_code not in stock_info_map:
+                        stock_info_map[stock_code] = next(
+                            (s for s in hot_stocks if s['stock_code'] == stock_code), 
+                            None
+                        )
+                    
+                    # 将该股票添加到所有匹配的板块中
+                    for sector_name in sector_scores.keys():
+                        # 过滤无意义的概念
+                        if not should_filter_concept(sector_name):
+                            sector_stock_map[sector_name].add(stock_code)
+                
+                if not sector_stock_map:
+                    break
+                
+                # 5.2 选择最热的板块（按股票数量排序，数量相同时按总得分排序）
+                sector_aggregated = []
+                for sector_name, stock_set in sector_stock_map.items():
+                    total_score = 0.0
+                    for stock_code in stock_set:
+                        if stock_code in stock_sector_scores:
+                            sector_scores = stock_sector_scores[stock_code]
+                            if sector_name in sector_scores:
+                                total_score += sector_scores[sector_name]
+                    
+                    sector_aggregated.append({
+                        'sector_name': sector_name,
+                        'stock_count': len(stock_set),
+                        'total_score': total_score,
+                        'stocks': stock_set
                     })
-                    sector_stocks[sector_name]['best_rank'] = min(
-                        sector_stocks[sector_name]['best_rank'],
-                        stock.get('rank', 999)
-                    )
-                    # 累加加权热度分数
-                    sector_stocks[sector_name]['weighted_score'] += hot_weight
+                
+                # 按股票数量和总得分排序
+                sorted_sectors = sorted(
+                    sector_aggregated,
+                    key=lambda x: (x['stock_count'], x['total_score']),
+                    reverse=True
+                )
+                
+                if not sorted_sectors:
+                    break
+                
+                # 5.3 选择最热的板块
+                best_sector = sorted_sectors[0]
+                best_sector_name = best_sector['sector_name']
+                best_stocks = best_sector['stocks']
+                
+                # 5.4 将该板块匹配的所有股票分配到该板块
+                assigned_stocks = set()
+                for stock_code in best_stocks:
+                    if stock_code in unassigned_stocks:
+                        stock_to_sector[stock_code] = best_sector_name
+                        assigned_stocks.add(stock_code)
+                        
+                        stock_info = stock_info_map.get(stock_code)
+                        if stock_info:
+                            # 添加到板块股票列表
+                            sector_stocks[best_sector_name]['stocks'].append({
+                                'stock_code': stock_code,
+                                'stock_name': stock_info.get('stock_name', ''),
+                                'rank': stock_info.get('rank', 999)
+                            })
+                            sector_stocks[best_sector_name]['best_rank'] = min(
+                                sector_stocks[best_sector_name]['best_rank'],
+                                stock_info.get('rank', 999)
+                            )
+                            # 累加加权热度分数
+                            sector_stocks[best_sector_name]['weighted_score'] += stock_hot_scores.get(stock_code, 1.0)
+                
+                # 5.5 从未分配列表中移除已分配的股票
+                unassigned_stocks -= assigned_stocks
+            
+            # 6. 处理剩余未分配的股票（如果有）
+            for stock_code in unassigned_stocks:
+                if stock_code in stock_sector_scores:
+                    sector_scores = stock_sector_scores[stock_code]
+                    if sector_scores:
+                        # 选择得分最高的板块
+                        best_sector = max(sector_scores.items(), key=lambda x: x[1])[0]
+                        if not should_filter_concept(best_sector):
+                            stock_to_sector[stock_code] = best_sector
+                            stock_info = next((s for s in hot_stocks if s['stock_code'] == stock_code), None)
+                            if stock_info:
+                                sector_stocks[best_sector]['stocks'].append({
+                                    'stock_code': stock_code,
+                                    'stock_name': stock_info.get('stock_name', ''),
+                                    'rank': stock_info.get('rank', 999)
+                                })
+                                sector_stocks[best_sector]['best_rank'] = min(
+                                    sector_stocks[best_sector]['best_rank'],
+                                    stock_info.get('rank', 999)
+                                )
+                                sector_stocks[best_sector]['weighted_score'] += stock_hot_scores.get(stock_code, 1.0)
             
             # 7. 排序并选择Top板块（按加权热度分数和股票数量排序）
             sorted_sectors = sorted(
@@ -164,6 +249,7 @@ class SectorMatchingService:
                 
                 result.append({
                     'sector_name': sector_name,
+                    'hot_count': len(stocks),  # 热门股数量
                     'hot_score': len(stocks),  # 保持兼容性：hot_score为股票数量
                     'hot_stocks': stocks[:5],  # 只返回前5只股票
                     'color': color

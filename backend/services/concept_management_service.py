@@ -167,3 +167,110 @@ class ConceptManagementService:
                 'source_concept': source_concept_name
             })
             return result.rowcount > 0
+    
+    @staticmethod
+    def get_all_virtual_board_mappings() -> List[Dict]:
+        """获取所有虚拟板块映射"""
+        with get_db() as db:
+            query = text("""
+                SELECT id, virtual_board_name, source_concept_name, weight, 
+                       is_active, description, created_at, updated_at
+                FROM virtual_board_aggregation
+                ORDER BY virtual_board_name, source_concept_name
+            """)
+            result = db.execute(query).fetchall()
+            
+            return [
+                {
+                    'id': row[0],
+                    'source_sector': row[2],  # source_concept_name对应前端的source_sector
+                    'target_sector': row[1],  # virtual_board_name对应前端的target_sector
+                    'weight': float(row[3]) if row[3] else 1.0,
+                    'is_active': bool(row[4]),
+                    'description': row[5],
+                    'created_at': row[6].isoformat() if row[6] else None,
+                    'updated_at': row[7].isoformat() if row[7] else None,
+                }
+                for row in result
+            ]
+    
+    @staticmethod
+    def get_virtual_board_mapping_by_id(mapping_id: int) -> Optional[Dict]:
+        """根据ID获取虚拟板块映射"""
+        with get_db() as db:
+            query = text("""
+                SELECT id, virtual_board_name, source_concept_name, weight, 
+                       is_active, description, created_at, updated_at
+                FROM virtual_board_aggregation
+                WHERE id = :mapping_id
+            """)
+            result = db.execute(query, {'mapping_id': mapping_id}).fetchone()
+            
+            if not result:
+                return None
+            
+            return {
+                'id': result[0],
+                'source_sector': result[2],
+                'target_sector': result[1],
+                'weight': float(result[3]) if result[3] else 1.0,
+                'is_active': bool(result[4]),
+                'description': result[5],
+                'created_at': result[6].isoformat() if result[6] else None,
+                'updated_at': result[7].isoformat() if result[7] else None,
+            }
+    
+    @staticmethod
+    def update_virtual_board_mapping_by_id(mapping_id: int, target_sector: Optional[str] = None,
+                                           description: Optional[str] = None,
+                                           is_active: Optional[bool] = None) -> bool:
+        """根据ID更新虚拟板块映射"""
+        with get_db() as db:
+            updates = []
+            params = {'mapping_id': mapping_id}
+            
+            if target_sector is not None:
+                updates.append("virtual_board_name = :target_sector")
+                params['target_sector'] = target_sector
+            if description is not None:
+                updates.append("description = :description")
+                params['description'] = description
+            if is_active is not None:
+                updates.append("is_active = :is_active")
+                params['is_active'] = 1 if is_active else 0
+            
+            if not updates:
+                return False
+            
+            query = text(f"""
+                UPDATE virtual_board_aggregation 
+                SET {', '.join(updates)}, updated_at = CURRENT_TIMESTAMP
+                WHERE id = :mapping_id
+            """)
+            db.execute(query, params)
+            db.commit()
+            return True
+    
+    @staticmethod
+    def delete_virtual_board_mapping_by_id(mapping_id: int) -> bool:
+        """根据ID删除虚拟板块映射（软删除）"""
+        with get_db() as db:
+            query = text("""
+                UPDATE virtual_board_aggregation 
+                SET is_active = 0, updated_at = CURRENT_TIMESTAMP
+                WHERE id = :mapping_id
+            """)
+            result = db.execute(query, {'mapping_id': mapping_id})
+            db.commit()
+            return result.rowcount > 0
+    
+    @staticmethod
+    def refresh_virtual_board_cache() -> Dict:
+        """刷新虚拟板块缓存（重新加载映射关系）"""
+        # 这里可以清除缓存或重新加载
+        # 由于使用的是单例模式，直接返回成功即可
+        mappings = ConceptManagementService.get_all_virtual_board_mappings()
+        return {
+            "message": "缓存刷新成功",
+            "count": len(mappings)
+        }

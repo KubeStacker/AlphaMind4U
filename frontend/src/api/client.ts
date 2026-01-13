@@ -4,7 +4,7 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || '/api'
 
 const client = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 30000,
+  timeout: 120000, // 120秒，AI分析可能需要较长时间
   headers: {
     'Content-Type': 'application/json; charset=utf-8',
   },
@@ -43,3 +43,4 @@ client.interceptors.response.use(
 )
 
 export default client
+export const apiClient = client

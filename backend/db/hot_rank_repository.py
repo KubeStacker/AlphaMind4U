@@ -52,23 +52,33 @@ class HotRankRepository:
             
             max_date = max_date_result[0]
             
-            # 主查询
+            # 主查询：获取最新价格（总是使用stock_daily表中的最新交易日价格）
+            # 前一个交易日价格用于计算涨跌幅
             query = text("""
                 SELECT 
                     hr.stock_code, hr.stock_name, hr.source, hr.`rank`, hr.trade_date,
                     hr.volume, hr.hot_score,
-                    sd.close_price as current_price,
-                    sd_prev.close_price as prev_price
+                    sd_latest.close_price as current_price,
+                    sd_prev.close_price as prev_price,
+                    sd_latest.trade_date as price_date
                 FROM market_hot_rank hr
-                LEFT JOIN stock_daily sd ON 
-                    sd.stock_code = hr.stock_code AND sd.trade_date = hr.trade_date
+                LEFT JOIN (
+                    SELECT 
+                        stock_code,
+                        MAX(trade_date) as max_date
+                    FROM stock_daily
+                    GROUP BY stock_code
+                ) sd_max ON sd_max.stock_code = hr.stock_code
+                LEFT JOIN stock_daily sd_latest ON 
+                    sd_latest.stock_code = hr.stock_code
+                    AND sd_latest.trade_date = sd_max.max_date
                 LEFT JOIN stock_daily sd_prev ON 
                     sd_prev.stock_code = hr.stock_code 
                     AND sd_prev.trade_date = (
                         SELECT MAX(sd2.trade_date)
                         FROM stock_daily sd2
                         WHERE sd2.stock_code = hr.stock_code
-                          AND sd2.trade_date < hr.trade_date
+                          AND sd2.trade_date < sd_max.max_date
                     )
                 WHERE hr.trade_date = :max_date
                   AND (:source IS NULL OR hr.source = :source)
@@ -87,8 +97,10 @@ class HotRankRepository:
             for row in result:
                 stock_code = row[0]
                 stock_codes.append(stock_code)
-                current_price = float(row[7]) if row[7] else None
-                prev_price = float(row[8]) if row[8] else None
+                # 字段索引：0=stock_code, 1=stock_name, 2=source, 3=rank, 4=trade_date, 5=volume, 6=hot_score, 7=current_price, 8=prev_price, 9=price_date
+                current_price = float(row[7]) if row[7] is not None else None
+                prev_price = float(row[8]) if row[8] is not None else None
+                price_date = row[9].strftime('%Y-%m-%d') if row[9] else None
                 change_pct = None
                 if current_price and prev_price and prev_price > 0:
                     change_pct = round((current_price - prev_price) / prev_price * 100, 2)
@@ -100,9 +112,10 @@ class HotRankRepository:
                     'rank': row[3],
                     'trade_date': row[4].strftime('%Y-%m-%d') if row[4] else None,
                     'volume': int(row[5]) if row[5] else 0,
-                    'hot_score': float(row[6]) if row[6] else None,
+                    'hot_score': float(row[6]) if row[6] is not None else None,
                     'current_price': current_price,
-                    'change_pct': change_pct
+                    'change_pct': change_pct,
+                    'price_date': price_date  # 价格对应的日期，用于调试
                 })
             
             if not stock_codes:

@@ -1,15 +1,20 @@
 import React, { useState, useEffect } from 'react'
 import { Menu, Layout } from 'antd'
-import { SettingOutlined, UserOutlined, AppstoreOutlined } from '@ant-design/icons'
+import { SettingOutlined, UserOutlined, AppstoreOutlined, RobotOutlined } from '@ant-design/icons'
 import { useNavigate, useLocation } from 'react-router-dom'
+import { useAuth } from '../contexts/AuthContext'
 import SectorMappingManagement from './Settings'
+import AIManagement from './AIManagement'
+import UserManagement from './UserManagement'
 
 const { Sider, Content } = Layout
 
 const SettingsMain: React.FC = () => {
   const navigate = useNavigate()
   const location = useLocation()
+  const { user } = useAuth()
   const [collapsed, setCollapsed] = useState(false)
+  const isAdmin = user?.is_admin || user?.username === 'admin'
 
   const menuItems = [
     {
@@ -17,12 +22,16 @@ const SettingsMain: React.FC = () => {
       icon: <AppstoreOutlined />,
       label: '概念管理',
     },
-    {
+    ...(isAdmin ? [{
+      key: '/settings/ai',
+      icon: <RobotOutlined />,
+      label: 'AI管理',
+    }] : []),
+    ...(isAdmin ? [{
       key: '/settings/users',
       icon: <UserOutlined />,
       label: '用户管理',
-      disabled: true, // 暂时禁用，后续可以开发
-    },
+    }] : []),
   ]
 
   const handleMenuClick = ({ key }: { key: string }) => {
@@ -34,6 +43,9 @@ const SettingsMain: React.FC = () => {
     const path = location.pathname
     if (path.includes('/sector-mapping') || path === '/settings' || path === '/settings/') {
       return '/settings/sector-mapping'
+    }
+    if (path.includes('/ai')) {
+      return '/settings/ai'
     }
     if (path.includes('/users')) {
       return '/settings/users'
@@ -49,6 +61,18 @@ const SettingsMain: React.FC = () => {
       navigate('/settings/sector-mapping', { replace: true })
     }
   }, [location.pathname, navigate])
+
+  // 渲染内容
+  const renderContent = () => {
+    const path = location.pathname
+    if (path.includes('/ai')) {
+      return <AIManagement />
+    }
+    if (path.includes('/users')) {
+      return <UserManagement />
+    }
+    return <SectorMappingManagement />
+  }
 
   return (
     <Layout style={{ minHeight: 'calc(100vh - 112px)', background: 'transparent' }}>
@@ -75,7 +99,7 @@ const SettingsMain: React.FC = () => {
         />
       </Sider>
       <Content style={{ background: 'transparent' }}>
-        <SectorMappingManagement />
+        {renderContent()}
       </Content>
     </Layout>
   )

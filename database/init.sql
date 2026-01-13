@@ -134,13 +134,15 @@ CREATE TABLE IF NOT EXISTS `users` (
     `username` VARCHAR(50) NOT NULL,
     `password_hash` VARCHAR(255) NOT NULL,
     `is_active` TINYINT(1) DEFAULT 1,
+    `can_use_ai_recommend` TINYINT(1) DEFAULT 0 COMMENT '是否允许使用AI推荐功能',
     `failed_login_attempts` INT DEFAULT 0,
     `locked_until` DATETIME DEFAULT NULL,
     `last_login` DATETIME DEFAULT NULL,
     `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (`id`),
-    UNIQUE KEY `uk_username` (`username`)
+    UNIQUE KEY `uk_username` (`username`),
+    INDEX `idx_is_active` (`is_active`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户表';
 
 -- 保留登录日志表
@@ -156,3 +158,15 @@ CREATE TABLE IF NOT EXISTS `login_logs` (
     INDEX `idx_username` (`username`),
     INDEX `idx_created_at` (`created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='登录日志表';
+
+-- 8. ai_config: AI配置表
+CREATE TABLE IF NOT EXISTS `ai_config` (
+    `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `config_key` VARCHAR(50) NOT NULL COMMENT '配置键（api_key, prompt_recommend, prompt_analyze等）',
+    `config_value` TEXT DEFAULT NULL COMMENT '配置值',
+    `description` VARCHAR(255) DEFAULT NULL COMMENT '配置说明',
+    `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_config_key` (`config_key`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AI配置表';

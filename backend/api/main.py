@@ -4,6 +4,7 @@ FastAPI主应用 - 重构版
 import logging
 from contextlib import asynccontextmanager
 from typing import Optional
+from datetime import datetime
 from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -15,6 +16,9 @@ from services.stock_service import StockService
 from services.hot_rank_service import HotRankService
 from services.concept_service import ConceptService
 from services.concept_management_service import ConceptManagementService
+from services.ai_service import AIService
+from db.ai_config_repository import AIConfigRepository
+from services.user_service import UserService
 from scheduler import start_scheduler
 
 logging.basicConfig(
@@ -81,9 +85,38 @@ async def login(login_data: LoginRequest, request: Request):
         logger.error(f"登录失败: {e}")
         raise HTTPException(status_code=500, detail="登录失败")
 
-@app.get("/api/auth/me", response_model=UserInfo)
+class UserInfoResponse(BaseModel):
+    id: int
+    username: str
+    can_use_ai_recommend: bool
+    is_admin: bool
+
+@app.get("/api/auth/me", response_model=UserInfoResponse)
 async def get_current_user_info(current_user: dict = Depends(get_current_user)):
-    return UserInfo(id=current_user["id"], username=current_user["username"])
+    """获取当前用户信息（包含AI权限）"""
+    username = current_user["username"]
+    is_admin = username == "admin"
+    can_use_ai_recommend = True if is_admin else UserService.can_user_use_ai_recommend(username)
+    
+    return UserInfoResponse(
+        id=current_user["id"],
+        username=username,
+        can_use_ai_recommend=can_use_ai_recommend,
+        is_admin=is_admin
+    )
+
+def is_admin_user(current_user: dict = Depends(get_current_user)) -> dict:
+    """检查是否为admin用户"""
+    if current_user.get("username") != "admin":
+        raise HTTPException(status_code=403, detail="仅管理员可访问此功能")
+    return current_user
+
+def can_use_ai_recommend(current_user: dict = Depends(get_current_user)) -> dict:
+    """检查用户是否可以使用AI推荐功能"""
+    username = current_user.get("username")
+    if not UserService.can_user_use_ai_recommend(username):
+        raise HTTPException(status_code=403, detail="您没有权限使用AI推荐功能，请联系管理员")
+    return current_user
 
 @app.post("/api/auth/logout")
 async def logout(current_user: dict = Depends(get_current_user)):
@@ -389,6 +422,333 @@ async def delete_virtual_board_mapping(
         raise
     except Exception as e:
         logger.error(f"删除虚拟板块映射失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ========== 概念映射管理API（兼容前端调用）==========
+class SectorMappingCreate(BaseModel):
+    source_sector: str
+    target_sector: str
+    description: Optional[str] = None
+
+class SectorMappingUpdate(BaseModel):
+    target_sector: Optional[str] = None
+    description: Optional[str] = None
+    is_active: Optional[bool] = None
+
+@app.get("/api/sector-mappings")
+async def get_sector_mappings(current_user: dict = Depends(get_current_user)):
+    """获取板块映射列表（展示virtual_board_aggregation表数据）"""
+    try:
+        mappings = ConceptManagementService.get_all_virtual_board_mappings()
+        return {"mappings": mappings}
+    except Exception as e:
+        logger.error(f"获取板块映射列表失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/sector-mappings")
+async def create_sector_mapping(
+    mapping: SectorMappingCreate,
+    current_user: dict = Depends(get_current_user)
+):
+    """创建板块映射"""
+    try:
+        success = ConceptManagementService.create_virtual_board_mapping(
+            mapping.target_sector,  # virtual_board_name
+            mapping.source_sector,  # source_concept_name
+            1.0,  # weight
+            mapping.description
+        )
+        if success:
+            return {"message": "板块映射创建成功"}
+        else:
+            raise HTTPException(status_code=500, detail="创建失败")
+    except Exception as e:
+        logger.error(f"创建板块映射失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/api/sector-mappings/{mapping_id}")
+async def update_sector_mapping(
+    mapping_id: int,
+    mapping: SectorMappingUpdate,
+    current_user: dict = Depends(get_current_user)
+):
+    """更新板块映射"""
+    try:
+        success = ConceptManagementService.update_virtual_board_mapping_by_id(
+            mapping_id,
+            mapping.target_sector,
+            mapping.description,
+            mapping.is_active
+        )
+        if success:
+            return {"message": "板块映射更新成功"}
+        else:
+            raise HTTPException(status_code=400, detail="没有需要更新的字段或映射不存在")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"更新板块映射失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/sector-mappings/{mapping_id}")
+async def delete_sector_mapping(
+    mapping_id: int,
+    current_user: dict = Depends(get_current_user)
+):
+    """删除板块映射"""
+    try:
+        success = ConceptManagementService.delete_virtual_board_mapping_by_id(mapping_id)
+        if success:
+            return {"message": "板块映射删除成功"}
+        else:
+            raise HTTPException(status_code=404, detail="映射不存在")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"删除板块映射失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/sector-mappings/refresh-cache")
+async def refresh_sector_mapping_cache(current_user: dict = Depends(get_current_user)):
+    """刷新板块映射缓存"""
+    try:
+        result = ConceptManagementService.refresh_virtual_board_cache()
+        return result
+    except Exception as e:
+        logger.error(f"刷新缓存失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ========== 用户管理API（仅admin）==========
+class UserCreate(BaseModel):
+    username: str
+    password: str
+    can_use_ai_recommend: bool = False
+
+class UserUpdate(BaseModel):
+    password: Optional[str] = None
+    is_active: Optional[bool] = None
+    can_use_ai_recommend: Optional[bool] = None
+
+@app.get("/api/users")
+async def get_users(current_user: dict = Depends(is_admin_user)):
+    """获取用户列表"""
+    try:
+        users = UserService.get_all_users()
+        return {"users": users}
+    except Exception as e:
+        logger.error(f"获取用户列表失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/users")
+async def create_user(
+    user: UserCreate,
+    current_user: dict = Depends(is_admin_user)
+):
+    """创建用户"""
+    try:
+        user_id = UserService.create_user(
+            user.username,
+            user.password,
+            user.can_use_ai_recommend
+        )
+        return {"message": "用户创建成功", "user_id": user_id}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"创建用户失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/api/users/{user_id}")
+async def update_user(
+    user_id: int,
+    user: UserUpdate,
+    current_user: dict = Depends(is_admin_user)
+):
+    """更新用户"""
+    try:
+        success = UserService.update_user(
+            user_id,
+            user.password,
+            user.is_active,
+            user.can_use_ai_recommend
+        )
+        if success:
+            return {"message": "用户更新成功"}
+        else:
+            raise HTTPException(status_code=400, detail="没有需要更新的字段或用户不存在")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"更新用户失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/users/{user_id}")
+async def delete_user(
+    user_id: int,
+    current_user: dict = Depends(is_admin_user)
+):
+    """删除用户（软删除）"""
+    try:
+        success = UserService.delete_user(user_id)
+        if success:
+            return {"message": "用户删除成功"}
+        else:
+            raise HTTPException(status_code=404, detail="用户不存在")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"删除用户失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ========== AI管理API（仅admin）==========
+class AIConfigUpdate(BaseModel):
+    config_value: str
+    description: Optional[str] = None
+
+class AIPromptUpdate(BaseModel):
+    prompt_content: str
+
+@app.get("/api/ai/config")
+async def get_ai_config(current_user: dict = Depends(is_admin_user)):
+    """获取AI配置"""
+    try:
+        configs = AIConfigRepository.get_all_configs()
+        return {"configs": configs}
+    except Exception as e:
+        logger.error(f"获取AI配置失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/api/ai/config/{config_key}")
+async def update_ai_config(
+    config_key: str,
+    config: AIConfigUpdate,
+    current_user: dict = Depends(is_admin_user)
+):
+    """更新AI配置"""
+    try:
+        success = AIConfigRepository.set_config(
+            config_key,
+            config.config_value,
+            config.description
+        )
+        if success:
+            return {"message": "配置更新成功"}
+        else:
+            raise HTTPException(status_code=500, detail="配置更新失败")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"更新AI配置失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"配置更新失败: {str(e)}")
+
+@app.get("/api/ai/prompts")
+async def get_ai_prompts(current_user: dict = Depends(is_admin_user)):
+    """获取所有Prompt模板"""
+    try:
+        prompts = {
+            "recommend": AIConfigRepository.get_config("prompt_recommend") or "",
+            "analyze": AIConfigRepository.get_config("prompt_analyze") or ""
+        }
+        return {"prompts": prompts}
+    except Exception as e:
+        logger.error(f"获取Prompt模板失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/api/ai/prompts/{prompt_type}")
+async def update_ai_prompt(
+    prompt_type: str,
+    prompt: AIPromptUpdate,
+    current_user: dict = Depends(is_admin_user)
+):
+    """更新Prompt模板"""
+    try:
+        if prompt_type not in ["recommend", "analyze"]:
+            raise HTTPException(status_code=400, detail="无效的prompt类型")
+        
+        success = AIConfigRepository.set_config(
+            f"prompt_{prompt_type}",
+            prompt.prompt_content,
+            f"AI {prompt_type} prompt模板"
+        )
+        if success:
+            return {"message": "Prompt模板更新成功"}
+        else:
+            raise HTTPException(status_code=500, detail="Prompt模板更新失败")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"更新Prompt模板失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ========== AI推荐和分析API（仅admin）==========
+@app.post("/api/ai/recommend-stocks")
+async def ai_recommend_stocks(current_user: dict = Depends(can_use_ai_recommend)):
+    """AI推荐股票"""
+    try:
+        # 获取热门股票和板块数据
+        hot_stocks = HotRankService.get_hot_stocks()
+        hot_sectors = HotRankService.get_hot_sectors()
+        
+        # 调用AI服务
+        recommendation = AIService.recommend_stocks(hot_stocks, hot_sectors)
+        
+        return {
+            "recommendation": recommendation,
+            "timestamp": datetime.now().isoformat()
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"AI推荐股票失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/ai/analyze-stock/{stock_code}")
+async def ai_analyze_stock(
+    stock_code: str,
+    current_user: dict = Depends(can_use_ai_recommend)
+):
+    """AI分析股票"""
+    try:
+        # 获取股票数据
+        stock_daily = StockService.get_stock_daily(stock_code)
+        capital_flow = StockService.get_stock_capital_flow(stock_code)
+        
+        # 获取股票基本信息
+        hot_stocks = HotRankService.get_hot_stocks()
+        stock_info = next((s for s in hot_stocks if s.get("stock_code") == stock_code), None)
+        
+        # stock_daily 和 capital_flow 返回的是 List[Dict]，不是 {"data": [...]}
+        kline_data = stock_daily[-30:] if stock_daily else []  # 最近30天
+        money_flow_data = capital_flow[-30:] if capital_flow else []  # 最近30天
+        
+        stock_data = {
+            "current_price": stock_info.get("current_price") if stock_info else None,
+            "change_pct": stock_info.get("change_pct") if stock_info else None,
+            "volume": stock_info.get("volume") if stock_info else None,
+            "sectors": stock_info.get("sectors", []) if stock_info else [],
+            "kline": kline_data,
+            "money_flow": money_flow_data
+        }
+        
+        stock_name = stock_info.get("stock_name") if stock_info else stock_code
+        
+        # 调用AI服务
+        analysis = AIService.analyze_stock(stock_code, stock_name, stock_data)
+        
+        return {
+            "analysis": analysis,
+            "stock_code": stock_code,
+            "stock_name": stock_name,
+            "timestamp": datetime.now().isoformat()
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"AI分析股票失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":

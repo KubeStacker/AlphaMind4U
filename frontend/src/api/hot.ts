@@ -16,7 +16,9 @@ export interface HotStock {
 
 export interface SectorInfo {
   sector_name: string
-  hot_count: number
+  hot_count?: number
+  hot_score?: number  // 兼容字段
+  color?: string  // 颜色标识：red/orange/blue
   hot_stocks?: SectorStock[]  // 该板块下的热门股票列表
 }
 
