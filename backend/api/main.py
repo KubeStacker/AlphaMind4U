@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from db.database import get_db
 from auth.auth import authenticate_user, create_access_token, get_current_user, get_password_hash
+from sqlalchemy import text
 from services.data_collection_service import DataCollectionService
 from services.stock_service import StockService
 from services.hot_rank_service import HotRankService
@@ -88,20 +89,17 @@ async def login(login_data: LoginRequest, request: Request):
 class UserInfoResponse(BaseModel):
     id: int
     username: str
-    can_use_ai_recommend: bool
     is_admin: bool
 
 @app.get("/api/auth/me", response_model=UserInfoResponse)
 async def get_current_user_info(current_user: dict = Depends(get_current_user)):
-    """获取当前用户信息（包含AI权限）"""
+    """获取当前用户信息"""
     username = current_user["username"]
     is_admin = username == "admin"
-    can_use_ai_recommend = True if is_admin else UserService.can_user_use_ai_recommend(username)
     
     return UserInfoResponse(
         id=current_user["id"],
         username=username,
-        can_use_ai_recommend=can_use_ai_recommend,
         is_admin=is_admin
     )
 
@@ -111,12 +109,23 @@ def is_admin_user(current_user: dict = Depends(get_current_user)) -> dict:
         raise HTTPException(status_code=403, detail="仅管理员可访问此功能")
     return current_user
 
-def can_use_ai_recommend(current_user: dict = Depends(get_current_user)) -> dict:
-    """检查用户是否可以使用AI推荐功能"""
-    username = current_user.get("username")
-    if not UserService.can_user_use_ai_recommend(username):
-        raise HTTPException(status_code=403, detail="您没有权限使用AI推荐功能，请联系管理员")
+def check_api_key_available(current_user: dict = Depends(get_current_user)) -> dict:
+    """检查是否有可用的API Key（模型配置或系统默认）"""
+    if not current_user:
+        raise HTTPException(status_code=401, detail="未登录")
+    
+    from db.ai_model_config_repository import AIModelConfigRepository
+    from db.ai_config_repository import AIConfigRepository
+    
+    # 检查是否有启用的模型配置了API Key
+    models = AIModelConfigRepository.get_active_models()
+    has_model_api_key = any(model.get("api_key") for model in models)
+    
+    if not has_model_api_key:
+        raise HTTPException(status_code=400, detail="API Key未配置，请在AI管理设置中配置模型API Key")
+    
     return current_user
+
 
 @app.post("/api/auth/logout")
 async def logout(current_user: dict = Depends(get_current_user)):
@@ -154,6 +163,29 @@ async def get_stock_capital_flow(stock_code: str, current_user: dict = Depends(g
         return {"data": data}
     except Exception as e:
         logger.error(f"获取资金流数据失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/stocks/{stock_code}/refresh")
+async def refresh_stock_data(stock_code: str, current_user: dict = Depends(get_current_user)):
+    """刷新单个股票的最新市场数据（仅在交易时段）"""
+    try:
+        from etl.trade_date_adapter import TradeDateAdapter
+        
+        # 判断是否为交易时段
+        if not TradeDateAdapter.is_trading_hours():
+            raise HTTPException(status_code=400, detail="当前不是交易时段，无法刷新数据。交易时段：9:30-11:30, 13:00-15:00")
+        
+        service = DataCollectionService()
+        success = service.refresh_single_stock_data(stock_code)
+        
+        if success:
+            return {"message": "股票数据刷新成功"}
+        else:
+            raise HTTPException(status_code=400, detail="数据刷新失败，可能不在交易时段或非交易日")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"刷新股票数据失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # ========== 热度榜相关API ==========
@@ -210,6 +242,17 @@ async def get_sector_stocks(sector_name: str, current_user: dict = Depends(get_c
         raise HTTPException(status_code=500, detail=str(e))
 
 # ========== 数据采集管理API ==========
+@app.post("/api/admin/trigger-missed-tasks")
+async def trigger_missed_tasks(current_user: dict = Depends(is_admin_user)):
+    """手动触发错过的任务（仅admin）"""
+    try:
+        from scheduler import check_and_trigger_missed_tasks
+        check_and_trigger_missed_tasks()
+        return {"message": "已检查并触发错过的任务"}
+    except Exception as e:
+        logger.error(f"触发错过任务失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/api/admin/collect-all-data")
 async def collect_all_data(current_user: dict = Depends(get_current_user)):
     """
@@ -522,12 +565,10 @@ async def refresh_sector_mapping_cache(current_user: dict = Depends(get_current_
 class UserCreate(BaseModel):
     username: str
     password: str
-    can_use_ai_recommend: bool = False
 
 class UserUpdate(BaseModel):
     password: Optional[str] = None
     is_active: Optional[bool] = None
-    can_use_ai_recommend: Optional[bool] = None
 
 @app.get("/api/users")
 async def get_users(current_user: dict = Depends(is_admin_user)):
@@ -548,8 +589,7 @@ async def create_user(
     try:
         user_id = UserService.create_user(
             user.username,
-            user.password,
-            user.can_use_ai_recommend
+            user.password
         )
         return {"message": "用户创建成功", "user_id": user_id}
     except ValueError as e:
@@ -569,8 +609,7 @@ async def update_user(
         success = UserService.update_user(
             user_id,
             user.password,
-            user.is_active,
-            user.can_use_ai_recommend
+            user.is_active
         )
         if success:
             return {"message": "用户更新成功"}
@@ -602,6 +641,105 @@ async def delete_user(
         raise
     except Exception as e:
         logger.error(f"删除用户失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ========== AI模型配置管理API（仅admin）==========
+class AIModelConfigUpdate(BaseModel):
+    api_key: Optional[str] = None
+    sort_order: Optional[int] = None
+    is_active: Optional[bool] = None
+
+class AIModelConfigCreate(BaseModel):
+    model_name: str
+    model_display_name: str
+    api_key: str
+    api_url: str
+    sort_order: int = 0
+
+@app.get("/api/ai/models")
+async def get_ai_models(current_user: dict = Depends(get_current_user)):
+    """获取所有AI模型配置（所有用户可查看）"""
+    try:
+        from db.ai_model_config_repository import AIModelConfigRepository
+        models = AIModelConfigRepository.get_all_models()
+        return {"models": models}
+    except Exception as e:
+        logger.error(f"获取AI模型配置失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/ai/models/active")
+async def get_active_ai_models(current_user: dict = Depends(get_current_user)):
+    """获取所有启用的AI模型配置（所有用户可查看）"""
+    try:
+        from db.ai_model_config_repository import AIModelConfigRepository
+        models = AIModelConfigRepository.get_active_models()
+        return {"models": models}
+    except Exception as e:
+        logger.error(f"获取启用的AI模型配置失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/api/ai/models/{model_id}")
+async def update_ai_model(
+    model_id: int,
+    config: AIModelConfigUpdate,
+    current_user: dict = Depends(is_admin_user)
+):
+    """更新AI模型配置（仅admin）"""
+    try:
+        from db.ai_model_config_repository import AIModelConfigRepository
+        success = AIModelConfigRepository.update_model(
+            model_id,
+            api_key=config.api_key,
+            sort_order=config.sort_order,
+            is_active=config.is_active
+        )
+        if success:
+            return {"message": "模型配置更新成功"}
+        else:
+            raise HTTPException(status_code=500, detail="模型配置更新失败")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"更新AI模型配置失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/ai/models")
+async def create_ai_model(
+    config: AIModelConfigCreate,
+    current_user: dict = Depends(is_admin_user)
+):
+    """创建新AI模型配置（仅admin）"""
+    try:
+        from db.ai_model_config_repository import AIModelConfigRepository
+        model_id = AIModelConfigRepository.create_model(
+            config.model_name,
+            config.model_display_name,
+            config.api_key,
+            config.api_url,
+            config.sort_order
+        )
+        return {"message": "模型配置创建成功", "model_id": model_id}
+    except Exception as e:
+        logger.error(f"创建AI模型配置失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/ai/models/{model_id}")
+async def delete_ai_model(
+    model_id: int,
+    current_user: dict = Depends(is_admin_user)
+):
+    """删除AI模型配置（仅admin）"""
+    try:
+        from db.ai_model_config_repository import AIModelConfigRepository
+        success = AIModelConfigRepository.delete_model(model_id)
+        if success:
+            return {"message": "模型配置删除成功"}
+        else:
+            raise HTTPException(status_code=500, detail="模型配置删除失败")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"删除AI模型配置失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # ========== AI管理API（仅admin）==========
@@ -684,22 +822,62 @@ async def update_ai_prompt(
         logger.error(f"更新Prompt模板失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# ========== AI推荐和分析API（仅admin）==========
-@app.post("/api/ai/recommend-stocks")
-async def ai_recommend_stocks(current_user: dict = Depends(can_use_ai_recommend)):
-    """AI推荐股票"""
+@app.post("/api/ai/clear-cache")
+async def clear_ai_cache(current_user: dict = Depends(is_admin_user)):
+    """清空AI分析缓存"""
     try:
+        from db.ai_cache_repository import AICacheRepository
+        
+        deleted_count = AICacheRepository.clear_all_cache()
+        return {"message": "缓存清空成功", "deleted_count": deleted_count}
+    except Exception as e:
+        logger.error(f"清空AI缓存失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ========== AI推荐和分析API（仅admin）==========
+class AIRequest(BaseModel):
+    model_name: Optional[str] = None
+
+@app.post("/api/ai/recommend-stocks")
+async def ai_recommend_stocks(
+    request: AIRequest = AIRequest(),
+    current_user: dict = Depends(check_api_key_available)
+):
+    """AI推荐股票（带3小时缓存，开放给所有用户）"""
+    try:
+        from db.ai_cache_repository import AICacheRepository
+        
+        user_id = current_user.get("id")
+        
+        # 先检查缓存
+        cached_result = AICacheRepository.get_cache("recommend", "recommend")
+        if cached_result:
+            logger.info("使用缓存的AI推荐结果")
+            return {
+                "recommendation": cached_result,
+                "timestamp": datetime.now().isoformat(),
+                "cached": True
+            }
+        
+        # 缓存未命中，调用AI服务
         # 获取热门股票和板块数据
         hot_stocks = HotRankService.get_hot_stocks()
         hot_sectors = HotRankService.get_hot_sectors()
         
-        # 调用AI服务
-        recommendation = AIService.recommend_stocks(hot_stocks, hot_sectors)
+        # 调用AI服务（传入user_id和model_name）
+        model_name = request.model_name if request else None
+        recommendation = AIService.recommend_stocks(user_id, hot_stocks, hot_sectors, model_name)
+        
+        # 保存到缓存
+        AICacheRepository.set_cache("recommend", "recommend", recommendation)
         
         return {
             "recommendation": recommendation,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
+            "cached": False
         }
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -709,10 +887,33 @@ async def ai_recommend_stocks(current_user: dict = Depends(can_use_ai_recommend)
 @app.post("/api/ai/analyze-stock/{stock_code}")
 async def ai_analyze_stock(
     stock_code: str,
-    current_user: dict = Depends(can_use_ai_recommend)
+    request: AIRequest = AIRequest(),
+    current_user: dict = Depends(check_api_key_available)
 ):
-    """AI分析股票"""
+    """AI分析股票（带3小时缓存，开放给所有用户）"""
     try:
+        from db.ai_cache_repository import AICacheRepository
+        
+        user_id = current_user.get("id")
+        
+        # 先检查缓存
+        cached_result = AICacheRepository.get_cache(stock_code, "analyze")
+        if cached_result:
+            logger.info(f"使用缓存的AI分析结果: {stock_code}")
+            # 获取股票名称
+            hot_stocks = HotRankService.get_hot_stocks()
+            stock_info = next((s for s in hot_stocks if s.get("stock_code") == stock_code), None)
+            stock_name = stock_info.get("stock_name") if stock_info else stock_code
+            
+            return {
+                "analysis": cached_result,
+                "stock_code": stock_code,
+                "stock_name": stock_name,
+                "timestamp": datetime.now().isoformat(),
+                "cached": True
+            }
+        
+        # 缓存未命中，调用AI服务
         # 获取股票数据
         stock_daily = StockService.get_stock_daily(stock_code)
         capital_flow = StockService.get_stock_capital_flow(stock_code)
@@ -736,15 +937,22 @@ async def ai_analyze_stock(
         
         stock_name = stock_info.get("stock_name") if stock_info else stock_code
         
-        # 调用AI服务
-        analysis = AIService.analyze_stock(stock_code, stock_name, stock_data)
+        # 调用AI服务（传入user_id和model_name）
+        model_name = request.model_name if request and request.model_name else None
+        analysis = AIService.analyze_stock(user_id, stock_code, stock_name, stock_data, model_name)
+        
+        # 保存到缓存
+        AICacheRepository.set_cache(stock_code, "analyze", analysis)
         
         return {
             "analysis": analysis,
             "stock_code": stock_code,
             "stock_name": stock_name,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
+            "cached": False
         }
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:

@@ -115,6 +115,90 @@ class DataCollectionService:
         
         logger.info(f"股票日K数据采集完成！成功: {success_count}, 失败: {error_count}")
     
+    def refresh_single_stock_data(self, stock_code: str) -> bool:
+        """
+        刷新单个股票的最新数据（仅在交易时段执行）
+        
+        Args:
+            stock_code: 股票代码
+            
+        Returns:
+            True表示刷新成功，False表示失败或非交易时段
+        """
+        from datetime import datetime
+        
+        # 判断是否为交易时段
+        if not self.trade_date_adapter.is_trading_hours():
+            logger.info(f"当前不是交易时段，跳过刷新股票 {stock_code} 的数据")
+            return False
+        
+        today = date.today()
+        
+        # 判断是否为交易日
+        if not self.trade_date_adapter.is_trading_day(today):
+            logger.info(f"{today} 不是交易日，跳过刷新股票 {stock_code} 的数据")
+            return False
+        
+        try:
+            logger.info(f"开始刷新股票 {stock_code} 的最新数据...")
+            
+            # 获取今日数据
+            today_str = today.strftime('%Y%m%d')
+            
+            # 获取日K数据
+            df = self.stock_adapter.get_stock_daily_data(stock_code, today_str, today_str)
+            
+            if df is not None and not df.empty:
+                # 转换为数据库格式
+                data_list = []
+                for _, row in df.iterrows():
+                    data_list.append({
+                        'code': stock_code,
+                        'date': row['date'],
+                        'open': float(row.get('open', 0)) if pd.notna(row.get('open')) else None,
+                        'close': float(row.get('close', 0)) if pd.notna(row.get('close')) else None,
+                        'high': float(row.get('high', 0)) if pd.notna(row.get('high')) else None,
+                        'low': float(row.get('low', 0)) if pd.notna(row.get('low')) else None,
+                        'volume': int(row.get('volume', 0)) if pd.notna(row.get('volume')) else 0,
+                        'amount': float(row.get('amount', 0)) if pd.notna(row.get('amount')) else 0,
+                        'turnover_rate': float(row.get('turnover_rate', 0)) if pd.notna(row.get('turnover_rate')) else None,
+                        'change_pct': float(row.get('change_pct', 0)) if pd.notna(row.get('change_pct')) else None,
+                        'ma5': float(row.get('ma5', 0)) if pd.notna(row.get('ma5')) else None,
+                        'ma10': float(row.get('ma10', 0)) if pd.notna(row.get('ma10')) else None,
+                        'ma20': float(row.get('ma20', 0)) if pd.notna(row.get('ma20')) else None,
+                        'ma30': float(row.get('ma30', 0)) if pd.notna(row.get('ma30')) else None,
+                        'ma60': float(row.get('ma60', 0)) if pd.notna(row.get('ma60')) else None,
+                    })
+                
+                # 保存数据
+                StockRepository.batch_upsert_stock_daily(data_list)
+                logger.info(f"股票 {stock_code} 日K数据刷新成功")
+            
+            # 获取资金流向数据
+            try:
+                flow_data_dict = self.stock_adapter.get_stock_money_flow(stock_code)
+                if flow_data_dict:
+                    flow_data = [{
+                        'code': stock_code,
+                        'date': today,
+                        'main': float(flow_data_dict.get('main_net_inflow', 0)),
+                        'super_large': float(flow_data_dict.get('super_large_inflow', 0)),
+                        'large': float(flow_data_dict.get('large_inflow', 0)),
+                        'medium': float(flow_data_dict.get('medium_inflow', 0)),
+                        'small': float(flow_data_dict.get('small_inflow', 0)),
+                    }]
+                    
+                    MoneyFlowRepository.batch_upsert_money_flow(flow_data)
+                    logger.info(f"股票 {stock_code} 资金流向数据刷新成功")
+            except Exception as e:
+                logger.warning(f"刷新股票 {stock_code} 资金流向数据失败: {e}")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"刷新股票 {stock_code} 数据失败: {e}", exc_info=True)
+            return False
+    
     def collect_money_flow_data(self):
         """
         采集资金流向数据（仅在交易日执行）

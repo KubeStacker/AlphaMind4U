@@ -17,7 +17,7 @@ class UserService:
         """获取所有用户列表"""
         with get_db() as db:
             query = text("""
-                SELECT id, username, is_active, can_use_ai_recommend, 
+                SELECT id, username, is_active, 
                        failed_login_attempts, locked_until, last_login,
                        created_at, updated_at
                 FROM users
@@ -30,12 +30,11 @@ class UserService:
                     'id': row[0],
                     'username': row[1],
                     'is_active': bool(row[2]),
-                    'can_use_ai_recommend': bool(row[3]) if row[3] is not None else False,
-                    'failed_login_attempts': row[4] or 0,
-                    'locked_until': row[5].isoformat() if row[5] else None,
-                    'last_login': row[6].isoformat() if row[6] else None,
-                    'created_at': row[7].isoformat() if row[7] else None,
-                    'updated_at': row[8].isoformat() if row[8] else None,
+                    'failed_login_attempts': row[3] or 0,
+                    'locked_until': row[4].isoformat() if row[4] else None,
+                    'last_login': row[5].isoformat() if row[5] else None,
+                    'created_at': row[6].isoformat() if row[6] else None,
+                    'updated_at': row[7].isoformat() if row[7] else None,
                     'is_admin': row[1] == 'admin'  # admin用户标识
                 }
                 for row in result
@@ -46,7 +45,7 @@ class UserService:
         """根据ID获取用户"""
         with get_db() as db:
             query = text("""
-                SELECT id, username, is_active, can_use_ai_recommend, 
+                SELECT id, username, is_active, 
                        failed_login_attempts, locked_until, last_login,
                        created_at, updated_at
                 FROM users
@@ -61,17 +60,16 @@ class UserService:
                 'id': result[0],
                 'username': result[1],
                 'is_active': bool(result[2]),
-                'can_use_ai_recommend': bool(result[3]) if result[3] is not None else False,
-                'failed_login_attempts': result[4] or 0,
-                'locked_until': result[5].isoformat() if result[5] else None,
-                'last_login': result[6].isoformat() if result[6] else None,
-                'created_at': result[7].isoformat() if result[7] else None,
-                'updated_at': result[8].isoformat() if result[8] else None,
+                'failed_login_attempts': result[3] or 0,
+                'locked_until': result[4].isoformat() if result[4] else None,
+                'last_login': result[5].isoformat() if result[5] else None,
+                'created_at': result[6].isoformat() if result[6] else None,
+                'updated_at': result[7].isoformat() if result[7] else None,
                 'is_admin': result[1] == 'admin'
             }
     
     @staticmethod
-    def create_user(username: str, password: str, can_use_ai_recommend: bool = False) -> int:
+    def create_user(username: str, password: str) -> int:
         """创建用户"""
         with get_db() as db:
             # 检查用户名是否已存在
@@ -85,13 +83,12 @@ class UserService:
             
             # 插入新用户
             insert_query = text("""
-                INSERT INTO users (username, password_hash, is_active, can_use_ai_recommend)
-                VALUES (:username, :password_hash, 1, :can_use_ai_recommend)
+                INSERT INTO users (username, password_hash, is_active)
+                VALUES (:username, :password_hash, 1)
             """)
             result = db.execute(insert_query, {
                 'username': username,
-                'password_hash': password_hash,
-                'can_use_ai_recommend': 1 if can_use_ai_recommend else 0
+                'password_hash': password_hash
             })
             db.commit()
             
@@ -99,8 +96,7 @@ class UserService:
     
     @staticmethod
     def update_user(user_id: int, password: Optional[str] = None,
-                   is_active: Optional[bool] = None,
-                   can_use_ai_recommend: Optional[bool] = None) -> bool:
+                   is_active: Optional[bool] = None) -> bool:
         """更新用户信息"""
         with get_db() as db:
             # 检查用户是否存在且不是admin
@@ -127,10 +123,6 @@ class UserService:
             if is_active is not None:
                 updates.append("is_active = :is_active")
                 params['is_active'] = 1 if is_active else 0
-            
-            if can_use_ai_recommend is not None:
-                updates.append("can_use_ai_recommend = :can_use_ai_recommend")
-                params['can_use_ai_recommend'] = 1 if can_use_ai_recommend else 0
             
             if not updates:
                 return False
@@ -166,22 +158,3 @@ class UserService:
             db.commit()
             return result.rowcount > 0
     
-    @staticmethod
-    def can_user_use_ai_recommend(username: str) -> bool:
-        """检查用户是否可以使用AI推荐功能"""
-        with get_db() as db:
-            query = text("""
-                SELECT can_use_ai_recommend 
-                FROM users 
-                WHERE username = :username AND is_active = 1
-            """)
-            result = db.execute(query, {'username': username}).fetchone()
-            
-            if not result:
-                return False
-            
-            # admin用户默认可以使用
-            if username == 'admin':
-                return True
-            
-            return bool(result[0]) if result[0] is not None else False

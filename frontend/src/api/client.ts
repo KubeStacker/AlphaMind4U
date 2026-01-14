@@ -31,10 +31,12 @@ client.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
-      // token过期或无效，清除本地存储并跳转到登录页
-      localStorage.removeItem('token')
-      localStorage.removeItem('username')
-      if (window.location.pathname !== '/login') {
+      const token = localStorage.getItem('token')
+      // 只有在有token的情况下才自动跳转（表示token过期）
+      // 如果没有token，说明是登录请求失败，不自动跳转，让调用者处理错误
+      if (token && window.location.pathname !== '/login') {
+        localStorage.removeItem('token')
+        localStorage.removeItem('username')
         window.location.href = '/login'
       }
     }

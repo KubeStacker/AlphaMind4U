@@ -22,11 +22,11 @@ const SettingsMain: React.FC = () => {
       icon: <AppstoreOutlined />,
       label: '概念管理',
     },
-    ...(isAdmin ? [{
+    {
       key: '/settings/ai',
       icon: <RobotOutlined />,
       label: 'AI管理',
-    }] : []),
+    },
     ...(isAdmin ? [{
       key: '/settings/users',
       icon: <UserOutlined />,

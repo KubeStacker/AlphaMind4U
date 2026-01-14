@@ -31,9 +31,6 @@ const UserManagement: React.FC = () => {
   const handleCreate = () => {
     setEditingUser(null)
     form.resetFields()
-    form.setFieldsValue({
-      can_use_ai_recommend: false
-    })
     setModalVisible(true)
   }
 
@@ -41,7 +38,6 @@ const UserManagement: React.FC = () => {
     setEditingUser(record)
     form.setFieldsValue({
       is_active: record.is_active,
-      can_use_ai_recommend: record.can_use_ai_recommend,
     })
     setModalVisible(true)
   }
@@ -64,7 +60,6 @@ const UserManagement: React.FC = () => {
         // 更新用户
         const update: UserUpdate = {
           is_active: values.is_active,
-          can_use_ai_recommend: values.can_use_ai_recommend,
         }
         // 如果提供了新密码，则更新密码
         if (values.password && values.password.trim()) {
@@ -77,7 +72,6 @@ const UserManagement: React.FC = () => {
         const create: UserCreate = {
           username: values.username,
           password: values.password,
-          can_use_ai_recommend: values.can_use_ai_recommend || false,
         }
         await userApi.createUser(create)
         message.success('创建成功')
@@ -124,22 +118,6 @@ const UserManagement: React.FC = () => {
           {active ? '启用' : '禁用'}
         </Tag>
       ),
-    },
-    {
-      title: 'AI推荐权限',
-      dataIndex: 'can_use_ai_recommend',
-      key: 'can_use_ai_recommend',
-      width: 120,
-      render: (canUse: boolean, record: User) => {
-        if (record.is_admin) {
-          return <Tag color="blue">允许</Tag>
-        }
-        return (
-          <Tag color={canUse ? 'green' : 'default'}>
-            {canUse ? '允许' : '不允许'}
-          </Tag>
-        )
-      },
     },
     {
       title: '登录失败次数',
@@ -279,18 +257,6 @@ const UserManagement: React.FC = () => {
               </Form.Item>
             </>
           )}
-          <Form.Item
-            name="can_use_ai_recommend"
-            label="AI推荐权限"
-            valuePropName="checked"
-            extra={editingUser?.is_admin ? "管理员默认拥有AI推荐权限" : "允许该用户使用AI推荐和分析功能"}
-          >
-            <Switch
-              checkedChildren="允许"
-              unCheckedChildren="不允许"
-              disabled={editingUser?.is_admin}
-            />
-          </Form.Item>
           {editingUser && (
             <Form.Item
               name="is_active"

@@ -4,7 +4,6 @@ export interface User {
   id: number
   username: string
   is_active: boolean
-  can_use_ai_recommend: boolean
   failed_login_attempts: number
   locked_until?: string
   last_login?: string
@@ -16,13 +15,11 @@ export interface User {
 export interface UserCreate {
   username: string
   password: string
-  can_use_ai_recommend: boolean
 }
 
 export interface UserUpdate {
   password?: string
   is_active?: boolean
-  can_use_ai_recommend?: boolean
 }
 
 export interface UsersResponse {

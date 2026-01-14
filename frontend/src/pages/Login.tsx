@@ -28,7 +28,16 @@ const Login: React.FC = () => {
       message.success('登录成功')
       navigate('/stock-analysis')
     } catch (error: any) {
-      const errorMessage = error.response?.data?.detail || '登录失败，请检查用户名和密码'
+      console.error('登录失败:', error)
+      // 处理不同格式的错误信息
+      let errorMessage = '登录失败，请检查用户名和密码'
+      if (error?.response?.data?.detail) {
+        errorMessage = error.response.data.detail
+      } else if (error?.response?.data?.message) {
+        errorMessage = error.response.data.message
+      } else if (error?.message) {
+        errorMessage = error.message
+      }
       message.error(errorMessage)
     } finally {
       setLoading(false)

@@ -172,3 +172,44 @@ class TradeDateAdapter:
         except Exception as e:
             logger.error(f"获取交易日范围失败: {e}", exc_info=True)
             return []
+    
+    @classmethod
+    def is_trading_hours(cls, check_time: Optional[datetime] = None) -> bool:
+        """
+        判断指定时间是否为交易时段
+        
+        交易时段：
+        - 上午：9:30-11:30
+        - 下午：13:00-15:00
+        
+        Args:
+            check_time: 要检查的时间，默认为当前时间
+            
+        Returns:
+            True表示是交易时段，False表示非交易时段
+        """
+        if check_time is None:
+            check_time = datetime.now()
+        
+        # 判断是否为交易日
+        if not cls.is_trading_day(check_time.date()):
+            return False
+        
+        # 获取当前时间（小时和分钟）
+        hour = check_time.hour
+        minute = check_time.minute
+        time_minutes = hour * 60 + minute
+        
+        # 上午交易时段：9:30-11:30 (570-690分钟)
+        morning_start = 9 * 60 + 30  # 9:30
+        morning_end = 11 * 60 + 30   # 11:30
+        
+        # 下午交易时段：13:00-15:00 (780-900分钟)
+        afternoon_start = 13 * 60    # 13:00
+        afternoon_end = 15 * 60       # 15:00
+        
+        # 判断是否在交易时段内
+        is_morning = morning_start <= time_minutes <= morning_end
+        is_afternoon = afternoon_start <= time_minutes <= afternoon_end
+        
+        return is_morning or is_afternoon

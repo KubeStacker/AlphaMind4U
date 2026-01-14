@@ -105,3 +105,11 @@ class AIConfigRepository:
         except Exception as e:
             logger.error(f"删除AI配置失败: {e}", exc_info=True)
             raise
+    
+    @staticmethod
+    def get_bool_config(config_key: str, default: bool = False) -> bool:
+        """获取布尔类型配置"""
+        value = AIConfigRepository.get_config(config_key)
+        if value is None:
+            return default
+        return value.lower() in ('true', '1', 'yes', 'on')

@@ -58,18 +58,59 @@ export const aiApi = {
   },
 
   // AI推荐股票
-  recommendStocks: async (): Promise<AIRecommendResponse> => {
-    const response = await apiClient.post('/ai/recommend-stocks', {}, {
+  recommendStocks: async (modelName?: string): Promise<AIRecommendResponse> => {
+    const response = await apiClient.post('/ai/recommend-stocks', { model_name: modelName }, {
       timeout: 180000 // 180秒，AI推荐可能需要更长时间
     })
     return response.data
   },
 
   // AI分析股票
-  analyzeStock: async (stockCode: string): Promise<AIAnalyzeResponse> => {
-    const response = await apiClient.post(`/ai/analyze-stock/${stockCode}`, {}, {
+  analyzeStock: async (stockCode: string, modelName?: string): Promise<AIAnalyzeResponse> => {
+    const response = await apiClient.post(`/ai/analyze-stock/${stockCode}`, { model_name: modelName }, {
       timeout: 180000 // 180秒，AI分析可能需要更长时间
     })
     return response.data
-  }
+  },
+
+  // AI模型配置管理（所有用户可查看）
+  getAIModels: async (): Promise<{ models: AIModel[] }> => {
+    const response = await apiClient.get('/ai/models')
+    return response.data
+  },
+
+  getActiveAIModels: async (): Promise<{ models: AIModel[] }> => {
+    const response = await apiClient.get('/ai/models/active')
+    return response.data
+  },
+
+  // AI模型配置管理（仅admin）
+  updateAIModel: async (modelId: number, config: { api_key?: string; sort_order?: number; is_active?: boolean }): Promise<void> => {
+    await apiClient.put(`/ai/models/${modelId}`, config)
+  },
+
+  createAIModel: async (config: { model_name: string; model_display_name: string; api_key: string; api_url: string; sort_order: number }): Promise<{ message: string; model_id: number }> => {
+    const response = await apiClient.post('/ai/models', config)
+    return response.data
+  },
+
+  deleteAIModel: async (modelId: number): Promise<void> => {
+    await apiClient.delete(`/ai/models/${modelId}`)
+  },
+
+  // 清空AI缓存
+  clearCache: async (): Promise<{ message: string; deleted_count: number }> => {
+    const response = await apiClient.post('/ai/clear-cache')
+    return response.data
+  },
+}
+
+export interface AIModel {
+  id: number
+  model_name: string
+  model_display_name: string
+  api_key: string
+  api_url: string
+  sort_order: number
+  is_active: boolean
 }

@@ -48,16 +48,22 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   }, [])
 
   const login = async (username: string, password: string) => {
-    const response = await authApi.login({ username, password })
-    localStorage.setItem('token', response.access_token)
-    localStorage.setItem('username', response.username)
     try {
-      const userInfo = await authApi.getCurrentUser()
-      setUser(userInfo)
+      const response = await authApi.login({ username, password })
+      localStorage.setItem('token', response.access_token)
+      localStorage.setItem('username', response.username)
+      try {
+        const userInfo = await authApi.getCurrentUser()
+        setUser(userInfo)
+      } catch (error) {
+        // 如果获取用户信息失败，但登录已成功，仍然设置用户信息
+        console.error('获取用户信息失败:', error)
+        setUser({ id: 0, username: response.username })
+      }
     } catch (error) {
-      // 如果获取用户信息失败，但登录已成功，仍然设置用户信息
-      console.error('获取用户信息失败:', error)
-      setUser({ id: 0, username: response.username })
+      // 登录失败，重新抛出错误让调用者处理
+      console.error('登录API调用失败:', error)
+      throw error
     }
   }
 

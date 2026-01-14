@@ -14,7 +14,6 @@ export interface LoginResponse {
 export interface UserInfo {
   id: number
   username: string
-  can_use_ai_recommend?: boolean
   is_admin?: boolean
 }
 

@@ -1,20 +1,18 @@
 import React, { useState, useEffect } from 'react'
-import { Card, Button, Table, Tag, Collapse, message, Popover, Spin, Modal, Typography, Space } from 'antd'
+import { Card, Button, Table, Tag, Collapse, message, Popover, Spin, Modal, Space, Select } from 'antd'
 import { ReloadOutlined, FireOutlined, RobotOutlined, BulbOutlined } from '@ant-design/icons'
 import ReactECharts from 'echarts-for-react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { hotApi, HotStock, SectorInfo, SectorStock } from '../api/hot'
 import { stockApi, StockDailyData } from '../api/stock'
 import { aiApi } from '../api/ai'
-import { useAuth } from '../contexts/AuthContext'
-
-const { Paragraph } = Typography
 
 const { Panel } = Collapse
 
 const Tab2: React.FC = () => {
-  const { user } = useAuth()
-  const isAdmin = user?.is_admin || user?.username === 'admin'
-  const canUseAI = isAdmin || user?.can_use_ai_recommend || false
+  const [selectedModel, setSelectedModel] = useState<string>('')
+  const [availableModels, setAvailableModels] = useState<Array<{ id: number; model_name: string; model_display_name: string }>>([])
   const [hotStocks, setHotStocks] = useState<HotStock[]>([])
   const [hotSectors, setHotSectors] = useState<SectorInfo[]>([])
   const [loading, setLoading] = useState(false)
@@ -36,36 +34,6 @@ const Tab2: React.FC = () => {
   const [aiAnalyzeResult, setAiAnalyzeResult] = useState<string>('')
   const [selectedStockForAnalyze, setSelectedStockForAnalyze] = useState<{ code: string; name: string } | null>(null)
 
-  useEffect(() => {
-    loadData()
-  }, [])
-
-  // 页面可见性变化时刷新数据
-  useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        // 页面重新可见时刷新数据
-        loadData()
-      }
-    }
-    
-    document.addEventListener('visibilitychange', handleVisibilityChange)
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange)
-    }
-  }, [])
-
-  // 检测移动端
-  useEffect(() => {
-    const checkMobile = () => {
-      setIsMobile(window.innerWidth < 768)
-    }
-    checkMobile()
-    window.addEventListener('resize', checkMobile)
-    return () => window.removeEventListener('resize', checkMobile)
-  }, [])
-
-
   const loadData = async () => {
     setLoading(true)
     try {
@@ -83,13 +51,63 @@ const Tab2: React.FC = () => {
       }
     } catch (error: any) {
       console.error('加载数据失败:', error)
-      message.error(`加载数据失败: ${error?.response?.data?.detail || error?.message || '未知错误'}`)
+      const errorMsg = error?.response?.data?.detail || error?.message || '未知错误'
+      message.error(`加载数据失败: ${errorMsg}`)
       setHotStocks([])
       setHotSectors([])
     } finally {
       setLoading(false)
     }
   }
+
+  useEffect(() => {
+    loadData()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // 加载可用模型
+  useEffect(() => {
+    const loadModels = async () => {
+      try {
+        const response = await aiApi.getActiveAIModels()
+        setAvailableModels(response.models)
+        if (response.models.length > 0 && !selectedModel) {
+          setSelectedModel(response.models[0].model_name)
+        }
+      } catch (error) {
+        console.error('加载模型列表失败:', error)
+      }
+    }
+    
+    loadModels()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // 页面可见性变化时刷新数据
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        // 页面重新可见时刷新数据
+        loadData()
+      }
+    }
+    
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // 检测移动端
+  useEffect(() => {
+    const checkMobile = () => {
+      setIsMobile(window.innerWidth < 768)
+    }
+    checkMobile()
+    window.addEventListener('resize', checkMobile)
+    return () => window.removeEventListener('resize', checkMobile)
+  }, [])
 
   const handleRefresh = async () => {
     setRefreshing(true)
@@ -111,11 +129,15 @@ const Tab2: React.FC = () => {
     setAiRecommendLoading(true)
     setAiRecommendResult('')
     try {
-      const result = await aiApi.recommendStocks()
+      const result = await aiApi.recommendStocks(selectedModel || undefined)
       setAiRecommendResult(result.recommendation)
     } catch (error: any) {
       const errorMsg = error?.response?.data?.detail || error?.message || '未知错误'
-      message.error(`AI推荐失败: ${errorMsg}`)
+      if (errorMsg.includes('API Key未配置')) {
+        message.warning('API Key未配置，请前往AI管理设置中配置模型API Key')
+      } else {
+        message.error(`AI推荐失败: ${errorMsg}`)
+      }
       setAiRecommendResult(`错误: ${errorMsg}`)
     } finally {
       setAiRecommendLoading(false)
@@ -128,11 +150,15 @@ const Tab2: React.FC = () => {
     setAiAnalyzeLoading(true)
     setAiAnalyzeResult('')
     try {
-      const result = await aiApi.analyzeStock(stockCode)
+      const result = await aiApi.analyzeStock(stockCode, selectedModel || undefined)
       setAiAnalyzeResult(result.analysis)
     } catch (error: any) {
       const errorMsg = error?.response?.data?.detail || error?.message || '未知错误'
-      message.error(`AI分析失败: ${errorMsg}`)
+      if (errorMsg.includes('API Key未配置')) {
+        message.warning('API Key未配置，请前往AI管理设置中配置模型API Key')
+      } else {
+        message.error(`AI分析失败: ${errorMsg}`)
+      }
       setAiAnalyzeResult(`错误: ${errorMsg}`)
     } finally {
       setAiAnalyzeLoading(false)
@@ -235,18 +261,16 @@ const Tab2: React.FC = () => {
                 onClick={() => handleStockClick(record.stock_code, name)}>
             {name || '-'}
           </span>
-          {canUseAI && (
-            <Button
-              type="link"
-              size="small"
-              icon={<BulbOutlined />}
-              onClick={(e) => {
-                e.stopPropagation()
-                handleAIAnalyze(record.stock_code, name || record.stock_code)
-              }}
-              title="AI分析"
-            />
-          )}
+          <Button
+            type="link"
+            size="small"
+            icon={<BulbOutlined />}
+            onClick={(e) => {
+              e.stopPropagation()
+              handleAIAnalyze(record.stock_code, name || record.stock_code)
+            }}
+            title="AI分析"
+          />
         </Space>
       ),
     },
@@ -544,15 +568,29 @@ const Tab2: React.FC = () => {
               热门板块推荐
             </span>
             <Space>
-              {canUseAI && (
-                <Button
-                  type="default"
-                  icon={<RobotOutlined />}
-                  onClick={handleAIRecommend}
+              {availableModels.length > 0 && (
+                <Select
+                  value={selectedModel}
+                  onChange={setSelectedModel}
+                  style={{ width: 150 }}
+                  placeholder="选择模型"
+                  size="small"
                 >
-                  AI推荐
-                </Button>
+                  {availableModels.map(model => (
+                    <Select.Option key={model.id} value={model.model_name}>
+                      {model.model_display_name}
+                    </Select.Option>
+                  ))}
+                </Select>
               )}
+              <Button
+                type="default"
+                icon={<RobotOutlined />}
+                onClick={handleAIRecommend}
+                title="AI推荐"
+              >
+                AI推荐
+              </Button>
               <Button
                 type="primary"
                 icon={<ReloadOutlined />}
@@ -735,7 +773,7 @@ const Tab2: React.FC = () => {
         title={
           <Space>
             <span>{selectedStockForKline?.name || selectedStockForKline?.code} - K线图</span>
-            {canUseAI && selectedStockForKline && (
+            {selectedStockForKline && (
               <Button
                 type="link"
                 icon={<BulbOutlined />}
@@ -744,6 +782,7 @@ const Tab2: React.FC = () => {
                     handleAIAnalyze(selectedStockForKline.code, selectedStockForKline.name)
                   }
                 }}
+                title="AI分析"
               >
                 AI分析
               </Button>
@@ -825,17 +864,37 @@ const Tab2: React.FC = () => {
             <div style={{ marginTop: 16, color: '#999' }}>AI正在分析中，请稍候...</div>
           </div>
         ) : aiRecommendResult ? (
-          <Paragraph
+          <div
             style={{
-              whiteSpace: 'pre-wrap',
-              lineHeight: '1.8',
-              fontSize: '14px',
               maxHeight: '70vh',
-              overflow: 'auto'
+              overflow: 'auto',
+              padding: '16px',
+              lineHeight: '1.8',
+              fontSize: '14px'
             }}
           >
-            {aiRecommendResult}
-          </Paragraph>
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              components={{
+                h1: ({...props}: any) => <h1 style={{ fontSize: '20px', marginTop: '16px', marginBottom: '12px' }} {...props} />,
+                h2: ({...props}: any) => <h2 style={{ fontSize: '18px', marginTop: '14px', marginBottom: '10px' }} {...props} />,
+                h3: ({...props}: any) => <h3 style={{ fontSize: '16px', marginTop: '12px', marginBottom: '8px' }} {...props} />,
+                p: ({...props}: any) => <p style={{ marginBottom: '8px' }} {...props} />,
+                ul: ({...props}: any) => <ul style={{ marginBottom: '8px', paddingLeft: '24px' }} {...props} />,
+                ol: ({...props}: any) => <ol style={{ marginBottom: '8px', paddingLeft: '24px' }} {...props} />,
+                li: ({...props}: any) => <li style={{ marginBottom: '4px' }} {...props} />,
+                code: ({inline, ...props}: any) => 
+                  inline ? (
+                    <code style={{ background: '#f5f5f5', padding: '2px 6px', borderRadius: '3px', fontFamily: 'monospace' }} {...props} />
+                  ) : (
+                    <code style={{ display: 'block', background: '#f5f5f5', padding: '12px', borderRadius: '4px', overflow: 'auto', fontFamily: 'monospace' }} {...props} />
+                  ),
+                blockquote: ({...props}: any) => <blockquote style={{ borderLeft: '4px solid #1890ff', paddingLeft: '12px', marginLeft: 0, color: '#666' }} {...props} />,
+              }}
+            >
+              {aiRecommendResult}
+            </ReactMarkdown>
+          </div>
         ) : (
           <div style={{ textAlign: 'center', padding: 50, color: '#999' }}>
             暂无推荐结果
@@ -863,17 +922,37 @@ const Tab2: React.FC = () => {
             <div style={{ marginTop: 16, color: '#999' }}>AI正在分析中，请稍候...</div>
           </div>
         ) : aiAnalyzeResult ? (
-          <Paragraph
+          <div
             style={{
-              whiteSpace: 'pre-wrap',
-              lineHeight: '1.8',
-              fontSize: '14px',
               maxHeight: '70vh',
-              overflow: 'auto'
+              overflow: 'auto',
+              padding: '16px',
+              lineHeight: '1.8',
+              fontSize: '14px'
             }}
           >
-            {aiAnalyzeResult}
-          </Paragraph>
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              components={{
+                h1: ({...props}: any) => <h1 style={{ fontSize: '20px', marginTop: '16px', marginBottom: '12px' }} {...props} />,
+                h2: ({...props}: any) => <h2 style={{ fontSize: '18px', marginTop: '14px', marginBottom: '10px' }} {...props} />,
+                h3: ({...props}: any) => <h3 style={{ fontSize: '16px', marginTop: '12px', marginBottom: '8px' }} {...props} />,
+                p: ({...props}: any) => <p style={{ marginBottom: '8px' }} {...props} />,
+                ul: ({...props}: any) => <ul style={{ marginBottom: '8px', paddingLeft: '24px' }} {...props} />,
+                ol: ({...props}: any) => <ol style={{ marginBottom: '8px', paddingLeft: '24px' }} {...props} />,
+                li: ({...props}: any) => <li style={{ marginBottom: '4px' }} {...props} />,
+                code: ({inline, ...props}: any) => 
+                  inline ? (
+                    <code style={{ background: '#f5f5f5', padding: '2px 6px', borderRadius: '3px', fontFamily: 'monospace' }} {...props} />
+                  ) : (
+                    <code style={{ display: 'block', background: '#f5f5f5', padding: '12px', borderRadius: '4px', overflow: 'auto', fontFamily: 'monospace' }} {...props} />
+                  ),
+                blockquote: ({...props}: any) => <blockquote style={{ borderLeft: '4px solid #1890ff', paddingLeft: '12px', marginLeft: 0, color: '#666' }} {...props} />,
+              }}
+            >
+              {aiAnalyzeResult}
+            </ReactMarkdown>
+          </div>
         ) : (
           <div style={{ textAlign: 'center', padding: 50, color: '#999' }}>
             暂无分析结果

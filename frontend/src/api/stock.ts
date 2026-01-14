@@ -8,6 +8,7 @@ export interface StockDailyData {
   low_price: number
   volume: number
   amount: number
+  change_pct?: number  // 涨跌幅（百分比）
   ma5?: number
   ma10?: number
   ma20?: number
@@ -42,6 +43,11 @@ export const stockApi = {
   getCapitalFlow: async (stockCode: string): Promise<CapitalFlowData[]> => {
     const response = await client.get(`/stocks/${stockCode}/capital-flow`)
     return response.data.data || []
+  },
+
+  // 刷新股票最新数据（仅在交易时段）
+  refreshStockData: async (stockCode: string): Promise<void> => {
+    await client.post(`/stocks/${stockCode}/refresh`)
   },
 
   getStockConcepts: async (stockCode: string): Promise<Array<{ concept_name: string; weight: number }>> => {

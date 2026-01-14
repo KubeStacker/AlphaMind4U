@@ -123,7 +123,7 @@ class StockRepository:
         with get_db() as db:
             query = text("""
                 SELECT trade_date, open_price, close_price, high_price, low_price,
-                       volume, amount, ma5, ma10, ma20, ma30, ma60
+                       volume, amount, change_pct, ma5, ma10, ma20, ma30, ma60
                 FROM stock_daily
                 WHERE stock_code = :code
                 ORDER BY trade_date ASC
@@ -140,11 +140,12 @@ class StockRepository:
                     'low_price': float(row[4]) if row[4] else None,
                     'volume': int(row[5]) if row[5] else 0,
                     'amount': float(row[6]) if row[6] else 0,
-                    'ma5': float(row[7]) if row[7] else None,
-                    'ma10': float(row[8]) if row[8] else None,
-                    'ma20': float(row[9]) if row[9] else None,
-                    'ma30': float(row[10]) if row[10] else None,
-                    'ma60': float(row[11]) if row[11] else None,
+                    'change_pct': float(row[7]) if row[7] is not None else None,
+                    'ma5': float(row[8]) if row[8] else None,
+                    'ma10': float(row[9]) if row[9] else None,
+                    'ma20': float(row[10]) if row[10] else None,
+                    'ma30': float(row[11]) if row[11] else None,
+                    'ma60': float(row[12]) if row[12] else None,
                 }
                 for row in result
             ]
