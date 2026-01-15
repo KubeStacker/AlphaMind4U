@@ -36,8 +36,17 @@ security = HTTPBearer()
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """验证密码"""
     try:
-        return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8'))
-    except Exception:
+        if not plain_password or not hashed_password:
+            logger.warning("密码验证失败: 密码或哈希值为空")
+            return False
+        # 确保哈希值是bytes格式
+        if isinstance(hashed_password, str):
+            hashed_bytes = hashed_password.encode('utf-8')
+        else:
+            hashed_bytes = hashed_password
+        return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_bytes)
+    except Exception as e:
+        logger.error(f"密码验证异常: {e}", exc_info=True)
         return False
 
 

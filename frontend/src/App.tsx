@@ -9,6 +9,8 @@ import Login from './pages/Login'
 import Tab1 from './pages/Tab1'
 import Tab2 from './pages/Tab2'
 import SettingsMain from './pages/SettingsMain'
+import ModelK from './pages/ModelK'
+import Docs from './pages/Docs'
 
 const App: React.FC = () => {
   return (
@@ -22,13 +24,13 @@ const App: React.FC = () => {
               element={
                 <ProtectedRoute>
                   <Layout>
-                    <Navigate to="/stock-analysis" replace />
+                    <Navigate to="/sheep-analysis" replace />
                   </Layout>
                 </ProtectedRoute>
               }
             />
             <Route
-              path="/stock-analysis"
+              path="/sheep-analysis"
               element={
                 <ProtectedRoute>
                   <Layout>
@@ -38,11 +40,21 @@ const App: React.FC = () => {
               }
             />
             <Route
-              path="/hot-stocks"
+              path="/hot-sheep"
               element={
                 <ProtectedRoute>
                   <Layout>
                     <Tab2 />
+                  </Layout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/model-k"
+              element={
+                <ProtectedRoute>
+                  <Layout>
+                    <ModelK />
                   </Layout>
                 </ProtectedRoute>
               }
@@ -53,6 +65,16 @@ const App: React.FC = () => {
                 <ProtectedRoute>
                   <Layout>
                     <SettingsMain />
+                  </Layout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/docs"
+              element={
+                <ProtectedRoute>
+                  <Layout>
+                    <Docs />
                   </Layout>
                 </ProtectedRoute>
               }

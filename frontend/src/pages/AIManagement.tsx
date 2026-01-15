@@ -38,7 +38,7 @@ const AIManagement: React.FC = () => {
 当前日期：{date}
 核心热点/主线：{hot_sectors}
 
-热门股票数据：
+热门肥羊数据：
 {data}
 
 ## 【任务目标】
@@ -61,7 +61,7 @@ const AIManagement: React.FC = () => {
 ## 【输出格式】
 请严格按以下结构输出 3只 标的分析报告：
 
-### [股票名称 & 代码]
+### [肥羊名称 & 代码]
 
 1. 基本面逻辑（机构安全垫）：
 用简练语言概括其核心业绩增长点或行业地位（为什么跌下来机构敢接？）。
@@ -78,7 +78,7 @@ const AIManagement: React.FC = () => {
   const defaultAnalyzePrompt = `你现在是一名资深趋势型游资分析师，擅长从资金流向、量价关系、板块轮动周期研判个股趋势机会，不涉及打板、连板等短线打板逻辑。
 
 分析日期：{date}
-标的名称：{stock_name}
+标的名称：{sheep_name}
 所属板块：{sectors}
 
 请你分析以下数据，按照以下框架输出分析报告：
@@ -314,9 +314,9 @@ const AIManagement: React.FC = () => {
       ),
       children: (
         <div>
-          <Title level={4}>股票推荐Prompt模板</Title>
+          <Title level={4}>肥羊推荐Prompt模板</Title>
           <Text type="secondary" style={{ display: 'block', marginBottom: 16 }}>
-            自定义AI推荐股票时的Prompt模板。支持的变量：{'{date}'}（日期）、{'{hot_sectors}'}（热门板块列表）、{'{data}'}（股票数据）。
+            自定义AI推荐肥羊时的Prompt模板。支持的变量：{'{date}'}（日期）、{'{hot_sectors}'}（热门板块列表）、{'{data}'}（肥羊数据）。
           </Text>
           <Form
             form={recommendPromptForm}
@@ -388,9 +388,9 @@ const AIManagement: React.FC = () => {
       ),
       children: (
         <div>
-          <Title level={4}>股票分析Prompt模板</Title>
+          <Title level={4}>肥羊分析Prompt模板</Title>
           <Text type="secondary" style={{ display: 'block', marginBottom: 16 }}>
-            自定义AI分析股票时的Prompt模板。支持的变量：{'{date}'}（日期）、{'{stock_name}'}（标的名称）、{'{sectors}'}（所属板块）、{'{data}'}（股票数据）。
+            自定义AI分析肥羊时的Prompt模板。支持的变量：{'{date}'}（日期）、{'{sheep_name}'}（标的名称）、{'{sectors}'}（所属板块）、{'{data}'}（肥羊数据）。
           </Text>
           <Form
             form={analyzePromptForm}

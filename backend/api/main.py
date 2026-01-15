@@ -2,18 +2,19 @@
 FastAPI主应用 - 重构版
 """
 import logging
+import asyncio
 from contextlib import asynccontextmanager
-from typing import Optional
-from datetime import datetime
+from typing import Optional, Dict
+from datetime import datetime, date
 from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from db.database import get_db
-from auth.auth import authenticate_user, create_access_token, get_current_user, get_password_hash
+from auth.auth import authenticate_user, create_access_token, get_current_user
 from sqlalchemy import text
 from services.data_collection_service import DataCollectionService
-from services.stock_service import StockService
+from services.sheep_service import SheepService
 from services.hot_rank_service import HotRankService
 from services.concept_service import ConceptService
 from services.concept_management_service import ConceptManagementService
@@ -44,7 +45,8 @@ async def lifespan(app: FastAPI):
         logger.error(f"系统启动异常: {e}")
     yield
 
-app = FastAPI(title="股票数据API", version="3.0.0", lifespan=lifespan)
+app = FastAPI(title="肥羊数据API", version="3.0.0", lifespan=lifespan)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -52,6 +54,32 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"]
 )
+
+# 添加请求日志中间件（在CORS之后，这样才能捕获所有请求）
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    """记录所有请求的中间件"""
+    path = request.url.path
+    if path.startswith("/api/auth/login"):
+        logger.info("=" * 60)
+        logger.info(f"[REQUEST LOG] 收到登录请求")
+        logger.info(f"  Method: {request.method}")
+        logger.info(f"  Path: {path}")
+        logger.info(f"  Client: {request.client.host if request.client else 'Unknown'}")
+        logger.info(f"  User-Agent: {request.headers.get('user-agent', 'Unknown')}")
+        logger.info(f"  Content-Type: {request.headers.get('content-type', 'Unknown')}")
+    
+    try:
+        response = await call_next(request)
+        
+        if path.startswith("/api/auth/login"):
+            logger.info(f"[REQUEST LOG] 登录请求响应: {response.status_code}")
+            logger.info("=" * 60)
+        
+        return response
+    except Exception as e:
+        logger.error(f"[REQUEST LOG] 请求处理异常: {path}, 错误: {e}", exc_info=True)
+        raise
 
 # ========== 认证API（保留原有逻辑）==========
 class LoginRequest(BaseModel):
@@ -70,21 +98,38 @@ class UserInfo(BaseModel):
 @app.post("/api/auth/login", response_model=LoginResponse)
 async def login(login_data: LoginRequest, request: Request):
     """用户登录"""
+    logger.info(f"[LOGIN HANDLER] 登录处理器被调用，用户名: {login_data.username}")
+    
     try:
+        logger.info(f"[LOGIN HANDLER] 开始处理登录: 用户名={login_data.username}")
         ip_address = request.client.host if request.client else None
         user_agent = request.headers.get("user-agent")
-        user = authenticate_user(login_data.username, login_data.password, ip_address, user_agent)
+        
+        try:
+            user = authenticate_user(login_data.username, login_data.password, ip_address, user_agent)
+        except HTTPException as e:
+            logger.warning(f"登录失败: 用户名={login_data.username}, 原因={e.detail}")
+            raise
+        except Exception as e:
+            logger.error(f"认证过程异常: 用户名={login_data.username}, 错误={e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=f"认证过程出错: {str(e)}")
         
         if not user:
+            logger.warning(f"登录失败: 用户名={login_data.username}, 原因=用户名或密码错误")
             raise HTTPException(status_code=401, detail="用户名或密码错误")
         
-        access_token = create_access_token(data={"sub": user["username"]})
-        return LoginResponse(access_token=access_token, username=user["username"])
+        try:
+            access_token = create_access_token(data={"sub": user["username"]})
+            logger.info(f"登录成功: 用户名={user['username']}")
+            return LoginResponse(access_token=access_token, username=user["username"])
+        except Exception as e:
+            logger.error(f"生成token失败: 用户名={user['username']}, 错误={e}", exc_info=True)
+            raise HTTPException(status_code=500, detail="生成访问令牌失败")
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"登录失败: {e}")
-        raise HTTPException(status_code=500, detail="登录失败")
+        logger.error(f"登录失败: 用户名={login_data.username}, 错误={e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"登录失败: {str(e)}")
 
 class UserInfoResponse(BaseModel):
     id: int
@@ -131,43 +176,138 @@ def check_api_key_available(current_user: dict = Depends(get_current_user)) -> d
 async def logout(current_user: dict = Depends(get_current_user)):
     return {"message": "登出成功"}
 
-# ========== 股票相关API ==========
-@app.get("/api/stocks/search")
-async def search_stocks(q: str = ""):
-    """搜索股票"""
+# ========== 肥羊相关API ==========
+@app.get("/api/sheep/search")
+async def search_sheep(q: str = ""):
+    """搜索肥羊"""
     if not q or not q.strip():
-        return {"stocks": []}
+        return {"sheep": []}
     
     try:
-        stocks = StockService.search_stocks(q.strip())
-        return {"stocks": stocks}
+        keyword = q.strip()
+        logger.info(f"搜索肥羊: {keyword}")
+        sheep = SheepService.search_sheep(keyword)
+        logger.info(f"搜索成功: 找到 {len(sheep)} 条结果")
+        return {"sheep": sheep}
     except Exception as e:
-        logger.error(f"搜索失败: {e}")
-        raise HTTPException(status_code=500, detail="搜索服务暂时不可用")
+        import traceback
+        error_detail = traceback.format_exc()
+        logger.error(f"搜索失败: {e}\n{error_detail}")
+        raise HTTPException(status_code=500, detail=f"搜索服务暂时不可用: {str(e)}")
 
-@app.get("/api/stocks/{stock_code}/daily")
-async def get_stock_daily(stock_code: str, current_user: dict = Depends(get_current_user)):
-    """获取股票日K数据"""
+@app.get("/api/sheep/{sheep_code}/daily")
+async def get_sheep_daily(sheep_code: str, current_user: dict = Depends(get_current_user)):
+    """获取肥羊日K数据"""
     try:
-        data = StockService.get_stock_daily(stock_code)
+        data = SheepService.get_sheep_daily(sheep_code)
         return {"data": data}
     except Exception as e:
-        logger.error(f"获取股票日K数据失败: {e}", exc_info=True)
+        logger.error(f"获取肥羊日K数据失败: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/stocks/{stock_code}/capital-flow")
-async def get_stock_capital_flow(stock_code: str, current_user: dict = Depends(get_current_user)):
-    """获取资金流入数据"""
+@app.get("/api/sheep/{sheep_code}/capital-flow")
+async def get_sheep_capital_flow(sheep_code: str, days: int = 60, current_user: dict = Depends(get_current_user)):
+    """
+    获取资金流入数据
+    
+    Args:
+        sheep_code: 股票代码
+        days: 返回最近N天的数据，默认60天，可选30或60
+    """
     try:
-        data = StockService.get_stock_capital_flow(stock_code)
+        # 限制days参数只能是30或60
+        if days not in [30, 60]:
+            days = 60
+        
+        data = SheepService.get_sheep_capital_flow(sheep_code, limit=days)
+        # 确保返回数组，即使没有数据也返回空数组
+        if not data:
+            data = []
         return {"data": data}
     except Exception as e:
-        logger.error(f"获取资金流数据失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"获取资金流数据失败: {e}", exc_info=True)
+        # 即使出错也返回空数组，不影响前端显示
+        return {"data": []}
 
-@app.post("/api/stocks/{stock_code}/refresh")
-async def refresh_stock_data(stock_code: str, current_user: dict = Depends(get_current_user)):
-    """刷新单个股票的最新市场数据（仅在交易时段）"""
+@app.post("/api/sheep/{sheep_code}/capital-flow/refresh")
+async def refresh_sheep_capital_flow(sheep_code: str, current_user: dict = Depends(get_current_user)):
+    """
+    刷新资金流数据（仅admin用户）
+    如果数据不足（少于60天），则获取历史数据补全
+    """
+    try:
+        # 检查是否是admin用户
+        username = current_user.get('username', '')
+        # 检查数据库中用户是否是admin（users表没有is_admin字段，只有username='admin'的是管理员）
+        if username != 'admin':
+            raise HTTPException(status_code=403, detail="只有管理员可以刷新资金流数据")
+        
+        from db.money_flow_repository import MoneyFlowRepository
+        from etl.sheep_adapter import SheepAdapter
+        from datetime import date, timedelta
+        
+        logger.info(f"管理员 {current_user.get('username')} 请求刷新股票 {sheep_code} 的资金流数据")
+        
+        # 检查当前数据量
+        existing_data = MoneyFlowRepository.get_sheep_money_flow(sheep_code, limit=1000)
+        existing_count = len(existing_data) if existing_data else 0
+        
+        # 如果数据充足（>=60天），不需要刷新
+        if existing_count >= 60:
+            logger.info(f"股票 {sheep_code} 资金流数据充足（{existing_count}条），无需刷新")
+            return {
+                "message": f"数据充足，已有 {existing_count} 条记录，无需刷新",
+                "data_count": existing_count,
+                "refreshed": False
+            }
+        
+        # 数据不足，获取历史数据
+        logger.info(f"股票 {sheep_code} 资金流数据不足（{existing_count}条），开始获取历史数据...")
+        
+        adapter = SheepAdapter()
+        flow_df = adapter.get_sheep_money_flow_history(sheep_code)
+        
+        if flow_df is None or flow_df.empty:
+            return {
+                "message": "无法获取资金流历史数据",
+                "data_count": existing_count,
+                "refreshed": False
+            }
+        
+        # 格式化数据
+        data_list = []
+        for _, row in flow_df.iterrows():
+            data_list.append({
+                'code': sheep_code,
+                'date': row['trade_date'],
+                'main': float(row.get('main_net_inflow', 0)),
+                'super_large': float(row.get('super_large_inflow', 0)),
+                'large': float(row.get('large_inflow', 0)),
+                'medium': float(row.get('medium_inflow', 0)),
+                'small': float(row.get('small_inflow', 0)),
+            })
+        
+        # 批量保存
+        MoneyFlowRepository.batch_upsert_money_flow(data_list)
+        
+        new_count = len(data_list)
+        logger.info(f"股票 {sheep_code} 资金流数据刷新成功，新增/更新 {new_count} 条记录")
+        
+        return {
+            "message": f"数据刷新成功，新增/更新 {new_count} 条记录",
+            "data_count": new_count,
+            "refreshed": True
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"刷新资金流数据失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"刷新资金流数据失败: {str(e)}")
+
+@app.post("/api/sheep/{sheep_code}/refresh")
+async def refresh_sheep_data(sheep_code: str, current_user: dict = Depends(get_current_user)):
+    """刷新单个肥羊的最新市场数据（仅在交易时段）"""
     try:
         from etl.trade_date_adapter import TradeDateAdapter
         
@@ -176,25 +316,25 @@ async def refresh_stock_data(stock_code: str, current_user: dict = Depends(get_c
             raise HTTPException(status_code=400, detail="当前不是交易时段，无法刷新数据。交易时段：9:30-11:30, 13:00-15:00")
         
         service = DataCollectionService()
-        success = service.refresh_single_stock_data(stock_code)
+        success = service.refresh_single_sheep_data(sheep_code)
         
         if success:
-            return {"message": "股票数据刷新成功"}
+            return {"message": "肥羊数据刷新成功"}
         else:
             raise HTTPException(status_code=400, detail="数据刷新失败，可能不在交易时段或非交易日")
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"刷新股票数据失败: {e}")
+        logger.error(f"刷新肥羊数据失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # ========== 热度榜相关API ==========
-@app.get("/api/hot-stocks")
-async def get_hot_stocks(source: Optional[str] = None):
+@app.get("/api/hot-sheep")
+async def get_hot_sheep(source: Optional[str] = None):
     """获取热度榜"""
     try:
-        stocks = HotRankService.get_hot_stocks(source)
-        return {"stocks": stocks}
+        sheep = HotRankService.get_hot_sheep(source)
+        return {"sheep": sheep}
     except Exception as e:
         logger.error(f"获取热度榜异常: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
@@ -209,8 +349,8 @@ async def get_hot_sectors():
         logger.error(f"获取热门板块失败: {e}", exc_info=True)
         return {"sectors": []}
 
-@app.post("/api/refresh-hot-stocks")
-async def refresh_hot_stocks(current_user: dict = Depends(get_current_user)):
+@app.post("/api/refresh-hot-sheep")
+async def refresh_hot_sheep(current_user: dict = Depends(get_current_user)):
     """手动刷新热度榜数据"""
     try:
         service = DataCollectionService()
@@ -231,14 +371,51 @@ async def get_sector_daily(sector_name: str, current_user: dict = Depends(get_cu
         logger.error(f"获取板块K线数据失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/sectors/{sector_name}/stocks")
-async def get_sector_stocks(sector_name: str, current_user: dict = Depends(get_current_user)):
-    """获取板块股票"""
+@app.get("/api/sectors/{sector_name}/sheep")
+async def get_sector_sheep(sector_name: str, current_user: dict = Depends(get_current_user)):
+    """获取板块肥羊"""
     try:
-        stocks = ConceptService.get_sector_stocks(sector_name)
-        return {"stocks": stocks}
+        sheep = ConceptService.get_sector_sheep(sector_name)
+        return {"sheep": sheep}
     except Exception as e:
-        logger.error(f"获取板块股票失败: {e}")
+        logger.error(f"获取板块肥羊失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/capital-inflow/recommend")
+async def get_capital_inflow_recommend(days: int = 5, current_user: dict = Depends(get_current_user)):
+    """获取资金持续流入推荐（最近N天持续流入的标的）"""
+    try:
+        if days not in [5, 10, 20]:
+            raise HTTPException(status_code=400, detail="days参数必须是5、10或20")
+        stocks = SheepService.get_continuous_inflow_stocks(days=days)
+        return {"stocks": stocks, "days": days}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取资金持续流入推荐失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/sector-money-flow/recommend")
+async def get_sector_money_flow_recommend(days: int = 1, limit: int = 20, current_user: dict = Depends(get_current_user)):
+    """
+    获取板块资金净流入推荐
+    
+    Args:
+        days: 统计天数（1=当日，3=最近3天，5=最近5天）
+        limit: 返回数量，默认20
+    """
+    try:
+        if days not in [1, 3, 5]:
+            raise HTTPException(status_code=400, detail="days参数必须是1、3或5")
+        
+        from services.sector_money_flow_service import SectorMoneyFlowService
+        sectors = SectorMoneyFlowService.get_top_sectors_by_inflow(days=days, limit=limit)
+        
+        return {"sectors": sectors, "days": days}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取板块资金净流入推荐失败: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 # ========== 数据采集管理API ==========
@@ -256,12 +433,13 @@ async def trigger_missed_tasks(current_user: dict = Depends(is_admin_user)):
 @app.post("/api/admin/collect-all-data")
 async def collect_all_data(current_user: dict = Depends(get_current_user)):
     """
-    手动触发全量数据采集（临时接口，用于首次运行）
+    手动触发全量数据采集（管理接口）
     采集顺序：
     1. 概念板块数据
-    2. 股票日K数据
+    2. 肥羊日K数据
     3. 资金流向数据（仅在交易日）
     4. 热度榜数据
+    5. 大盘指数数据（用于RSRS计算）
     """
     try:
         logger.info("手动触发全量数据采集...")
@@ -269,9 +447,10 @@ async def collect_all_data(current_user: dict = Depends(get_current_user)):
         
         results = {
             "concept_data": False,
-            "stock_daily_data": False,
+            "sheep_daily_data": False,
             "money_flow_data": False,
             "hot_rank_data": False,
+            "index_data": False,
             "messages": []
         }
         
@@ -285,15 +464,15 @@ async def collect_all_data(current_user: dict = Depends(get_current_user)):
             logger.error(f"概念板块数据采集失败: {e}")
             results["messages"].append(f"概念板块数据采集失败: {str(e)}")
         
-        # 2. 采集股票日K数据
+        # 2. 采集肥羊日K数据
         try:
-            logger.info("开始采集股票日K数据...")
-            service.collect_stock_daily_data()
-            results["stock_daily_data"] = True
-            results["messages"].append("股票日K数据采集完成")
+            logger.info("开始采集肥羊日K数据...")
+            service.collect_sheep_daily_data()
+            results["sheep_daily_data"] = True
+            results["messages"].append("肥羊日K数据采集完成")
         except Exception as e:
-            logger.error(f"股票日K数据采集失败: {e}")
-            results["messages"].append(f"股票日K数据采集失败: {str(e)}")
+            logger.error(f"肥羊日K数据采集失败: {e}")
+            results["messages"].append(f"肥羊日K数据采集失败: {str(e)}")
         
         # 3. 采集资金流向数据（仅在交易日）
         try:
@@ -321,6 +500,16 @@ async def collect_all_data(current_user: dict = Depends(get_current_user)):
             logger.error(f"热度榜数据采集失败: {e}")
             results["messages"].append(f"热度榜数据采集失败: {str(e)}")
         
+        # 5. 采集大盘指数数据（用于RSRS计算）
+        try:
+            logger.info("开始采集大盘指数数据...")
+            service.collect_index_data(index_code='CSI1000')
+            results["index_data"] = True
+            results["messages"].append("大盘指数数据采集完成")
+        except Exception as e:
+            logger.error(f"大盘指数数据采集失败: {e}")
+            results["messages"].append(f"大盘指数数据采集失败: {str(e)}")
+        
         return {
             "message": "全量数据采集任务已启动",
             "results": results
@@ -328,6 +517,101 @@ async def collect_all_data(current_user: dict = Depends(get_current_user)):
         
     except Exception as e:
         logger.error(f"全量数据采集失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/admin/check-data-gaps")
+async def check_data_gaps(
+    days: int = 30,
+    data_type: str = 'all',
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    检查数据缺失（仅admin）
+    
+    Args:
+        days: 检查最近N天的数据
+        data_type: 数据类型 ('sheep_daily', 'money_flow', 'hot_rank', 'index', 'all')
+    """
+    try:
+        from scripts.check_data_gaps import DataGapChecker
+        
+        checker = DataGapChecker()
+        results = {}
+        
+        if data_type in ('sheep_daily', 'all'):
+            results['sheep_daily'] = checker.check_sheep_daily_gaps(days=days)
+        
+        if data_type in ('money_flow', 'all'):
+            results['money_flow'] = checker.check_money_flow_gaps(days=days)
+        
+        if data_type in ('hot_rank', 'all'):
+            results['hot_rank'] = checker.check_hot_rank_gaps(days=min(days, 7))
+        
+        if data_type in ('index', 'all'):
+            results['index'] = checker.check_index_data_gaps(days=days)
+        
+        return {
+            "message": "数据缺失检查完成",
+            "days": days,
+            "data_type": data_type,
+            "results": results
+        }
+    except Exception as e:
+        logger.error(f"检查数据缺失失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/admin/refresh-missing-data")
+async def refresh_missing_data(
+    data_type: str = 'all',
+    days: int = 30,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    刷新缺失的数据（仅admin）
+    
+    Args:
+        data_type: 数据类型 ('sheep_daily', 'money_flow', 'hot_rank', 'index', 'all')
+        days: 刷新最近N天的数据
+    """
+    try:
+        from scripts.check_data_gaps import DataGapChecker
+        
+        checker = DataGapChecker()
+        checker.refresh_missing_data(data_type=data_type, days=days)
+        
+        return {
+            "message": "数据刷新任务已启动",
+            "data_type": data_type,
+            "days": days
+        }
+    except Exception as e:
+        logger.error(f"刷新缺失数据失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/admin/data-report")
+async def get_data_report(
+    days: int = 30,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    生成数据完整性报告（仅admin）
+    
+    Args:
+        days: 检查最近N天的数据
+    """
+    try:
+        from scripts.check_data_gaps import DataGapChecker
+        
+        checker = DataGapChecker()
+        report = checker.generate_report(days=days)
+        
+        return {
+            "message": "数据完整性报告",
+            "days": days,
+            "report": report
+        }
+    except Exception as e:
+        logger.error(f"生成数据报告失败: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 # ========== 概念管理API ==========
@@ -650,6 +934,8 @@ class AIModelConfigUpdate(BaseModel):
     is_active: Optional[bool] = None
 
 class AIModelConfigCreate(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+    
     model_name: str
     model_display_name: str
     api_key: str
@@ -836,14 +1122,16 @@ async def clear_ai_cache(current_user: dict = Depends(is_admin_user)):
 
 # ========== AI推荐和分析API（仅admin）==========
 class AIRequest(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+    
     model_name: Optional[str] = None
 
-@app.post("/api/ai/recommend-stocks")
-async def ai_recommend_stocks(
+@app.post("/api/ai/recommend-sheep")
+async def ai_recommend_sheep(
     request: AIRequest = AIRequest(),
     current_user: dict = Depends(check_api_key_available)
 ):
-    """AI推荐股票（带3小时缓存，开放给所有用户）"""
+    """AI推荐肥羊（带3小时缓存，开放给所有用户）"""
     try:
         from db.ai_cache_repository import AICacheRepository
         
@@ -860,13 +1148,13 @@ async def ai_recommend_stocks(
             }
         
         # 缓存未命中，调用AI服务
-        # 获取热门股票和板块数据
-        hot_stocks = HotRankService.get_hot_stocks()
+        # 获取热门肥羊和板块数据
+        hot_sheep = HotRankService.get_hot_sheep()
         hot_sectors = HotRankService.get_hot_sectors()
         
         # 调用AI服务（传入user_id和model_name）
         model_name = request.model_name if request else None
-        recommendation = AIService.recommend_stocks(user_id, hot_stocks, hot_sectors, model_name)
+        recommendation = AIService.recommend_sheep(user_id, hot_sheep, hot_sectors, model_name)
         
         # 保存到缓存
         AICacheRepository.set_cache("recommend", "recommend", recommendation)
@@ -881,73 +1169,73 @@ async def ai_recommend_stocks(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"AI推荐股票失败: {e}")
+        logger.error(f"AI推荐肥羊失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/ai/analyze-stock/{stock_code}")
-async def ai_analyze_stock(
-    stock_code: str,
+@app.post("/api/ai/analyze-sheep/{sheep_code}")
+async def ai_analyze_sheep(
+    sheep_code: str,
     request: AIRequest = AIRequest(),
     current_user: dict = Depends(check_api_key_available)
 ):
-    """AI分析股票（带3小时缓存，开放给所有用户）"""
+    """AI分析肥羊（带3小时缓存，开放给所有用户）"""
     try:
         from db.ai_cache_repository import AICacheRepository
         
         user_id = current_user.get("id")
         
         # 先检查缓存
-        cached_result = AICacheRepository.get_cache(stock_code, "analyze")
+        cached_result = AICacheRepository.get_cache(sheep_code, "analyze")
         if cached_result:
-            logger.info(f"使用缓存的AI分析结果: {stock_code}")
-            # 获取股票名称
-            hot_stocks = HotRankService.get_hot_stocks()
-            stock_info = next((s for s in hot_stocks if s.get("stock_code") == stock_code), None)
-            stock_name = stock_info.get("stock_name") if stock_info else stock_code
+            logger.info(f"使用缓存的AI分析结果: {sheep_code}")
+            # 获取肥羊名称
+            hot_sheep = HotRankService.get_hot_sheep()
+            sheep_info = next((s for s in hot_sheep if s.get("sheep_code") == sheep_code), None)
+            sheep_name = sheep_info.get("sheep_name") if sheep_info else sheep_code
             
             return {
                 "analysis": cached_result,
-                "stock_code": stock_code,
-                "stock_name": stock_name,
+                "sheep_code": sheep_code,
+                "sheep_name": sheep_name,
                 "timestamp": datetime.now().isoformat(),
                 "cached": True
             }
         
         # 缓存未命中，调用AI服务
-        # 获取股票数据
-        stock_daily = StockService.get_stock_daily(stock_code)
-        capital_flow = StockService.get_stock_capital_flow(stock_code)
+        # 获取肥羊数据
+        sheep_daily = SheepService.get_sheep_daily(sheep_code)
+        capital_flow = SheepService.get_sheep_capital_flow(sheep_code)
         
-        # 获取股票基本信息
-        hot_stocks = HotRankService.get_hot_stocks()
-        stock_info = next((s for s in hot_stocks if s.get("stock_code") == stock_code), None)
+        # 获取肥羊基本信息
+        hot_sheep = HotRankService.get_hot_sheep()
+        sheep_info = next((s for s in hot_sheep if s.get("sheep_code") == sheep_code), None)
         
-        # stock_daily 和 capital_flow 返回的是 List[Dict]，不是 {"data": [...]}
-        kline_data = stock_daily[-30:] if stock_daily else []  # 最近30天
+        # sheep_daily 和 capital_flow 返回的是 List[Dict]，不是 {"data": [...]}
+        kline_data = sheep_daily[-30:] if sheep_daily else []  # 最近30天
         money_flow_data = capital_flow[-30:] if capital_flow else []  # 最近30天
         
-        stock_data = {
-            "current_price": stock_info.get("current_price") if stock_info else None,
-            "change_pct": stock_info.get("change_pct") if stock_info else None,
-            "volume": stock_info.get("volume") if stock_info else None,
-            "sectors": stock_info.get("sectors", []) if stock_info else [],
+        sheep_data = {
+            "current_price": sheep_info.get("current_price") if sheep_info else None,
+            "change_pct": sheep_info.get("change_pct") if sheep_info else None,
+            "volume": sheep_info.get("volume") if sheep_info else None,
+            "sectors": sheep_info.get("sectors", []) if sheep_info else [],
             "kline": kline_data,
             "money_flow": money_flow_data
         }
         
-        stock_name = stock_info.get("stock_name") if stock_info else stock_code
+        sheep_name = sheep_info.get("sheep_name") if sheep_info else sheep_code
         
         # 调用AI服务（传入user_id和model_name）
         model_name = request.model_name if request and request.model_name else None
-        analysis = AIService.analyze_stock(user_id, stock_code, stock_name, stock_data, model_name)
+        analysis = AIService.analyze_sheep(user_id, sheep_code, sheep_name, sheep_data, model_name)
         
         # 保存到缓存
-        AICacheRepository.set_cache(stock_code, "analyze", analysis)
+        AICacheRepository.set_cache(sheep_code, "analyze", analysis)
         
         return {
             "analysis": analysis,
-            "stock_code": stock_code,
-            "stock_name": stock_name,
+            "sheep_code": sheep_code,
+            "sheep_name": sheep_name,
             "timestamp": datetime.now().isoformat(),
             "cached": False
         }
@@ -956,7 +1244,454 @@ async def ai_analyze_stock(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"AI分析股票失败: {e}")
+        logger.error(f"AI分析肥羊失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ========== 模型老K API ==========
+from services.alpha_model_t4 import AlphaModelT4
+from services.alpha_model_t6_resonance import AlphaModelT6Resonance
+from services.alpha_model_t7_concept_flow import AlphaModelT7ConceptFlow
+from services.backtest_engine import BacktestEngine
+from db.strategy_recommendation_repository import StrategyRecommendationRepository
+
+class BacktestRequest(BaseModel):
+    start_date: str  # YYYY-MM-DD
+    end_date: str  # YYYY-MM-DD
+    params: Dict  # 策略参数
+
+class RecommendRequest(BaseModel):
+    params: Dict  # 策略参数
+    trade_date: Optional[str] = None  # YYYY-MM-DD，默认今天
+    top_n: Optional[int] = None  # 返回肥羊数量限制，None表示返回所有符合条件的肥羊（按分数排序）
+
+@app.post("/api/model-k/backtest")
+async def run_backtest(
+    request: BacktestRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """执行回测（时光机逻辑）"""
+    try:
+        start_date = datetime.strptime(request.start_date, "%Y-%m-%d").date()
+        end_date = datetime.strptime(request.end_date, "%Y-%m-%d").date()
+        
+        # 验证日期范围（最多6个月，避免超时）
+        if (end_date - start_date).days > 180:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"回测日期范围不能超过6个月（180天）。当前范围：{(end_date - start_date).days}天。建议缩短日期范围或使用采样模式。"
+            )
+        
+        # 计算预期的交易日数量（约）
+        days_diff = (end_date - start_date).days
+        estimated_trading_days = int(days_diff * 0.7)  # 约70%是交易日
+        
+        # 根据交易日数量动态设置超时时间
+        if estimated_trading_days > 80:
+            timeout_seconds = 600.0  # 10分钟（对于3个月以上的回测）
+        elif estimated_trading_days > 40:
+            timeout_seconds = 450.0  # 7.5分钟
+        else:
+            timeout_seconds = 300.0  # 5分钟
+        
+        logger.info(f"回测预计交易日数: {estimated_trading_days}天，超时时间: {timeout_seconds}秒")
+        
+        # 设置超时保护
+        async def run_backtest_async():
+            engine = BacktestEngine()
+            return await asyncio.to_thread(
+                engine.run_backtest, start_date, end_date, request.params
+            )
+        
+        try:
+            logger.info(f"开始回测: {start_date} 至 {end_date}")
+            result = await asyncio.wait_for(run_backtest_async(), timeout=timeout_seconds)
+            logger.info(f"回测完成: {result.get('success', False)}")
+            return result
+        except asyncio.TimeoutError:
+            logger.error(f"回测超时（{timeout_seconds}秒）: {start_date} 至 {end_date}")
+            raise HTTPException(
+                status_code=504, 
+                detail=f"回测超时（{int(timeout_seconds)}秒）。建议：1) 缩短日期范围（当前{days_diff}天，约{estimated_trading_days}个交易日） 2) 放宽筛选条件 3) 系统会自动启用采样模式加速回测"
+            )
+            
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"日期格式错误: {str(e)}")
+    except Exception as e:
+        logger.error(f"回测失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"回测失败: {str(e)}")
+
+@app.post("/api/model-k/recommend")
+async def get_recommendations(
+    request: RecommendRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """获取智能推荐（基于最新数据）"""
+    import asyncio
+    from datetime import date
+    
+    try:
+        # 确定交易日期
+        from etl.trade_date_adapter import TradeDateAdapter
+        
+        # 首先获取数据库中实际存在的最新交易日
+        def get_latest_trade_date_in_db() -> Optional[date]:
+            """获取数据库中实际存在的最新交易日"""
+            try:
+                with get_db() as db:
+                    result = db.execute(text("SELECT MAX(trade_date) AS max_date FROM sheep_daily"))
+                    row = result.fetchone()
+                    if row and row[0]:
+                        return row[0] if isinstance(row[0], date) else datetime.strptime(str(row[0]), "%Y-%m-%d").date()
+            except Exception as e:
+                logger.error(f"获取数据库最新交易日失败: {e}", exc_info=True)
+            return None
+        
+        def get_latest_trade_date_before(target_date: date) -> Optional[date]:
+            """获取数据库中不超过target_date的最新交易日"""
+            try:
+                with get_db() as db:
+                    result = db.execute(
+                        text("SELECT MAX(trade_date) AS max_date FROM sheep_daily WHERE trade_date <= :target_date"),
+                        {"target_date": target_date}
+                    )
+                    row = result.fetchone()
+                    if row and row[0]:
+                        return row[0] if isinstance(row[0], date) else datetime.strptime(str(row[0]), "%Y-%m-%d").date()
+            except Exception as e:
+                logger.error(f"获取数据库交易日失败: {e}", exc_info=True)
+            return None
+        
+        db_latest_date = get_latest_trade_date_in_db()
+        if not db_latest_date:
+            raise HTTPException(status_code=500, detail="无法获取数据库中的交易日期，请检查数据是否已导入")
+        
+        if request.trade_date:
+            # 用户指定了日期，解析日期
+            selected_date = datetime.strptime(request.trade_date, "%Y-%m-%d").date()
+            
+            # 验证日期不能是未来日期
+            today = date.today()
+            if selected_date > today:
+                raise HTTPException(status_code=400, detail=f"不能选择未来日期，当前日期为 {today.isoformat()}")
+            
+            # 验证日期不能晚于数据库中的最新日期
+            if selected_date > db_latest_date:
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"选择的日期 {selected_date.isoformat()} 晚于数据库最新日期 {db_latest_date.isoformat()}，请选择更早的日期"
+                )
+            
+            # 如果选择的日期是交易日，先检查数据库中是否有该日期的数据
+            if TradeDateAdapter.is_trading_day(selected_date):
+                # 检查数据库中是否有该日期的数据
+                db_date_for_selected = get_latest_trade_date_before(selected_date)
+                if db_date_for_selected and db_date_for_selected == selected_date:
+                    trade_date = selected_date
+                    logger.info(f"用户选择的日期 {selected_date} 是交易日且数据库中有数据，直接使用")
+                else:
+                    # 数据库中没有该日期的数据，使用数据库中不超过该日期的最新交易日
+                    if db_date_for_selected:
+                        trade_date = db_date_for_selected
+                        logger.warning(f"用户选择的日期 {selected_date} 是交易日但数据库中没有数据，使用数据库中该日期之前的最新交易日: {trade_date}")
+                    else:
+                        # 数据库中没有任何该日期之前的数据，说明选择的日期太早
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"选择的日期 {selected_date.isoformat()} 太早，数据库中最早有数据的日期是 {db_latest_date.isoformat()}，请选择更晚的日期"
+                        )
+            else:
+                # 不是交易日，获取该日期之前的最近交易日
+                trade_date = TradeDateAdapter.get_last_trading_day(selected_date)
+                logger.info(f"用户选择的日期 {selected_date} 不是交易日，自动调整为最近的交易日: {trade_date}")
+                
+                # 确保调整后的日期在数据库中存在
+                db_date_for_trade = get_latest_trade_date_before(trade_date)
+                if db_date_for_trade:
+                    if db_date_for_trade < trade_date:
+                        trade_date = db_date_for_trade
+                        logger.warning(f"调整后的交易日 {trade_date} 在数据库中没有数据，使用数据库中该日期之前的最新交易日: {db_date_for_trade}")
+                else:
+                    # 数据库中没有任何该日期之前的数据，说明选择的日期太早
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"选择的日期 {selected_date.isoformat()} 对应的交易日 {trade_date.isoformat()} 在数据库中没有数据，数据库中最早有数据的日期是 {db_latest_date.isoformat()}，请选择更晚的日期"
+                    )
+        else:
+            # 用户未指定日期，使用数据库中的最新交易日
+            trade_date = db_latest_date
+            logger.info(f"未指定日期，使用数据库最新交易日: {trade_date}")
+            
+            # 交易时段自动刷新当日板块资金流数据
+            today = date.today()
+            if TradeDateAdapter.is_trading_day(today) and TradeDateAdapter.is_trading_hours():
+                try:
+                    logger.info("检测到交易时段，自动刷新板块资金流数据...")
+                    from services.sector_money_flow_service import SectorMoneyFlowService
+                    SectorMoneyFlowService.collect_sector_money_flow_data(today)
+                    logger.info("板块资金流数据刷新完成")
+                except Exception as e:
+                    logger.warning(f"刷新板块资金流数据失败（不影响推荐）: {e}")
+        
+        # 最终验证：确保trade_date不超过数据库最新日期
+        if trade_date > db_latest_date:
+            trade_date = db_latest_date
+            logger.warning(f"最终交易日调整为数据库最新日期: {db_latest_date}")
+        
+        logger.info(f"T7概念资金双驱推荐最终使用交易日期: {trade_date} (数据库最新日期: {db_latest_date})")
+        
+        # 根据top_n参数动态调整超时时间
+        # 如果top_n较小（<=10），使用较短超时；如果top_n较大或未指定，使用较长超时
+        top_n_value = request.top_n if request.top_n else 100  # 默认假设返回100条
+        if top_n_value <= 10:
+            timeout_seconds = 300.0  # 5分钟（小批量）
+        elif top_n_value <= 50:
+            timeout_seconds = 450.0  # 7.5分钟（中批量）
+        else:
+            timeout_seconds = 600.0  # 10分钟（大批量或全部）
+        
+        logger.info(f"T7推荐超时设置: {timeout_seconds}秒 (top_n: {request.top_n})")
+        
+        # 设置超时保护（因为T7模型包含RSRS、概念竞速、资金流和筹码分析计算，可能需要更长时间）
+        async def run_model():
+            model = AlphaModelT7ConceptFlow()
+            return await asyncio.to_thread(
+                model.run_full_pipeline, trade_date, request.params, request.top_n
+            )
+        
+        # 使用asyncio.wait_for设置超时
+        try:
+            logger.info(f"开始执行T7概念资金双驱推荐，交易日期: {trade_date}, top_n: {request.top_n}, 超时: {timeout_seconds}秒")
+            start_time = datetime.now()
+            result = await asyncio.wait_for(run_model(), timeout=timeout_seconds)
+            elapsed_time = (datetime.now() - start_time).total_seconds()
+            recommendations, diagnostic_info = result if isinstance(result, tuple) else (result, None)
+            logger.info(f"T7概念资金双驱推荐完成，耗时: {elapsed_time:.2f}秒，返回 {len(recommendations) if recommendations else 0} 条结果")
+        except asyncio.TimeoutError:
+            elapsed_time = timeout_seconds
+            logger.error(f"T7概念资金双驱推荐超时（{timeout_seconds}秒），可能原因：肥羊数据量过大或筛选条件导致计算时间过长")
+            raise HTTPException(
+                status_code=504, 
+                detail=f"推荐计算超时（{int(timeout_seconds)}秒）。建议：1) 限制返回数量(top_n参数，建议<=50) 2) 放宽筛选条件 3) 检查数据库性能 4) 稍后重试"
+            )
+        except Exception as e:
+            logger.error(f"T-4推荐失败: {e}", exc_info=True)
+            import traceback
+            error_detail = traceback.format_exc()
+            logger.error(f"T-4推荐异常详情:\n{error_detail}")
+            raise HTTPException(status_code=500, detail=f"推荐计算失败: {str(e)}")
+        
+        if diagnostic_info:
+            logger.info(f"诊断信息: {diagnostic_info}")
+        
+        # 保存推荐记录（关联到当前用户）
+        user_id = current_user.get('id', 0)
+        if recommendations:
+            logger.info(f"开始保存 {len(recommendations)} 条推荐记录到数据库（用户ID: {user_id}）")
+            for rec in recommendations:
+                try:
+                    StrategyRecommendationRepository.create_recommendation(
+                        user_id=user_id,
+                        run_date=trade_date,
+                        sheep_code=rec['sheep_code'],
+                        sheep_name=rec['sheep_name'],
+                        params_snapshot=request.params,
+                        entry_price=rec['entry_price'],
+                        ai_score=rec['ai_score'],
+                        win_probability=rec['win_probability'],
+                        reason_tags=rec['reason_tags'],
+                        stop_loss_price=rec['stop_loss_price'],
+                        strategy_version="T7_Concept_Flow"
+                    )
+                except Exception as e:
+                    logger.error(f"保存推荐记录失败 (sheep_code={rec.get('sheep_code')}): {e}")
+            logger.info("推荐记录保存完成")
+        else:
+            logger.warning("推荐结果为空，不保存记录")
+        
+        response = {
+            "trade_date": trade_date.isoformat(),
+            "recommendations": recommendations or [],
+            "count": len(recommendations) if recommendations else 0,
+            "diagnostic_info": diagnostic_info if diagnostic_info else None
+        }
+        logger.info(f"API返回: trade_date={response['trade_date']}, count={response['count']}")
+        if diagnostic_info:
+            logger.info(f"诊断信息: {diagnostic_info}")
+        return response
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"日期格式错误: {str(e)}")
+    except Exception as e:
+        logger.error(f"获取推荐失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/model-k/history")
+async def get_recommendation_history(
+    run_date: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+    current_user: dict = Depends(get_current_user)
+):
+    """获取推荐历史记录（自动验证早期推荐）"""
+    try:
+        from etl.trade_date_adapter import TradeDateAdapter
+        from db.database import get_raw_connection
+        import pandas as pd
+        
+        trade_date = None
+        if run_date:
+            trade_date = datetime.strptime(run_date, "%Y-%m-%d").date()
+        
+        # 只获取当前用户的推荐记录
+        user_id = current_user.get('id', 0)
+        recommendations = StrategyRecommendationRepository.get_recommendations(
+            user_id=user_id,
+            run_date=trade_date,
+            limit=limit,
+            offset=offset
+        )
+        
+        # 自动验证早期推荐（推荐日期距离今天超过5个交易日且未验证的）
+        today = date.today()
+        unverified_recommendations = [r for r in recommendations if not r.get('is_verified', False)]
+        
+        if unverified_recommendations:
+            logger.info(f"发现 {len(unverified_recommendations)} 条未验证的推荐记录，开始自动验证...")
+            
+            for rec in unverified_recommendations:
+                try:
+                    rec_run_date = datetime.strptime(rec['run_date'], "%Y-%m-%d").date()
+                    trading_days_between = TradeDateAdapter.get_trading_days_in_range(rec_run_date, today)
+                    trading_days_count = len(trading_days_between)
+                    
+                    # 如果推荐日期距离今天已经超过5个交易日，可以验证
+                    if trading_days_count >= 5:
+                        sheep_code = rec['sheep_code']
+                        entry_price = rec.get('entry_price')
+                        
+                        if not entry_price:
+                            continue
+                        
+                        # 获取推荐日期后5个交易日的最高价和最终价格
+                        date_5d_after = trading_days_between[4] if trading_days_count > 4 else trading_days_between[-1] if trading_days_between else None
+                        
+                        if date_5d_after:
+                            with get_raw_connection() as conn:
+                                # 获取5个交易日内的最高价
+                                max_price_query = """
+                                    SELECT MAX(high_price) as max_price
+                                    FROM sheep_daily
+                                    WHERE sheep_code = %s
+                                      AND trade_date >= %s
+                                      AND trade_date <= %s
+                                """
+                                max_price_df = pd.read_sql(
+                                    max_price_query,
+                                    conn,
+                                    params=[sheep_code, rec_run_date, date_5d_after]
+                                )
+                                
+                                # 获取第5个交易日的收盘价
+                                final_price_query = """
+                                    SELECT close_price
+                                    FROM sheep_daily
+                                    WHERE sheep_code = %s
+                                      AND trade_date = %s
+                                """
+                                final_price_df = pd.read_sql(
+                                    final_price_query,
+                                    conn,
+                                    params=[sheep_code, date_5d_after]
+                                )
+                                
+                                if not max_price_df.empty and max_price_df.iloc[0]['max_price'] is not None:
+                                    max_price = float(max_price_df.iloc[0]['max_price'])
+                                    max_return_5d = ((max_price - entry_price) / entry_price) * 100
+                                    
+                                    if not final_price_df.empty and final_price_df.iloc[0]['close_price'] is not None:
+                                        final_price = float(final_price_df.iloc[0]['close_price'])
+                                        final_return_5d = ((final_price - entry_price) / entry_price) * 100
+                                        
+                                        # 判断结果：5日涨幅>5%为成功
+                                        final_result = 'SUCCESS' if final_return_5d > 5 else 'FAIL'
+                                        
+                                        # 更新验证结果（仅更新当前用户的记录）
+                                        StrategyRecommendationRepository.update_verification(
+                                            user_id=user_id,
+                                            run_date=rec_run_date,
+                                            sheep_code=sheep_code,
+                                            max_return_5d=max_return_5d,
+                                            final_return_5d=final_return_5d,
+                                            final_result=final_result
+                                        )
+                                        
+                                        # 更新内存中的记录
+                                        rec['is_verified'] = True
+                                        rec['max_return_5d'] = max_return_5d
+                                        rec['final_return_5d'] = final_return_5d
+                                        rec['final_result'] = final_result
+                                        
+                                        logger.info(f"自动验证成功: {sheep_code} ({rec_run_date}), 5日涨幅: {final_return_5d:.2f}%")
+                except Exception as e:
+                    logger.error(f"自动验证失败 (sheep_code={rec.get('sheep_code')}, run_date={rec.get('run_date')}): {e}", exc_info=True)
+                    continue
+        
+        return {
+            "recommendations": recommendations,
+            "count": len(recommendations)
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"日期格式错误: {str(e)}")
+    except Exception as e:
+        logger.error(f"获取历史记录失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/docs/{doc_name}")
+async def get_documentation(doc_name: str):
+    """获取文档内容"""
+    import os
+    from pathlib import Path
+    
+    try:
+        # 文档目录路径
+        docs_dir = Path(__file__).parent.parent.parent / "docs"
+        doc_path = docs_dir / f"{doc_name}.md"
+        
+        # 安全检查：确保文件在docs目录内
+        if not str(doc_path.resolve()).startswith(str(docs_dir.resolve())):
+            raise HTTPException(status_code=400, detail="无效的文档名称")
+        
+        if not doc_path.exists():
+            raise HTTPException(status_code=404, detail="文档不存在")
+        
+        # 读取文档内容
+        with open(doc_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        return {"content": content}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取文档失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="获取文档失败")
+
+@app.delete("/api/model-k/history")
+async def clear_recommendation_history(
+    failed_only: bool = False,
+    current_user: dict = Depends(get_current_user)
+):
+    """清空推荐历史记录（仅清空当前用户的记录）"""
+    try:
+        user_id = current_user.get('id', 0)
+        if failed_only:
+            count = StrategyRecommendationRepository.clear_failed_history(user_id)
+            return {"message": f"已清空 {count} 条失败记录"}
+        else:
+            count = StrategyRecommendationRepository.clear_all_history(user_id)
+            return {"message": f"已清空 {count} 条历史记录"}
+    except Exception as e:
+        logger.error(f"清空历史记录失败: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":

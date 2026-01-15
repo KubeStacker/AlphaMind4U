@@ -1,13 +1,17 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { Input, Card, Spin, message, AutoComplete, Tag, Button, Modal, Space, Select } from 'antd'
-import { SearchOutlined, BulbOutlined } from '@ant-design/icons'
+import { Input, Card, Spin, message, AutoComplete, Tag, Button, Modal, Space, Select, Radio } from 'antd'
+import { SearchOutlined, BulbOutlined, ReloadOutlined } from '@ant-design/icons'
 import ReactECharts from 'echarts-for-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { stockApi, StockDailyData, CapitalFlowData } from '../api/stock'
+import { sheepApi, SheepDailyData, CapitalFlowData } from '../api/sheep'
 import { aiApi } from '../api/ai'
+import { useAuth } from '../contexts/AuthContext'
 
 const Tab1: React.FC = () => {
+  const { user } = useAuth()
+  const isAdmin = user?.is_admin || user?.username === 'admin'
+  
   const [selectedModel, setSelectedModel] = useState<string>('')
   const [availableModels, setAvailableModels] = useState<Array<{ id: number; model_name: string; model_display_name: string }>>([])
   
@@ -29,10 +33,12 @@ const Tab1: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   
-  const [selectedStock, setSelectedStock] = useState<string>('')
-  const [selectedStockName, setSelectedStockName] = useState<string>('')
-  const [dailyData, setDailyData] = useState<StockDailyData[]>([])
+  const [selectedSheep, setSelectedSheep] = useState<string>('')
+  const [selectedSheepName, setSelectedSheepName] = useState<string>('')
+  const [dailyData, setDailyData] = useState<SheepDailyData[]>([])
   const [capitalFlowData, setCapitalFlowData] = useState<CapitalFlowData[]>([])
+  const [capitalFlowDays, setCapitalFlowDays] = useState<number>(60) // 默认显示60天
+  const [capitalFlowRefreshing, setCapitalFlowRefreshing] = useState(false)
   const [loading, setLoading] = useState(false)
   const [isMobile, setIsMobile] = useState(false)
   const [searchOptions, setSearchOptions] = useState<Array<{ value: string; label: React.ReactNode; code: string; name: string }>>([])
@@ -52,7 +58,7 @@ const Tab1: React.FC = () => {
     return () => window.removeEventListener('resize', checkMobile)
   }, [])
 
-  // 当selectedStock变化时加载数据（仅在selectedStock不为空时）
+  // 当selectedSheep变化时加载数据（仅在selectedSheep不为空时）
   // 使用useRef来跟踪是否是首次渲染，避免初始化时加载数据
   const isFirstRender = useRef(true)
   
@@ -62,23 +68,23 @@ const Tab1: React.FC = () => {
       isFirstRender.current = false
       setDailyData([])
       setCapitalFlowData([])
-      setSelectedStockName('')
+      setSelectedSheepName('')
       return
     }
     
     // 后续变化时才加载数据
-    if (selectedStock && selectedStock.trim() !== '') {
-      loadStockData(selectedStock, true) // 自动刷新最新数据
+    if (selectedSheep && selectedSheep.trim() !== '') {
+      loadSheepData(selectedSheep, true) // 自动刷新最新数据
     } else {
       // 清空数据
       setDailyData([])
       setCapitalFlowData([])
-      setSelectedStockName('')
+      setSelectedSheepName('')
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedStock])
+  }, [selectedSheep])
 
-  const normalizeStockCode = (code: string): string => {
+  const normalizeSheepCode = (code: string): string => {
     // 移除SZ/SH前缀，只保留数字部分
     code = code.trim().toUpperCase()
     if (code.startsWith('SZ') || code.startsWith('SH')) {
@@ -87,17 +93,17 @@ const Tab1: React.FC = () => {
     return code
   }
 
-  const loadStockName = async (stockCode: string) => {
+  const loadSheepName = async (stockCode: string) => {
     try {
-      const normalizedCode = normalizeStockCode(stockCode)
-      const stocks = await stockApi.searchStocks(normalizedCode)
-      // 确保stocks是数组
-      if (Array.isArray(stocks) && stocks.length > 0) {
-        const matchedStock = stocks.find(s => s.code === normalizedCode) || stocks[0]
-        setSelectedStockName(matchedStock?.name || '')
+      const normalizedCode = normalizeSheepCode(stockCode)
+      const sheep = await sheepApi.searchSheeps(normalizedCode)
+      // 确保sheep是数组
+      if (Array.isArray(sheep) && sheep.length > 0) {
+        const matchedSheep = sheep.find(s => s.code === normalizedCode) || sheep[0]
+        setSelectedSheepName(matchedSheep?.name || '')
       }
     } catch (error) {
-      console.error('获取股票名称失败:', error)
+      console.error('获取肥羊名称失败:', error)
     }
   }
 
@@ -127,16 +133,16 @@ const Tab1: React.FC = () => {
     return isWeekday && (isMorning || isAfternoon)
   }
 
-  const loadStockData = async (stockCode: string, autoRefresh: boolean = false) => {
+  const loadSheepData = async (stockCode: string, autoRefresh: boolean = false) => {
     setLoading(true)
     try {
-      // 标准化股票代码
-      const normalizedCode = normalizeStockCode(stockCode)
+      // 标准化肥羊代码
+      const normalizedCode = normalizeSheepCode(stockCode)
       
       // 如果是交易时段且需要自动刷新，先刷新数据
       if (autoRefresh && isTradingHours()) {
         try {
-          await stockApi.refreshStockData(normalizedCode)
+          await sheepApi.refreshSheepData(normalizedCode)
           message.success('已自动刷新最新市场数据', 2)
         } catch (error: any) {
           // 刷新失败不影响数据加载，只记录警告
@@ -148,15 +154,20 @@ const Tab1: React.FC = () => {
       }
       
       const [daily, capitalFlow] = await Promise.all([
-        stockApi.getStockDaily(normalizedCode),
-        stockApi.getCapitalFlow(normalizedCode),
+        sheepApi.getSheepDaily(normalizedCode),
+        sheepApi.getCapitalFlow(normalizedCode, capitalFlowDays).catch((error) => {
+          // 资金流数据获取失败时，记录但不影响主流程
+          console.warn('获取资金流数据失败:', error)
+          return []
+        }),
       ])
       // 确保返回的是数组，避免undefined错误
       setDailyData(Array.isArray(daily) ? daily : [])
       setCapitalFlowData(Array.isArray(capitalFlow) ? capitalFlow : [])
       
-      // 加载股票名称
-      await loadStockName(normalizedCode)
+      
+      // 加载肥羊名称
+      await loadSheepName(normalizedCode)
     } catch (error: any) {
       const errorMsg = error.response?.data?.detail || '加载标的数据失败'
       message.error(errorMsg)
@@ -168,60 +179,81 @@ const Tab1: React.FC = () => {
     }
   }
 
-  // 搜索股票（支持中文和首字母）
+  // 搜索肥羊（支持中文和首字母）
   const handleSearch = async (value: string) => {
-    if (!value || value.trim().length === 0) {
+    const trimmedValue = value?.trim() || ''
+    
+    // 如果输入为空，清空选项
+    if (trimmedValue.length === 0) {
       setSearchOptions([])
+      return
+    }
+
+    // 至少输入1个字符才搜索
+    if (trimmedValue.length < 1) {
       return
     }
 
     setSearchLoading(true)
     try {
-      const stocks = await stockApi.searchStocks(value.trim())
-      // 确保stocks是数组
-      if (Array.isArray(stocks) && stocks.length > 0) {
-        const options = stocks.map(stock => ({
-          value: `${stock.code} ${stock.name}`,
-          label: (
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span>
-                <Tag color="blue" style={{ marginRight: 8 }}>{stock.code}</Tag>
-                <span style={{ fontWeight: 500 }}>{stock.name}</span>
-              </span>
-              {stock.sector && <Tag color="cyan" style={{ fontSize: 11 }}>{stock.sector}</Tag>}
-            </div>
-          ),
-          code: stock.code,
-          name: stock.name
-        }))
+      const sheep = await sheepApi.searchSheeps(trimmedValue)
+      
+      // 确保sheep是数组
+      if (Array.isArray(sheep) && sheep.length > 0) {
+        const options = sheep.map((stock: any) => {
+          // 确保名称和代码存在
+          const code = stock.code || stock.sheep_code || ''
+          const name = stock.name || stock.sheep_name || code
+          
+          return {
+            value: `${code} ${name}`,
+            label: (
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span>
+                  <Tag color="blue" style={{ marginRight: 8 }}>{code}</Tag>
+                  <span style={{ fontWeight: 500 }}>{name}</span>
+                </span>
+                {(stock.sector || stock.industry) && (
+                  <Tag color="cyan" style={{ fontSize: 11 }}>{stock.sector || stock.industry}</Tag>
+                )}
+              </div>
+            ),
+            code: code,
+            name: name
+          }
+        })
         setSearchOptions(options)
       } else {
         setSearchOptions([])
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('搜索失败:', error)
       setSearchOptions([])
+      // 只在非取消请求的情况下显示错误
+      if (error?.name !== 'CanceledError') {
+        message.error('搜索失败，请稍后重试')
+      }
     } finally {
       setSearchLoading(false)
     }
   }
 
-  // 选择股票
-  const handleStockSelect = async (value: string, option: any) => {
+  // 选择肥羊
+  const handleSheepSelect = async (value: string, option: any) => {
     const stockCode = option.code || value.split(' ')[0]
     const stockName = option.name || value.split(' ')[1] || stockCode
     setSearchValue('')
     setSearchOptions([])
-    setSelectedStock(stockCode)
-    setSelectedStockName(stockName)
-    // loadStockData会在useEffect中自动调用，这里不需要手动调用
+    setSelectedSheep(stockCode)
+    setSelectedSheepName(stockName)
+    // loadSheepData会在useEffect中自动调用，这里不需要手动调用
     // 但如果是交易时段，会自动刷新最新数据
   }
 
-  // AI分析股票
+  // AI分析肥羊
   const handleAIAnalyze = async () => {
-    if (!selectedStock) {
-      message.warning('请先选择一只股票')
+    if (!selectedSheep) {
+      message.warning('请先选择一只肥羊')
       return
     }
     
@@ -229,7 +261,7 @@ const Tab1: React.FC = () => {
     setAiAnalyzeLoading(true)
     setAiAnalyzeResult('')
     try {
-      const result = await aiApi.analyzeStock(selectedStock, selectedModel || undefined)
+      const result = await aiApi.analyzeSheep(selectedSheep, selectedModel || undefined)
       setAiAnalyzeResult(result.analysis)
     } catch (error: any) {
       const errorMsg = error?.response?.data?.detail || error?.message || '未知错误'
@@ -457,6 +489,34 @@ const Tab1: React.FC = () => {
     }
   }
 
+  // 刷新资金流数据（仅admin）
+  const handleRefreshCapitalFlow = async () => {
+    if (!selectedSheep) {
+      message.warning('请先选择一只股票')
+      return
+    }
+    
+    setCapitalFlowRefreshing(true)
+    try {
+      const normalizedCode = normalizeSheepCode(selectedSheep)
+      const result = await sheepApi.refreshCapitalFlow(normalizedCode)
+      
+      if (result.refreshed) {
+        message.success(result.message)
+        // 重新加载数据
+        const capitalFlow = await sheepApi.getCapitalFlow(normalizedCode, capitalFlowDays)
+        setCapitalFlowData(Array.isArray(capitalFlow) ? capitalFlow : [])
+      } else {
+        message.info(result.message)
+      }
+    } catch (error: any) {
+      const errorMsg = error?.response?.data?.detail || error?.message || '刷新失败'
+      message.error(`刷新资金流数据失败: ${errorMsg}`)
+    } finally {
+      setCapitalFlowRefreshing(false)
+    }
+  }
+
   const getCapitalFlowOption = () => {
     // 确保capitalFlowData是数组且不为空
     if (!capitalFlowData || !Array.isArray(capitalFlowData) || capitalFlowData.length === 0) {
@@ -464,25 +524,57 @@ const Tab1: React.FC = () => {
     }
     
     const dates = capitalFlowData.map(d => d.trade_date)
-    const mainInflow = capitalFlowData.map(d => d.main_net_inflow)
+    // 将万元转换为亿元（除以10000）
+    const mainInflow = capitalFlowData.map(d => (d.main_net_inflow || 0) / 10000)
 
     return {
       title: {
         text: '主力资金流入情况',
         left: 'center',
         textStyle: { fontSize: 16, fontWeight: 'bold' },
+        subtext: '单位：亿元',
+        subtextStyle: { fontSize: 12, color: '#666' }
       },
       tooltip: {
         trigger: 'axis',
         axisPointer: { type: 'shadow' },
+        formatter: (params: any) => {
+          if (!params || params.length === 0) return ''
+          const date = params[0].axisValue
+          let result = `<div style="margin-bottom: 4px;"><strong>${date}</strong></div>`
+          params.forEach((param: any) => {
+            const value = param.value
+            const valueText = value >= 0 
+              ? `<span style="color: #ef5350; font-weight: bold;">+${value.toFixed(2)}</span>`
+              : `<span style="color: #26a69a; font-weight: bold;">${value.toFixed(2)}</span>`
+            result += `<div style="margin: 4px 0;">
+              <span style="color: #666;">${param.seriesName}：</span>
+              ${valueText} 亿元
+            </div>`
+          })
+          return result
+        }
       },
       xAxis: {
         type: 'category',
         data: dates,
+        axisLabel: {
+          rotate: 45,
+          fontSize: 11
+        }
       },
       yAxis: {
         type: 'value',
-        name: '净流入（万元）',
+        name: '净流入（亿元）',
+        nameTextStyle: {
+          fontSize: 12,
+          fontWeight: 'bold'
+        },
+        axisLabel: {
+          formatter: (value: number) => {
+            return value.toFixed(2)
+          }
+        }
       },
       series: [
         {
@@ -494,8 +586,25 @@ const Tab1: React.FC = () => {
               return params.value >= 0 ? '#ef5350' : '#26a69a'
             },
           },
+          label: {
+            show: false
+          },
+          emphasis: {
+            itemStyle: {
+              shadowBlur: 10,
+              shadowOffsetX: 0,
+              shadowColor: 'rgba(0, 0, 0, 0.5)'
+            }
+          }
         },
       ],
+      grid: {
+        left: '10%',
+        right: '8%',
+        top: '20%',
+        bottom: '15%',
+        containLabel: true
+      }
     }
   }
 
@@ -511,12 +620,14 @@ const Tab1: React.FC = () => {
             style={{ flex: 1, minWidth: 300, maxWidth: 500 }}
             options={searchOptions}
             onSearch={handleSearch}
-            onSelect={handleStockSelect}
+            onSelect={handleSheepSelect}
             value={searchValue}
             onChange={setSearchValue}
-            placeholder="输入股票代码、中文名称或首字母拼音（如：688072、平安、PA）"
+            placeholder="输入肥羊代码、中文名称或首字母拼音（如：688072、平安、PA）"
             allowClear
-            notFoundContent={searchLoading ? <Spin size="small" /> : '未找到匹配的股票'}
+            notFoundContent={searchLoading ? <Spin size="small" /> : (searchValue ? '未找到匹配的肥羊' : null)}
+            filterOption={false}
+            defaultActiveFirstOption={false}
           >
             <Input
               prefix={searchLoading ? <Spin size="small" /> : <SearchOutlined />}
@@ -525,10 +636,10 @@ const Tab1: React.FC = () => {
               onPressEnter={async (e) => {
                 const value = (e.target as HTMLInputElement).value.trim()
                 if (value) {
-                  // 如果是纯数字代码，直接设置selectedStock，useEffect会自动加载
-                  const normalized = normalizeStockCode(value)
+                  // 如果是纯数字代码，直接设置selectedSheep，useEffect会自动加载
+                  const normalized = normalizeSheepCode(value)
                   if (normalized.match(/^\d{6}$/)) {
-                    setSelectedStock(normalized)
+                    setSelectedSheep(normalized)
                   } else {
                     // 否则触发搜索
                     await handleSearch(value)
@@ -537,9 +648,9 @@ const Tab1: React.FC = () => {
               }}
             />
           </AutoComplete>
-          {selectedStockName && (
+          {selectedSheepName && (
             <div style={{ fontSize: 14, color: '#666' }}>
-              当前标的：<span style={{ fontWeight: 'bold', color: '#1890ff' }}>{selectedStockName} ({selectedStock})</span>
+              当前标的：<span style={{ fontWeight: 'bold', color: '#1890ff' }}>{selectedSheepName} ({selectedSheep})</span>
             </div>
           )}
         </div>
@@ -549,14 +660,14 @@ const Tab1: React.FC = () => {
         <div style={{ textAlign: 'center', padding: 50 }}>
           <Spin size="large" />
         </div>
-      ) : selectedStock && dailyData.length > 0 ? (
+      ) : selectedSheep && dailyData.length > 0 ? (
         <>
           <Card 
             style={{ marginBottom: 24 }}
             title={
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
                 <span>
-                  {selectedStockName ? `${selectedStockName} (${selectedStock})` : selectedStock} - K线图
+                  {selectedSheepName ? `${selectedSheepName} (${selectedSheep})` : selectedSheep} - K线图
                 </span>
                 <Space>
                   {availableModels.length > 0 && (
@@ -593,8 +704,57 @@ const Tab1: React.FC = () => {
               }}
             />
           </Card>
-          {capitalFlowOption && (
-            <Card>
+          <Card 
+            title={
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span>主力资金流入</span>
+                  <span style={{ fontSize: '12px', color: '#999', fontWeight: 'normal' }}>
+                    （单位：亿元，红色=流入，绿色=流出）
+                  </span>
+                </div>
+                <Space>
+                  <Radio.Group 
+                    value={capitalFlowDays} 
+                    onChange={async (e) => {
+                      const newDays = e.target.value
+                      setCapitalFlowDays(newDays)
+                      // 重新加载资金流数据
+                      if (selectedSheep) {
+                        try {
+                          const normalizedCode = normalizeSheepCode(selectedSheep)
+                          const capitalFlow = await sheepApi.getCapitalFlow(normalizedCode, newDays)
+                          setCapitalFlowData(Array.isArray(capitalFlow) ? capitalFlow : [])
+                        } catch (error: any) {
+                          console.warn('获取资金流数据失败:', error)
+                          setCapitalFlowData([])
+                        }
+                      }
+                    }}
+                    size="small"
+                    buttonStyle="solid"
+                  >
+                    <Radio.Button value={30}>30天</Radio.Button>
+                    <Radio.Button value={60}>60天</Radio.Button>
+                  </Radio.Group>
+                  {isAdmin && (
+                    <Button
+                      type="default"
+                      icon={<ReloadOutlined />}
+                      size="small"
+                      loading={capitalFlowRefreshing}
+                      onClick={handleRefreshCapitalFlow}
+                      title="刷新资金流数据（如果数据不足会自动获取历史数据）"
+                    >
+                      刷新
+                    </Button>
+                  )}
+                </Space>
+              </div>
+            }
+            style={{ marginBottom: 24 }}
+          >
+            {capitalFlowOption ? (
               <ReactECharts
                 option={capitalFlowOption}
                 style={{ 
@@ -602,8 +762,20 @@ const Tab1: React.FC = () => {
                   width: '100%' 
                 }}
               />
-            </Card>
-          )}
+            ) : (
+              <div style={{ textAlign: 'center', padding: 40, color: '#999' }}>
+                <div style={{ fontSize: 16, marginBottom: 8 }}>暂无资金流数据</div>
+                <div style={{ fontSize: 14 }}>
+                  该标的可能没有资金流向数据，或数据尚未采集。
+                  {selectedSheep && (
+                    <div style={{ marginTop: 8 }}>
+                      标的代码：{selectedSheep}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </Card>
         </>
       ) : (
         <Card
@@ -630,8 +802,8 @@ const Tab1: React.FC = () => {
                   type="primary"
                   icon={<BulbOutlined />}
                   onClick={handleAIAnalyze}
-                  disabled={!selectedStock}
-                  title={!selectedStock ? '请先选择一只股票' : ''}
+                  disabled={!selectedSheep}
+                  title={!selectedSheep ? '请先选择一只肥羊' : ''}
                 >
                   AI分析
                 </Button>
@@ -650,7 +822,7 @@ const Tab1: React.FC = () => {
         title={
           <Space>
             <BulbOutlined />
-            <span>AI股票分析 - {selectedStockName || selectedStock}</span>
+            <span>AI肥羊分析 - {selectedSheepName || selectedSheep}</span>
           </Space>
         }
         open={aiAnalyzeModalVisible}

@@ -24,8 +24,8 @@ export interface AIRecommendResponse {
 
 export interface AIAnalyzeResponse {
   analysis: string
-  stock_code: string
-  stock_name: string
+  sheep_code: string
+  sheep_name: string
   timestamp: string
 }
 
@@ -57,17 +57,17 @@ export const aiApi = {
     })
   },
 
-  // AI推荐股票
-  recommendStocks: async (modelName?: string): Promise<AIRecommendResponse> => {
-    const response = await apiClient.post('/ai/recommend-stocks', { model_name: modelName }, {
+  // AI推荐肥羊
+  recommendSheeps: async (modelName?: string): Promise<AIRecommendResponse> => {
+    const response = await apiClient.post('/ai/recommend-sheep', { model_name: modelName }, {
       timeout: 180000 // 180秒，AI推荐可能需要更长时间
     })
     return response.data
   },
 
-  // AI分析股票
-  analyzeStock: async (stockCode: string, modelName?: string): Promise<AIAnalyzeResponse> => {
-    const response = await apiClient.post(`/ai/analyze-stock/${stockCode}`, { model_name: modelName }, {
+  // AI分析肥羊
+  analyzeSheep: async (stockCode: string, modelName?: string): Promise<AIAnalyzeResponse> => {
+    const response = await apiClient.post(`/ai/analyze-sheep/${stockCode}`, { model_name: modelName }, {
       timeout: 180000 // 180秒，AI分析可能需要更长时间
     })
     return response.data

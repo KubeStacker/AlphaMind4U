@@ -24,6 +24,10 @@
 - **热门板块**：基于虚拟板块聚合算法，智能匹配热门股到主板块
 - **板块分析**：查看板块K线和板块内股票
 - **概念管理**：管理股票概念和虚拟板块映射
+- **模型老K**：T-4级联火箭模型，智能选股推荐系统
+  - 支持选择历史日期进行推荐
+  - 自动处理非交易日，转换为最近交易日
+- **回测功能**：时光机逻辑，验证策略历史表现
 - **用户认证**：JWT认证，支持登录日志和安全锁定
 
 ## 🛠 技术栈
@@ -97,6 +101,8 @@
 │   └── Dockerfile
 ├── database/
 │   └── init.sql               # 数据库初始化脚本
+├── docs/                      # 文档目录
+│   └── model-k-algorithm.md  # 模型老K算法文档
 ├── docker-compose.yml         # Docker Compose配置
 ├── deploy.sh                  # 一键部署脚本
 └── README.md                  # 本文档
@@ -582,6 +588,122 @@ VITE_API_BASE_URL=http://localhost:8000
 - 用户名：`admin`
 - 密码：`admin123`（首次登录后请修改）
 
+## 🚀 模型老K（T-4级联火箭模型）
+
+### 功能概述
+
+模型老K是一个基于T-4级联火箭模型的量化选股系统，通过四级过滤机制，从全市场股票中筛选出最具潜力的投资标的。
+
+### 核心特性
+
+- **四级过滤**：特征提取 → 硬约束 → 打分排序 → AI修正
+- **动态参数**：支持实时调整策略参数
+- **智能推荐**：基于技术面、趋势面、热度面综合打分
+- **回测验证**：时光机逻辑，验证策略历史表现
+- **风险控制**：自动计算止损价，控制回撤
+
+### 快速开始
+
+1. 进入"模型老K"页面
+2. 调整策略参数（可选）
+3. **选择推荐日期**（可选，留空使用最近交易日）
+   - 支持选择任意历史日期
+   - 如果选择的日期不是交易日，系统会自动转换为最近的交易日
+   - 不能选择未来日期
+4. 点击"智能推荐 (Get Alpha)"按钮
+5. 查看推荐结果和回测数据
+
+### 核心功能
+
+#### 智能推荐
+- **实时推荐**：基于最新市场数据，动态生成推荐
+- **历史日期推荐**：支持选择任意历史日期，查看该日期的推荐结果
+- **自动日期处理**：自动处理非交易日，转换为最近的交易日
+- **参数可调**：支持实时调整策略参数，立即生效
+
+#### 回测验证
+- **时光机逻辑**：使用历史数据模拟交易
+- **多维度指标**：胜率、Alpha收益率、总收益率、最大回撤
+- **收益曲线**：可视化展示策略历史表现
+
+### API接口
+
+#### 获取智能推荐
+```http
+POST /api/model-k/recommend
+Authorization: Bearer {token}
+Content-Type: application/json
+
+{
+  "params": {
+    "ma_support": "MA60",
+    "vol_threshold": 2.0,
+    "rps_threshold": 90,
+    "ai_filter": true,
+    "w_tech": 0.4,
+    "w_trend": 0.4,
+    "w_hot": 0.2
+  },
+  "trade_date": "2026-01-15"  // 可选，YYYY-MM-DD格式，留空使用最近交易日
+}
+```
+
+响应：
+```json
+{
+  "trade_date": "2026-01-15",
+  "recommendations": [
+    {
+      "stock_code": "000001",
+      "stock_name": "平安银行",
+      "entry_price": 12.50,
+      "ai_score": 85.5,
+      "win_probability": 70,
+      "reason_tags": "倍量2.5倍 + RPS强势 + VCP收敛",
+      "stop_loss_price": 11.63,
+      "vol_ratio": 2.5,
+      "rps_250": 95.2,
+      "vcp_factor": 0.25
+    }
+  ],
+  "count": 1
+}
+```
+
+**参数说明**：
+- `trade_date`：可选，推荐使用的交易日期（YYYY-MM-DD格式）
+  - 留空：使用最近的交易日
+  - 指定日期：使用该日期（如果不是交易日，自动转换为最近的交易日）
+  - 不能选择未来日期
+
+#### 执行回测
+```http
+POST /api/model-k/backtest
+Authorization: Bearer {token}
+Content-Type: application/json
+
+{
+  "start_date": "2025-01-01",
+  "end_date": "2025-12-31",
+  "params": {
+    "ma_support": "MA60",
+    "vol_threshold": 2.0,
+    "rps_threshold": 90,
+    "ai_filter": true
+  }
+}
+```
+
+#### 获取推荐历史
+```http
+GET /api/model-k/history?run_date=2026-01-15&limit=100&offset=0
+Authorization: Bearer {token}
+```
+
+### 详细文档
+
+完整的算法说明、参数配置和使用方法，请查看：[模型老K算法文档](./docs/model-k-algorithm.md)
+
 ## 📝 代码分层说明
 
 ### ETL层（数据采集适配器）
@@ -640,4 +762,29 @@ npm run dev
 
 ---
 
-**最后更新**：2024年
+## 📚 文档
+
+- [模型老K算法文档](./docs/model-k-algorithm.md) - T-4级联火箭模型详细说明
+- [性能优化文档](./backend/PERFORMANCE_OPTIMIZATION.md) - 后端性能优化说明
+
+## 📄 许可证
+
+本项目仅供学习和研究使用。
+
+## 🤝 贡献
+
+欢迎提交 Issue 和 Pull Request！
+
+## 📞 联系方式
+
+如有问题，请提交 Issue 或联系项目维护者。
+
+---
+
+**最后更新**：2026-01-15
+
+### 更新内容
+
+- ✅ 支持选择历史日期进行推荐
+- ✅ 自动处理非交易日，转换为最近交易日
+- ✅ 优化推荐结果展示和错误处理

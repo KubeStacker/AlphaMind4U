@@ -53,7 +53,7 @@ class AIService:
 ## 【输出格式】
 请严格按以下结构输出 3只 标的分析报告：
 
-### [股票名称 & 代码]
+### [肥羊名称 & 代码]
 
 1. 基本面逻辑（机构安全垫）：
 用简练语言概括其核心业绩增长点或行业地位（为什么跌下来机构敢接？）。
@@ -70,7 +70,7 @@ class AIService:
             "analyze": """你是一位拥有20年实战经验的A股"机构派游资"。你既看重公募基金的安全垫（业绩、壁垒、无雷），又擅长捕捉顶级游资的技术买点（洗盘结束、强力反转）。
 
 分析日期：{date}
-标的名称：{stock_name}
+标的名称：{sheep_name}
 所属板块：{sectors}
 
 请你分析以下数据，按照以下框架输出分析报告：
@@ -193,19 +193,19 @@ class AIService:
             raise
     
     @classmethod
-    def recommend_stocks(cls, user_id: int, hot_stocks: List[Dict], sectors: List[Dict], model_name: Optional[str] = None) -> str:
-        """AI推荐股票"""
+    def recommend_sheep(cls, user_id: int, hot_sheep: List[Dict], sectors: List[Dict], model_name: Optional[str] = None) -> str:
+        """AI推荐肥羊"""
         try:
             # 准备数据
-            stocks_data = []
-            for stock in hot_stocks[:20]:  # 取前20只
-                stocks_data.append({
-                    "代码": stock.get("stock_code"),
-                    "名称": stock.get("stock_name"),
-                    "排名": stock.get("rank"),
-                    "涨幅": stock.get("change_pct"),
-                    "成交量": stock.get("volume"),
-                    "来源": stock.get("source")
+            sheep_data = []
+            for sheep in hot_sheep[:20]:  # 取前20只
+                sheep_data.append({
+                    "代码": sheep.get("sheep_code"),
+                    "名称": sheep.get("sheep_name"),
+                    "排名": sheep.get("rank"),
+                    "涨幅": sheep.get("change_pct"),
+                    "成交量": sheep.get("volume"),
+                    "来源": sheep.get("source")
                 })
             
             sectors_data = []
@@ -217,8 +217,8 @@ class AIService:
                 })
             
             data_str = f"""
-热门股票列表：
-{json.dumps(stocks_data, ensure_ascii=False, indent=2)}
+热门肥羊列表：
+{json.dumps(sheep_data, ensure_ascii=False, indent=2)}
 
 热门板块列表：
 {json.dumps(sectors_data, ensure_ascii=False, indent=2)}
@@ -250,16 +250,16 @@ class AIService:
             return result
             
         except Exception as e:
-            logger.error(f"AI推荐股票失败: {e}")
+            logger.error(f"AI推荐肥羊失败: {e}")
             raise
     
     @classmethod
-    def analyze_stock(cls, user_id: int, stock_code: str, stock_name: str, stock_data: Dict, model_name: Optional[str] = None) -> str:
-        """AI分析股票"""
+    def analyze_sheep(cls, user_id: int, sheep_code: str, sheep_name: str, sheep_data: Dict, model_name: Optional[str] = None) -> str:
+        """AI分析肥羊"""
         try:
             # 准备数据
-            kline = stock_data.get('kline', [])
-            money_flow = stock_data.get('money_flow', [])
+            kline = sheep_data.get('kline', [])
+            money_flow = sheep_data.get('money_flow', [])
             
             # 格式化K线数据（只显示最近10天的关键信息）
             kline_summary = []
@@ -286,9 +286,9 @@ class AIService:
                     }
             
             data_str = f"""
-当前价格：{stock_data.get('current_price', 'N/A')}
-涨跌幅：{stock_data.get('change_pct', 'N/A')}%
-成交量：{stock_data.get('volume', 'N/A')}
+当前价格：{sheep_data.get('current_price', 'N/A')}
+涨跌幅：{sheep_data.get('change_pct', 'N/A')}%
+成交量：{sheep_data.get('volume', 'N/A')}
 K线数据（最近10天）：{json.dumps(kline_summary, ensure_ascii=False) if kline_summary else 'N/A'}
 资金流向（最近10天汇总）：{json.dumps(money_flow_summary, ensure_ascii=False) if money_flow_summary else 'N/A'}
 """
@@ -298,18 +298,18 @@ K线数据（最近10天）：{json.dumps(kline_summary, ensure_ascii=False) if 
             prompt_template = cls.get_prompt("analyze")
             
             # 获取板块信息
-            sectors_str = ', '.join(stock_data.get('sectors', [])) if stock_data.get('sectors') else 'N/A'
+            sectors_str = ', '.join(sheep_data.get('sectors', [])) if sheep_data.get('sectors') else 'N/A'
             
             # 填充变量
             prompt = prompt_template.format(
                 date=datetime.now().strftime('%Y-%m-%d'),
-                stock_name=stock_name,
+                sheep_name=sheep_name,
                 sectors=sectors_str,
                 data=data_str
             )
             
             messages = [
-                {"role": "system", "content": "你是一位资深的股票投资分析师，擅长技术分析和基本面分析。"},
+                {"role": "system", "content": "你是一位资深的肥羊投资分析师，擅长技术分析和基本面分析。"},
                 {"role": "user", "content": prompt}
             ]
             
@@ -317,5 +317,5 @@ K线数据（最近10天）：{json.dumps(kline_summary, ensure_ascii=False) if 
             return result
             
         except Exception as e:
-            logger.error(f"AI分析股票失败: {e}")
+            logger.error(f"AI分析肥羊失败: {e}")
             raise

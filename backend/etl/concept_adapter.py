@@ -58,7 +58,7 @@ class ConceptAdapter:
     @staticmethod
     def get_concept_stocks(concept_name: str, concept_code: Optional[str] = None, source: str = 'ths') -> Optional[List[str]]:
         """
-        获取概念板块下的股票列表
+        获取概念板块下的肥羊列表
         
         Args:
             concept_name: 概念名称
@@ -66,7 +66,7 @@ class ConceptAdapter:
             source: 数据源
             
         Returns:
-            股票代码列表
+            肥羊代码列表
         """
         try:
             stocks_df = None
@@ -92,21 +92,21 @@ class ConceptAdapter:
             if stocks_df is None or stocks_df.empty:
                 return None
             
-            # 提取股票代码
-            stock_codes = []
-            possible_code_columns = ['代码', '股票代码', 'code', '证券代码', 'symbol']
+            # 提取肥羊代码
+            sheep_codes = []
+            possible_code_columns = ['代码', '肥羊代码', 'code', '证券代码', 'symbol']
             
             for col_name in possible_code_columns:
                 if col_name in stocks_df.columns:
-                    stock_codes = stocks_df[col_name].astype(str).tolist()
+                    sheep_codes = stocks_df[col_name].astype(str).tolist()
                     break
             
-            if not stock_codes and len(stocks_df.columns) > 0:
-                stock_codes = stocks_df.iloc[:, 0].astype(str).tolist()
+            if not sheep_codes and len(stocks_df.columns) > 0:
+                sheep_codes = stocks_df.iloc[:, 0].astype(str).tolist()
             
-            # 标准化股票代码（只保留6位数字）
+            # 标准化肥羊代码（只保留6位数字）
             clean_codes = []
-            for code in stock_codes:
+            for code in sheep_codes:
                 clean_code = ''.join(filter(str.isdigit, str(code)))
                 if len(clean_code) >= 6:
                     clean_codes.append(clean_code[:6].zfill(6))
@@ -114,5 +114,5 @@ class ConceptAdapter:
             return clean_codes if clean_codes else None
             
         except Exception as e:
-            logger.debug(f"获取概念 {concept_name} 的股票列表失败: {e}")
+            logger.debug(f"获取概念 {concept_name} 的肥羊列表失败: {e}")
             return None

@@ -24,9 +24,9 @@ class HotRankService:
         return cls._sector_matcher
     
     @staticmethod
-    def get_hot_stocks(source: Optional[str] = None) -> List[Dict]:
+    def get_hot_sheep(source: Optional[str] = None) -> List[Dict]:
         """获取热度榜数据"""
-        return HotRankRepository.get_hot_stocks(source)
+        return HotRankRepository.get_hot_sheep(source)
     
     @classmethod
     def get_hot_sectors(cls) -> List[Dict]:
@@ -47,16 +47,16 @@ class HotRankService:
                 
                 max_date = max_date_result[0]
             
-            # 2. 获取热门股票（取前100只，用于板块匹配）
-            hot_stocks = HotRankRepository.get_hot_stocks(source=None, limit=100)
+            # 2. 获取热门肥羊（取前100只，用于板块匹配）
+            hot_sheep = HotRankRepository.get_hot_sheep(source=None, limit=100)
             
-            if not hot_stocks:
+            if not hot_sheep:
                 return []
             
             # 3. 使用集聚效应算法匹配板块
             sector_matcher = cls._get_sector_matcher()
-            sectors = sector_matcher.match_hot_stocks_to_sectors(
-                hot_stocks, 
+            sectors = sector_matcher.match_hot_sheep_to_sectors(
+                hot_sheep, 
                 max_sectors=12
             )
             

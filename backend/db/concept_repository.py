@@ -38,19 +38,19 @@ class ConceptRepository:
             return row[0] if row else 0
     
     @staticmethod
-    def batch_upsert_stock_concept_mapping(concept_id: int, stock_codes: List[str], 
+    def batch_upsert_sheep_concept_mapping(concept_id: int, sheep_codes: List[str], 
                                            weights: Optional[List[float]] = None):
-        """批量插入或更新股票-概念关联"""
-        if not stock_codes:
+        """批量插入或更新肥羊-概念关联"""
+        if not sheep_codes:
             return
         
         if weights is None:
-            weights = [1.0] * len(stock_codes)
+            weights = [1.0] * len(sheep_codes)
         
         with get_db() as db:
             # 使用ON DUPLICATE KEY UPDATE，避免重复插入
             query = text("""
-                INSERT INTO stock_concept_mapping (stock_code, concept_id, weight)
+                INSERT INTO sheep_concept_mapping (sheep_code, concept_id, weight)
                 VALUES (:code, :concept_id, :weight)
                 ON DUPLICATE KEY UPDATE
                     weight = VALUES(weight),
@@ -59,10 +59,12 @@ class ConceptRepository:
             
             data_list = [
                 {'code': code, 'concept_id': concept_id, 'weight': w}
-                for code, w in zip(stock_codes, weights)
+                for code, w in zip(sheep_codes, weights)
             ]
             
-            batch_size = 100
+            # 优化批量插入性能
+            batch_size = 500  # 增大批次大小
             for i in range(0, len(data_list), batch_size):
                 batch = data_list[i:i+batch_size]
                 db.execute(query, batch)
+                db.commit()  # 每批次提交

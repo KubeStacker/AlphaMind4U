@@ -41,3 +41,7 @@ def get_raw_connection():
         database=Config.DB_NAME,
         charset='utf8mb4'
     )
+
+def get_sqlalchemy_engine():
+    """获取SQLAlchemy引擎（用于pandas read_sql，避免警告）"""
+    return engine

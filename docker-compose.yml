@@ -47,6 +47,7 @@ services:
       - "8000:8000"
     volumes:
       - ./backend:/app
+      - ./docs:/app/../docs:ro
     depends_on:
       mysql:
         condition: service_healthy
@@ -62,6 +63,8 @@ services:
     restart: always
     ports:
       - "80:80"
+    volumes:
+      - ./docs:/usr/share/nginx/html/docs:ro
     depends_on:
       - backend
     networks:

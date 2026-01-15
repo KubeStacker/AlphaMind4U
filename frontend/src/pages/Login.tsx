@@ -26,7 +26,7 @@ const Login: React.FC = () => {
     try {
       await login(values.username, values.password)
       message.success('登录成功')
-      navigate('/stock-analysis')
+      navigate('/sheep-analysis')
     } catch (error: any) {
       console.error('登录失败:', error)
       // 处理不同格式的错误信息

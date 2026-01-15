@@ -74,50 +74,50 @@ class HotRankAdapter:
             
             # 遍历每一行数据
             for idx, row in df.iterrows():
-                stock_code = None
-                stock_name = None
+                sheep_code = None
+                sheep_name = None
                 
-                # 尝试多种方式提取股票代码
-                code_candidates = ['代码', '股票代码', 'code', '证券代码', 'symbol', '股票代码']
+                # 尝试多种方式提取肥羊代码
+                code_candidates = ['代码', '肥羊代码', 'code', '证券代码', 'symbol', '肥羊代码']
                 for col in code_candidates:
                     if col in df.columns:
                         code_val = str(row[col]).strip()
-                        # 只保留6位数字的股票代码
+                        # 只保留6位数字的肥羊代码
                         code_clean = ''.join(filter(str.isdigit, code_val))
                         if len(code_clean) == 6:
-                            stock_code = code_clean
+                            sheep_code = code_clean
                             break
                 
                 # 如果没找到，尝试从第一列提取
-                if not stock_code:
+                if not sheep_code:
                     first_col_val = str(row.iloc[0]).strip()
                     code_clean = ''.join(filter(str.isdigit, first_col_val))
                     if len(code_clean) == 6:
-                        stock_code = code_clean
+                        sheep_code = code_clean
                 
-                # 如果还是没找到有效的股票代码，跳过这一行
-                if not stock_code or len(stock_code) != 6:
+                # 如果还是没找到有效的肥羊代码，跳过这一行
+                if not sheep_code or len(sheep_code) != 6:
                     continue
                 
-                # 提取股票名称
-                name_candidates = ['股票名称', '名称', 'name', '证券名称']
+                # 提取肥羊名称
+                name_candidates = ['肥羊名称', '名称', 'name', '证券名称']
                 for col in name_candidates:
                     if col in df.columns:
                         name_val = str(row[col]).strip()
-                        # 过滤掉纯数字或明显不是股票名称的值
+                        # 过滤掉纯数字或明显不是肥羊名称的值
                         if name_val and not name_val.isdigit() and len(name_val) > 0:
-                            stock_name = name_val
+                            sheep_name = name_val
                             break
                 
                 # 如果没找到，尝试从第二列提取
-                if not stock_name and len(df.columns) > 1:
+                if not sheep_name and len(df.columns) > 1:
                     second_col_val = str(row.iloc[1]).strip()
                     if second_col_val and not second_col_val.isdigit() and len(second_col_val) > 0:
-                        stock_name = second_col_val
+                        sheep_name = second_col_val
                 
                 # 如果还是没找到，使用默认值
-                if not stock_name:
-                    stock_name = ''
+                if not sheep_name:
+                    sheep_name = ''
                 
                 # 提取排名（优先从数据中获取，否则使用索引+1）
                 rank = idx + 1
@@ -146,15 +146,15 @@ class HotRankAdapter:
                             pass
                 
                 result_rows.append({
-                    'stock_code': stock_code,
-                    'stock_name': stock_name,
+                    'sheep_code': sheep_code,
+                    'sheep_name': sheep_name,
                     'rank': rank,
                     'source': source,
                     'volume': volume
                 })
             
             if not result_rows:
-                logger.warning(f"未能从数据中提取到有效的股票信息")
+                logger.warning(f"未能从数据中提取到有效的肥羊信息")
                 return None
             
             result = pd.DataFrame(result_rows)

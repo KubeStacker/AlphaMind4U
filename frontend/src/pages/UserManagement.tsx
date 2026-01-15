@@ -38,6 +38,7 @@ const UserManagement: React.FC = () => {
     setEditingUser(record)
     form.setFieldsValue({
       is_active: record.is_active,
+      password: '', // 清空密码字段，避免显示之前的值
     })
     setModalVisible(true)
   }
@@ -204,7 +205,13 @@ const UserManagement: React.FC = () => {
         title={editingUser ? '编辑用户' : '添加用户'}
         open={modalVisible}
         onOk={handleSubmit}
-        onCancel={() => setModalVisible(false)}
+        onCancel={() => {
+          setModalVisible(false)
+          form.resetFields() // 关闭时重置表单，避免字段值残留
+        }}
+        afterClose={() => {
+          form.resetFields() // 模态框完全关闭后再次重置，确保下次打开时干净
+        }}
         width={600}
       >
         <Form form={form} layout="vertical">

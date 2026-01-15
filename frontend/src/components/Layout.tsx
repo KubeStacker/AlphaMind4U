@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { Layout as AntLayout, Menu, theme, Button, Dropdown, message } from 'antd'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { BarChartOutlined, FireOutlined, LogoutOutlined, UserOutlined, SettingOutlined } from '@ant-design/icons'
+import { BarChartOutlined, FireOutlined, LogoutOutlined, UserOutlined, SettingOutlined, RocketOutlined, FileTextOutlined } from '@ant-design/icons'
 import { useAuth } from '../contexts/AuthContext'
 
 const { Header, Content } = AntLayout
@@ -40,6 +40,12 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
 
   const userMenuItems = [
     {
+      key: 'docs',
+      icon: <FileTextOutlined />,
+      label: '文档',
+      onClick: () => navigate('/docs'),
+    },
+    {
       key: 'settings',
       icon: <SettingOutlined />,
       label: '设置',
@@ -58,14 +64,19 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
 
   const menuItems = [
     {
-      key: '/stock-analysis',
+      key: '/sheep-analysis',
       icon: <BarChartOutlined />,
       label: '标的分析',
     },
     {
-      key: '/hot-stocks',
+      key: '/hot-sheep',
       icon: <FireOutlined />,
       label: '热度榜单',
+    },
+    {
+      key: '/model-k',
+      icon: <RocketOutlined />,
+      label: '模型老K',
     },
   ]
 

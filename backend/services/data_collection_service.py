@@ -5,16 +5,19 @@ from datetime import date, datetime, timedelta
 from typing import Optional
 import logging
 from etl.trade_date_adapter import TradeDateAdapter
-from etl.stock_adapter import StockAdapter
+from etl.sheep_adapter import SheepAdapter
 from etl.concept_adapter import ConceptAdapter
 from etl.hot_rank_adapter import HotRankAdapter
+from etl.index_adapter import IndexAdapter
 from etl.concept_filter import should_filter_concept
-from db.stock_repository import StockRepository
+from db.sheep_repository import SheepRepository
 from db.money_flow_repository import MoneyFlowRepository
 from db.concept_repository import ConceptRepository
 from db.hot_rank_repository import HotRankRepository
+from db.index_repository import IndexRepository
 from config import Config
 import pandas as pd
+from datetime import timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -23,19 +26,84 @@ class DataCollectionService:
     
     def __init__(self):
         self.trade_date_adapter = TradeDateAdapter
-        self.stock_adapter = StockAdapter
+        self.sheep_adapter = SheepAdapter
         self.concept_adapter = ConceptAdapter
         self.hot_rank_adapter = HotRankAdapter
+        self.index_adapter = IndexAdapter
     
-    def collect_stock_daily_data(self, days: int = None):
+    @staticmethod
+    def _validate_change_pct(value) -> Optional[float]:
         """
-        采集股票日K数据（仅在交易日执行）
+        验证并限制涨跌幅值在合理范围内
+        
+        Args:
+            value: 涨跌幅值（可能是NaN、None或数值）
+            
+        Returns:
+            验证后的涨跌幅值（1位小数精度），如果无效则返回None
+        """
+        if pd.isna(value) or value is None:
+            return None
+        
+        try:
+            change_pct = float(value)
+            # 限制在合理范围内：-1000% 到 1000%（覆盖所有极端情况）
+            # 如果超出范围，记录警告并限制值
+            if change_pct < -1000:
+                logger.warning(f"涨跌幅值 {change_pct}% 超出下限，限制为 -1000%")
+                return -1000.0
+            elif change_pct > 1000:
+                logger.warning(f"涨跌幅值 {change_pct}% 超出上限，限制为 1000%")
+                return 1000.0
+            return round(change_pct, 1)  # 1位小数精度
+        except (ValueError, TypeError):
+            return None
+    
+    @staticmethod
+    def _format_price(value) -> Optional[float]:
+        """
+        格式化价格为1位小数精度
+        
+        Args:
+            value: 价格值（可能是NaN、None或数值）
+            
+        Returns:
+            格式化后的价格值（1位小数精度），如果无效则返回None
+        """
+        if pd.isna(value) or value is None:
+            return None
+        try:
+            return round(float(value), 1)
+        except (ValueError, TypeError):
+            return None
+    
+    @staticmethod
+    def _format_percentage(value) -> Optional[float]:
+        """
+        格式化百分比为1位小数精度
+        
+        Args:
+            value: 百分比值（可能是NaN、None或数值）
+            
+        Returns:
+            格式化后的百分比值（1位小数精度），如果无效则返回None
+        """
+        if pd.isna(value) or value is None:
+            return None
+        try:
+            return round(float(value), 1)
+        except (ValueError, TypeError):
+            return None
+    
+    def collect_sheep_daily_data(self, days: int = None):
+        """
+        采集肥羊日K数据（仅在交易日执行）
         
         Args:
             days: 采集最近N天的数据，默认使用配置的保留天数
         """
         if days is None:
-            days = Config.STOCK_DATA_RETENTION_DAYS
+            days = Config.SHEEP_DATA_RETENTION_DAYS
         
         today = date.today()
         
@@ -49,78 +117,108 @@ class DataCollectionService:
         
         # 计算日期范围
         end_date = target_date.strftime('%Y%m%d')
+        # 计算开始日期：从目标日期往前推N天，但至少保留3年数据
         start_date = (target_date - timedelta(days=days)).strftime('%Y%m%d')
         
-        logger.info(f"开始采集股票日K数据，日期范围: {start_date} 至 {end_date}")
+        logger.info(f"开始采集肥羊日K数据，日期范围: {start_date} 至 {end_date}")
         
-        # 获取所有股票代码
-        stock_list = self.stock_adapter.get_all_stock_codes()
-        if not stock_list:
-            logger.error("未能获取到股票列表")
+        # 获取所有肥羊代码
+        sheep_list = self.sheep_adapter.get_all_sheep_codes()
+        if not sheep_list:
+            logger.error("未能获取到肥羊列表")
             return
         
-        logger.info(f"共需处理 {len(stock_list)} 只股票")
+        logger.info(f"共需处理 {len(sheep_list)} 只肥羊")
         
         success_count = 0
         error_count = 0
         
-        for idx, stock_item in enumerate(stock_list):
+        for idx, sheep_item in enumerate(sheep_list):
             try:
-                stock_code = stock_item['code']
-                stock_name = stock_item['name']
+                sheep_code = sheep_item['code']
+                sheep_name = sheep_item['name']
+                
+                # 检查数据库中已有的最新日期
+                latest_date = SheepRepository.get_latest_trade_date(sheep_code)
+                
+                # 确定实际需要采集的日期范围
+                if latest_date:
+                    # 如果已有数据，从最新日期+1天开始采集到目标日期
+                    # 但也要确保至少采集最近N天的数据（用于补全可能缺失的数据）
+                    actual_start_date = latest_date + timedelta(days=1)
+                    # 如果最新日期已经很接近目标日期，说明数据较新，只需补全最近的数据
+                    days_since_latest = (target_date - latest_date).days
+                    if days_since_latest < 30:
+                        # 数据较新，只补全最近30天
+                        actual_start_date = max(actual_start_date, target_date - timedelta(days=30))
+                    else:
+                        # 数据较旧，从最新日期开始补全到目标日期
+                        actual_start_date = latest_date + timedelta(days=1)
+                    
+                    # 如果实际开始日期已经超过目标日期，说明数据已是最新，跳过
+                    if actual_start_date > target_date:
+                        continue
+                    
+                    actual_start_str = actual_start_date.strftime('%Y%m%d')
+                    logger.debug(f"股票 {sheep_code} 已有数据至 {latest_date}，将从 {actual_start_date} 开始补全")
+                else:
+                    # 如果没有历史数据，从配置的起始日期开始采集
+                    actual_start_str = start_date
+                    logger.debug(f"股票 {sheep_code} 无历史数据，将从 {actual_start_str} 开始采集")
                 
                 # 获取日K数据
-                df = self.stock_adapter.get_stock_daily_data(stock_code, start_date, end_date)
+                df = self.sheep_adapter.get_sheep_daily_data(sheep_code, actual_start_str, end_date)
                 
                 if df is None or df.empty:
                     continue
                 
-                # 转换为数据库格式
-                data_list = []
-                for _, row in df.iterrows():
-                    data_list.append({
-                        'code': stock_code,
+                # 转换为数据库格式（向量化操作，避免iterrows）
+                def format_row(row):
+                    return {
+                        'code': sheep_code,
                         'date': row['date'],
-                        'open': float(row.get('open', 0)) if pd.notna(row.get('open')) else None,
-                        'close': float(row.get('close', 0)) if pd.notna(row.get('close')) else None,
-                        'high': float(row.get('high', 0)) if pd.notna(row.get('high')) else None,
-                        'low': float(row.get('low', 0)) if pd.notna(row.get('low')) else None,
+                        'open': DataCollectionService._format_price(row.get('open')),
+                        'close': DataCollectionService._format_price(row.get('close')),
+                        'high': DataCollectionService._format_price(row.get('high')),
+                        'low': DataCollectionService._format_price(row.get('low')),
                         'volume': int(row.get('volume', 0)) if pd.notna(row.get('volume')) else 0,
                         'amount': float(row.get('amount', 0)) if pd.notna(row.get('amount')) else 0,
-                        'turnover_rate': float(row.get('turnover_rate', 0)) if pd.notna(row.get('turnover_rate')) else None,
-                        'change_pct': float(row.get('change_pct', 0)) if pd.notna(row.get('change_pct')) else None,
-                        'ma5': float(row.get('ma5', 0)) if pd.notna(row.get('ma5')) else None,
-                        'ma10': float(row.get('ma10', 0)) if pd.notna(row.get('ma10')) else None,
-                        'ma20': float(row.get('ma20', 0)) if pd.notna(row.get('ma20')) else None,
-                        'ma30': float(row.get('ma30', 0)) if pd.notna(row.get('ma30')) else None,
-                        'ma60': float(row.get('ma60', 0)) if pd.notna(row.get('ma60')) else None,
-                    })
+                        'turnover_rate': DataCollectionService._format_percentage(row.get('turnover_rate')),
+                        'change_pct': DataCollectionService._validate_change_pct(row.get('change_pct')),
+                        'ma5': DataCollectionService._format_price(row.get('ma5')),
+                        'ma10': DataCollectionService._format_price(row.get('ma10')),
+                        'ma20': DataCollectionService._format_price(row.get('ma20')),
+                        'ma30': DataCollectionService._format_price(row.get('ma30')),
+                        'ma60': DataCollectionService._format_price(row.get('ma60')),
+                    }
+                
+                data_list = df.apply(format_row, axis=1).tolist()
                 
                 # 批量保存
-                StockRepository.batch_upsert_stock_daily(data_list)
+                SheepRepository.batch_upsert_sheep_daily(data_list)
                 
-                # 更新股票基本信息
-                market = 'SH' if stock_code.startswith('6') else 'SZ'
-                StockRepository.upsert_stock_basic(stock_code, stock_name, market=market)
+                # 更新肥羊基本信息
+                market = 'SH' if sheep_code.startswith('6') else 'SZ'
+                SheepRepository.upsert_sheep_basic(sheep_code, sheep_name, market=market)
                 
                 success_count += 1
                 
                 if (idx + 1) % 100 == 0:
-                    logger.info(f"进度: {idx + 1}/{len(stock_list)}, 成功: {success_count}, 失败: {error_count}")
+                    logger.info(f"进度: {idx + 1}/{len(sheep_list)}, 成功: {success_count}, 失败: {error_count}")
                 
             except Exception as e:
-                logger.warning(f"处理股票 {stock_item.get('code', 'unknown')} 失败: {e}")
+                logger.warning(f"处理肥羊 {sheep_item.get('code', 'unknown')} 失败: {e}")
                 error_count += 1
                 continue
         
-        logger.info(f"股票日K数据采集完成！成功: {success_count}, 失败: {error_count}")
+        logger.info(f"肥羊日K数据采集完成！成功: {success_count}, 失败: {error_count}")
     
-    def refresh_single_stock_data(self, stock_code: str) -> bool:
+    def refresh_single_sheep_data(self, sheep_code: str) -> bool:
         """
-        刷新单个股票的最新数据（仅在交易时段执行）
+        刷新单个肥羊的最新数据（仅在交易时段执行）
         
         Args:
-            stock_code: 股票代码
+            sheep_code: 肥羊代码
             
         Returns:
             True表示刷新成功，False表示失败或非交易时段
@@ -129,57 +227,58 @@ class DataCollectionService:
         
         # 判断是否为交易时段
         if not self.trade_date_adapter.is_trading_hours():
-            logger.info(f"当前不是交易时段，跳过刷新股票 {stock_code} 的数据")
+            logger.info(f"当前不是交易时段，跳过刷新肥羊 {sheep_code} 的数据")
             return False
         
         today = date.today()
         
         # 判断是否为交易日
         if not self.trade_date_adapter.is_trading_day(today):
-            logger.info(f"{today} 不是交易日，跳过刷新股票 {stock_code} 的数据")
+            logger.info(f"{today} 不是交易日，跳过刷新肥羊 {sheep_code} 的数据")
             return False
         
         try:
-            logger.info(f"开始刷新股票 {stock_code} 的最新数据...")
+            logger.info(f"开始刷新肥羊 {sheep_code} 的最新数据...")
             
             # 获取今日数据
             today_str = today.strftime('%Y%m%d')
             
             # 获取日K数据
-            df = self.stock_adapter.get_stock_daily_data(stock_code, today_str, today_str)
+            df = self.sheep_adapter.get_sheep_daily_data(sheep_code, today_str, today_str)
             
             if df is not None and not df.empty:
-                # 转换为数据库格式
-                data_list = []
-                for _, row in df.iterrows():
-                    data_list.append({
-                        'code': stock_code,
+                # 转换为数据库格式（向量化操作）
+                def format_row(row):
+                    return {
+                        'code': sheep_code,
                         'date': row['date'],
-                        'open': float(row.get('open', 0)) if pd.notna(row.get('open')) else None,
-                        'close': float(row.get('close', 0)) if pd.notna(row.get('close')) else None,
-                        'high': float(row.get('high', 0)) if pd.notna(row.get('high')) else None,
-                        'low': float(row.get('low', 0)) if pd.notna(row.get('low')) else None,
+                        'open': DataCollectionService._format_price(row.get('open')),
+                        'close': DataCollectionService._format_price(row.get('close')),
+                        'high': DataCollectionService._format_price(row.get('high')),
+                        'low': DataCollectionService._format_price(row.get('low')),
                         'volume': int(row.get('volume', 0)) if pd.notna(row.get('volume')) else 0,
                         'amount': float(row.get('amount', 0)) if pd.notna(row.get('amount')) else 0,
-                        'turnover_rate': float(row.get('turnover_rate', 0)) if pd.notna(row.get('turnover_rate')) else None,
-                        'change_pct': float(row.get('change_pct', 0)) if pd.notna(row.get('change_pct')) else None,
-                        'ma5': float(row.get('ma5', 0)) if pd.notna(row.get('ma5')) else None,
-                        'ma10': float(row.get('ma10', 0)) if pd.notna(row.get('ma10')) else None,
-                        'ma20': float(row.get('ma20', 0)) if pd.notna(row.get('ma20')) else None,
-                        'ma30': float(row.get('ma30', 0)) if pd.notna(row.get('ma30')) else None,
-                        'ma60': float(row.get('ma60', 0)) if pd.notna(row.get('ma60')) else None,
-                    })
+                        'turnover_rate': DataCollectionService._format_percentage(row.get('turnover_rate')),
+                        'change_pct': DataCollectionService._validate_change_pct(row.get('change_pct')),
+                        'ma5': DataCollectionService._format_price(row.get('ma5')),
+                        'ma10': DataCollectionService._format_price(row.get('ma10')),
+                        'ma20': DataCollectionService._format_price(row.get('ma20')),
+                        'ma30': DataCollectionService._format_price(row.get('ma30')),
+                        'ma60': DataCollectionService._format_price(row.get('ma60')),
+                    }
+                
+                data_list = df.apply(format_row, axis=1).tolist()
                 
                 # 保存数据
-                StockRepository.batch_upsert_stock_daily(data_list)
-                logger.info(f"股票 {stock_code} 日K数据刷新成功")
+                SheepRepository.batch_upsert_sheep_daily(data_list)
+                logger.info(f"肥羊 {sheep_code} 日K数据刷新成功")
             
             # 获取资金流向数据
             try:
-                flow_data_dict = self.stock_adapter.get_stock_money_flow(stock_code)
+                flow_data_dict = self.sheep_adapter.get_sheep_money_flow(sheep_code)
                 if flow_data_dict:
                     flow_data = [{
-                        'code': stock_code,
+                        'code': sheep_code,
                         'date': today,
                         'main': float(flow_data_dict.get('main_net_inflow', 0)),
                         'super_large': float(flow_data_dict.get('super_large_inflow', 0)),
@@ -189,19 +288,20 @@ class DataCollectionService:
                     }]
                     
                     MoneyFlowRepository.batch_upsert_money_flow(flow_data)
-                    logger.info(f"股票 {stock_code} 资金流向数据刷新成功")
+                    logger.info(f"肥羊 {sheep_code} 资金流向数据刷新成功")
             except Exception as e:
-                logger.warning(f"刷新股票 {stock_code} 资金流向数据失败: {e}")
+                logger.warning(f"刷新肥羊 {sheep_code} 资金流向数据失败: {e}")
             
             return True
             
         except Exception as e:
-            logger.error(f"刷新股票 {stock_code} 数据失败: {e}", exc_info=True)
+            logger.error(f"刷新肥羊 {sheep_code} 数据失败: {e}", exc_info=True)
             return False
     
     def collect_money_flow_data(self):
         """
         采集资金流向数据（仅在交易日执行）
+        优先使用批量接口，如果失败则使用逐个获取的方式
         """
         today = date.today()
         
@@ -211,30 +311,113 @@ class DataCollectionService:
         
         logger.info("开始采集资金流向数据...")
         
-        # 批量获取所有股票的资金流
-        flow_df = self.stock_adapter.get_all_stocks_money_flow()
+        # 方法1：尝试批量获取所有肥羊的资金流（更高效）
+        flow_df = self.sheep_adapter.get_all_sheep_money_flow()
         
-        if flow_df is None or flow_df.empty:
-            logger.warning("未获取到资金流数据")
+        if flow_df is not None and not flow_df.empty:
+            # 转换为数据库格式（向量化操作）
+            def format_flow_row(row):
+                return {
+                    'code': row['sheep_code'],
+                    'date': today,
+                    'main': float(row.get('main_net_inflow', 0)),
+                    'super_large': float(row.get('super_large_inflow', 0)),
+                    'large': float(row.get('large_inflow', 0)),
+                    'medium': float(row.get('medium_inflow', 0)),
+                    'small': float(row.get('small_inflow', 0)),
+                }
+            
+            data_list = flow_df.apply(format_flow_row, axis=1).tolist()
+            
+            # 批量保存
+            MoneyFlowRepository.batch_upsert_money_flow(data_list)
+            
+            logger.info(f"资金流向数据采集完成（批量方式）！共 {len(data_list)} 条")
             return
         
-        # 转换为数据库格式
-        data_list = []
-        for _, row in flow_df.iterrows():
-            data_list.append({
-                'code': row['stock_code'],
-                'date': today,
-                'main': float(row.get('main_net_inflow', 0)),
-                'super_large': float(row.get('super_large_inflow', 0)),
-                'large': float(row.get('large_inflow', 0)),
-                'medium': float(row.get('medium_inflow', 0)),
-                'small': float(row.get('small_inflow', 0)),
-            })
+        # 方法2：批量接口失败，使用逐个获取的方式（更可靠）
+        logger.warning("批量获取资金流数据失败，改用逐个获取方式...")
+        self._collect_money_flow_data_individual(today)
+    
+    def _collect_money_flow_data_individual(self, target_date: date):
+        """
+        逐个获取每只股票的资金流数据（备用方法）
         
-        # 批量保存
-        MoneyFlowRepository.batch_upsert_money_flow(data_list)
+        Args:
+            target_date: 目标日期
+        """
+        # 获取所有股票代码（使用适配器的方法）
+        sheep_list = self.sheep_adapter.get_all_sheep_codes()
+        if not sheep_list:
+            logger.error("未能获取到股票列表")
+            return
         
-        logger.info(f"资金流向数据采集完成！共 {len(data_list)} 条")
+        # 提取股票代码列表
+        sheep_codes = [item['code'] for item in sheep_list]
+        
+        logger.info(f"开始逐个获取 {len(sheep_codes)} 只股票的资金流数据...")
+        
+        success_count = 0
+        error_count = 0
+        total_records = 0
+        
+        for idx, sheep_code in enumerate(sheep_codes):
+            try:
+                # 获取单只股票的资金流数据（近100个交易日，包含今日）
+                flow_df = self.sheep_adapter.get_sheep_money_flow_history(sheep_code)
+                
+                if flow_df is None or flow_df.empty:
+                    continue
+                
+                # 筛选出今日的数据
+                today_data = flow_df[flow_df['trade_date'] == target_date]
+                
+                if today_data.empty:
+                    # 如果没有今日数据，跳过
+                    continue
+                
+                # 格式化数据
+                row = today_data.iloc[0]
+                data_list = [{
+                    'code': sheep_code,
+                    'date': target_date,
+                    'main': float(row.get('main_net_inflow', 0)),
+                    'super_large': float(row.get('super_large_inflow', 0)),
+                    'large': float(row.get('large_inflow', 0)),
+                    'medium': float(row.get('medium_inflow', 0)),
+                    'small': float(row.get('small_inflow', 0)),
+                }]
+                
+                # 保存数据
+                MoneyFlowRepository.batch_upsert_money_flow(data_list)
+                
+                success_count += 1
+                total_records += 1
+                
+                if (idx + 1) % 100 == 0:
+                    logger.info(f"进度: {idx + 1}/{len(sheep_codes)}, 成功: {success_count}, 失败: {error_count}, 记录: {total_records}")
+                
+                # 延迟，避免请求过快
+                import time
+                time.sleep(0.1)  # 100ms延迟
+                
+            except Exception as e:
+                logger.debug(f"处理股票 {sheep_code} 失败: {e}")
+                error_count += 1
+                continue
+        
+        logger.info(f"资金流向数据采集完成（逐个方式）！成功: {success_count}, 失败: {error_count}, 总记录: {total_records}")
+    
+    def cleanup_old_money_flow_data(self):
+        """
+        清理资金流旧数据（保留最近3年）
+        """
+        logger.info("开始清理资金流旧数据...")
+        try:
+            deleted_count = MoneyFlowRepository.cleanup_old_data(Config.MONEY_FLOW_RETENTION_DAYS)
+            logger.info(f"资金流数据清理完成，删除了 {deleted_count} 条旧数据")
+        except Exception as e:
+            logger.error(f"清理资金流旧数据失败: {e}", exc_info=True)
     
     def collect_hot_rank_data(self, target_date: Optional[date] = None):
         """
@@ -265,23 +448,22 @@ class DataCollectionService:
                 if hot_df is not None and not hot_df.empty:
                     normalized_df = self.hot_rank_adapter.normalize_hot_rank_data(hot_df, source)
                     if normalized_df is not None and not normalized_df.empty:
-                        # 转换为数据库格式，添加数据验证
-                        for _, row in normalized_df.iterrows():
-                            stock_code = str(row['stock_code']).strip()
-                            stock_name = str(row['stock_name']).strip()[:50]  # 限制长度
+                        # 转换为数据库格式，添加数据验证（向量化操作）
+                        def format_hot_rank_row(row):
+                            sheep_code = str(row['sheep_code']).strip()
+                            sheep_name = str(row['sheep_name']).strip()[:50]
                             
-                            # 验证股票代码：必须是6位数字
-                            if not stock_code or len(stock_code) != 6 or not stock_code.isdigit():
-                                logger.warning(f"跳过无效股票代码: {stock_code}")
-                                continue
+                            # 验证肥羊代码：必须是6位数字
+                            if not sheep_code or len(sheep_code) != 6 or not sheep_code.isdigit():
+                                return None
                             
                             # 验证排名：必须是正整数
                             try:
                                 rank = int(row['rank'])
                                 if rank <= 0:
-                                    continue
+                                    return None
                             except (ValueError, TypeError):
-                                continue
+                                return None
                             
                             # 验证成交量
                             try:
@@ -291,15 +473,19 @@ class DataCollectionService:
                             except (ValueError, TypeError):
                                 volume = 0
                             
-                            all_data.append({
-                                'code': stock_code,
-                                'name': stock_name,
+                            return {
+                                'code': sheep_code,
+                                'name': sheep_name,
                                 'rank': rank,
                                 'source': source,
                                 'date': target_date,
-                                'score': None,  # 可以后续计算
+                                'score': None,
                                 'volume': volume
-                            })
+                            }
+                        
+                        # 使用apply并过滤None值
+                        source_data = normalized_df.apply(format_hot_rank_row, axis=1).tolist()
+                        all_data.extend([d for d in source_data if d is not None])
             except Exception as e:
                 logger.warning(f"采集 {source} 热度榜失败: {e}")
                 continue
@@ -326,21 +512,28 @@ class DataCollectionService:
         success_count = 0
         error_count = 0
         
-        for idx, row in concept_list.iterrows():
+        # 向量化提取概念名称和代码
+        def extract_concept_info(row):
+            concept_name = None
+            concept_code = None
+            
+            if 'name' in concept_list.columns:
+                concept_name = str(row['name']).strip()
+                concept_code = str(row.get('code', '')).strip() if 'code' in concept_list.columns else None
+            elif '板块名称' in concept_list.columns:
+                concept_name = str(row['板块名称']).strip()
+                concept_code = str(row.get('板块代码', '')).strip() if '板块代码' in concept_list.columns else None
+            elif len(concept_list.columns) >= 2:
+                concept_name = str(row.iloc[0]).strip()
+                concept_code = str(row.iloc[1]).strip() if len(row) > 1 else None
+            
+            return concept_name, concept_code
+        
+        # 批量处理（使用apply，但保留循环用于错误处理）
+        for idx in concept_list.index:
             try:
-                # 提取概念名称和代码
-                concept_name = None
-                concept_code = None
-                
-                if 'name' in concept_list.columns:
-                    concept_name = str(row['name']).strip()
-                    concept_code = str(row.get('code', '')).strip() if 'code' in concept_list.columns else None
-                elif '板块名称' in concept_list.columns:
-                    concept_name = str(row['板块名称']).strip()
-                    concept_code = str(row.get('板块代码', '')).strip() if '板块代码' in concept_list.columns else None
-                elif len(concept_list.columns) >= 2:
-                    concept_name = str(row.iloc[0]).strip()
-                    concept_code = str(row.iloc[1]).strip() if len(row) > 1 else None
+                row = concept_list.loc[idx]
+                concept_name, concept_code = extract_concept_info(row)
                 
                 if not concept_name or concept_name == 'nan':
                     continue
@@ -357,15 +550,15 @@ class DataCollectionService:
                 if concept_id == 0:
                     continue
                 
-                # 获取概念下的股票
-                stock_codes = self.concept_adapter.get_concept_stocks(
+                # 获取概念下的肥羊
+                sheep_codes = self.concept_adapter.get_concept_stocks(
                     concept_name, concept_code, source='ths'
                 )
                 
-                if stock_codes:
-                    # 批量保存股票-概念关联
-                    ConceptRepository.batch_upsert_stock_concept_mapping(
-                        concept_id, stock_codes
+                if sheep_codes:
+                    # 批量保存肥羊-概念关联
+                    ConceptRepository.batch_upsert_sheep_concept_mapping(
+                        concept_id, sheep_codes
                     )
                     success_count += 1
                 
@@ -373,8 +566,98 @@ class DataCollectionService:
                     logger.info(f"进度: {idx + 1}/{len(concept_list)}, 成功: {success_count}, 失败: {error_count}")
                 
             except Exception as e:
-                logger.warning(f"处理概念 {row.get('name', 'unknown')} 失败: {e}")
+                logger.warning(f"处理概念失败: {e}")
                 error_count += 1
                 continue
         
         logger.info(f"概念板块数据采集完成！成功: {success_count}, 失败: {error_count}")
+    
+    def collect_index_data(self, index_code: str = 'CSI1000', days: int = None):
+        """
+        采集大盘指数数据（用于RSRS牛熊市判断）
+        
+        Args:
+            index_code: 指数代码，默认CSI1000（中证1000）
+            days: 采集最近N天的数据，默认采集最近3年数据
+        """
+        logger.info(f"开始采集指数数据: {index_code}")
+        
+        try:
+            # 获取数据库中已有的最新日期
+            latest_date = IndexRepository.get_latest_trade_date(index_code)
+            
+            # 确定采集日期范围
+            end_date = date.today()
+            if latest_date:
+                # 如果已有数据，从最新日期+1天开始采集
+                from datetime import timedelta
+                start_date = latest_date + timedelta(days=1)
+                logger.info(f"指数 {index_code} 已有数据至 {latest_date}，将从 {start_date} 开始采集")
+            else:
+                # 如果没有数据，采集最近3年
+                from datetime import timedelta
+                start_date = end_date - timedelta(days=1095)  # 3年
+                logger.info(f"指数 {index_code} 无历史数据，将采集最近3年数据")
+            
+            # 如果start_date >= end_date，说明数据已是最新
+            if start_date >= end_date:
+                logger.info(f"指数 {index_code} 数据已是最新，无需更新")
+                return
+            
+            # 获取指数数据
+            df = self.index_adapter.get_index_daily_data(
+                index_code=index_code,
+                start_date=start_date,
+                end_date=end_date
+            )
+            
+            if df.empty:
+                logger.warning(f"未获取到指数数据: {index_code}")
+                return
+            
+            # 保存到数据库
+            IndexRepository.save_index_daily_data(df, index_code)
+            
+            logger.info(f"指数数据采集完成: {index_code}, 共 {len(df)} 条记录")
+            
+        except Exception as e:
+            logger.error(f"采集指数数据失败: {index_code}, 错误: {e}", exc_info=True)
+    
+    def collect_sector_money_flow_data(self, target_date=None):
+        """
+        采集板块资金流向数据（仅在交易日执行）
+        
+        Args:
+            target_date: 目标日期，如果为None则使用今天
+        """
+        from services.sector_money_flow_service import SectorMoneyFlowService
+        from datetime import date
+        
+        if target_date is None:
+            target_date = date.today()
+        
+        # 判断是否为交易日
+        if not self.trade_date_adapter.is_trading_day(target_date):
+            logger.info(f"{target_date} 不是交易日，跳过板块资金流数据采集")
+            return
+        
+        logger.info(f"开始采集板块资金流向数据（日期: {target_date}）...")
+        
+        try:
+            SectorMoneyFlowService.collect_sector_money_flow_data(target_date)
+            logger.info("板块资金流向数据采集完成")
+        except Exception as e:
+            logger.error(f"采集板块资金流向数据失败: {e}", exc_info=True)
+    
+    def cleanup_old_sector_money_flow_data(self):
+        """
+        清理板块资金流旧数据（保留最近3个月）
+        """
+        from services.sector_money_flow_service import SectorMoneyFlowService
+        logger.info("开始清理板块资金流旧数据...")
+        try:
+            deleted_count = SectorMoneyFlowService.cleanup_old_data(Config.SECTOR_MONEY_FLOW_RETENTION_DAYS)
+            logger.info(f"板块资金流数据清理完成，删除了 {deleted_count} 条旧数据")
+        except Exception as e:
+            logger.error(f"清理板块资金流旧数据失败: {e}", exc_info=True)
+    

@@ -1,5 +1,5 @@
 """
-股票数据采集适配器
+肥羊数据采集适配器
 """
 import akshare as ak
 import pandas as pd
@@ -10,21 +10,21 @@ import time
 
 logger = logging.getLogger(__name__)
 
-class StockAdapter:
-    """股票数据采集适配器，封装akshare股票相关接口"""
+class SheepAdapter:
+    """肥羊数据采集适配器，封装akshare肥羊相关接口"""
     
     @staticmethod
-    def get_all_stock_codes() -> List[Dict[str, str]]:
+    def get_all_sheep_codes() -> List[Dict[str, str]]:
         """
-        获取A股市场全量股票代码
+        获取A股市场全量肥羊代码
         
         Returns:
-            股票列表，每个元素包含code和name
+            肥羊列表，每个元素包含code和name
         """
         all_stocks = []
         
         try:
-            # 优先使用stock_info_a_code_name
+            # 优先使用akshare的股票代码名称接口
             stock_list = ak.stock_info_a_code_name()
             if stock_list is not None and not stock_list.empty:
                 if 'code' in stock_list.columns and 'name' in stock_list.columns:
@@ -35,20 +35,20 @@ class StockAdapter:
                             clean_code = code[:6].zfill(6)
                             all_stocks.append({'code': clean_code, 'name': name})
                 
-                logger.info(f"获取到 {len(all_stocks)} 只股票")
+                logger.info(f"获取到 {len(all_stocks)} 只肥羊")
                 return all_stocks
         except Exception as e:
-            logger.warning(f"获取股票列表失败: {e}")
+            logger.warning(f"获取肥羊列表失败: {e}")
         
         return all_stocks
     
     @staticmethod
-    def get_stock_daily_data(stock_code: str, start_date: str, end_date: str) -> Optional[pd.DataFrame]:
+    def get_sheep_daily_data(sheep_code: str, start_date: str, end_date: str) -> Optional[pd.DataFrame]:
         """
-        获取股票日K数据
+        获取肥羊日K数据
         
         Args:
-            stock_code: 股票代码（6位数字）
+            sheep_code: 肥羊代码（6位数字）
             start_date: 开始日期（YYYYMMDD）
             end_date: 结束日期（YYYYMMDD）
             
@@ -56,8 +56,8 @@ class StockAdapter:
             包含日K数据的DataFrame，如果失败返回None
         """
         try:
-            # 标准化股票代码
-            clean_code = str(stock_code).strip().zfill(6)
+            # 标准化肥羊代码
+            clean_code = str(sheep_code).strip().zfill(6)
             
             # 调用akshare接口
             df = ak.stock_zh_a_hist(
@@ -95,7 +95,7 @@ class StockAdapter:
             
             # 转换日期格式
             df['date'] = pd.to_datetime(df['date']).dt.date
-            df['stock_code'] = clean_code
+            df['sheep_code'] = clean_code
             
             # 计算均线
             df = df.sort_values('date')
@@ -108,69 +108,51 @@ class StockAdapter:
             return df
             
         except Exception as e:
-            logger.warning(f"获取股票 {stock_code} 日K数据失败: {e}")
+            logger.warning(f"获取肥羊 {sheep_code} 日K数据失败: {e}")
             return None
     
     @staticmethod
-    def get_stock_money_flow(stock_code: str) -> Optional[Dict]:
+    def get_sheep_money_flow(sheep_code: str) -> Optional[Dict]:
         """
-        获取股票资金流向数据（今日）
+        获取肥羊资金流向数据（今日）
         
         Args:
-            stock_code: 股票代码
+            sheep_code: 肥羊代码
             
         Returns:
             资金流向字典，如果失败返回None
         """
         try:
-            # 尝试获取个股资金流
-            market_code = stock_code
-            if not stock_code.startswith(('0', '3', '6', '8')):
-                if stock_code.startswith('6'):
-                    market_code = f"sh{stock_code}"
-                else:
-                    market_code = f"sz{stock_code}"
-            
-            flow_df = ak.stock_individual_fund_flow(stock=market_code, indicator="资金流向")
+            # 使用历史数据接口获取，然后提取今日数据
+            flow_df = SheepAdapter.get_sheep_money_flow_history(sheep_code)
             
             if flow_df is None or flow_df.empty:
                 return None
             
-            # 解析资金流数据（根据实际列名调整）
-            result = {
-                'main_net_inflow': 0,
-                'super_large_inflow': 0,
-                'large_inflow': 0,
-                'medium_inflow': 0,
-                'small_inflow': 0
-            }
+            # 获取最新的数据（今日）
+            latest_row = flow_df.iloc[-1]  # 最后一行是最新的数据
             
-            # 尝试匹配列名（不同接口可能不同）
-            for col in flow_df.columns:
-                col_str = str(col)
-                if '主力' in col_str and '净流入' in col_str:
-                    val = flow_df[col].iloc[0] if len(flow_df) > 0 else 0
-                    result['main_net_inflow'] = float(val) / 10000 if pd.notna(val) else 0
-                elif '超大单' in col_str and '净流入' in col_str:
-                    val = flow_df[col].iloc[0] if len(flow_df) > 0 else 0
-                    result['super_large_inflow'] = float(val) / 10000 if pd.notna(val) else 0
-                elif '大单' in col_str and '超大' not in col_str and '净流入' in col_str:
-                    val = flow_df[col].iloc[0] if len(flow_df) > 0 else 0
-                    result['large_inflow'] = float(val) / 10000 if pd.notna(val) else 0
+            result = {
+                'main_net_inflow': float(latest_row.get('main_net_inflow', 0)),
+                'super_large_inflow': float(latest_row.get('super_large_inflow', 0)),
+                'large_inflow': float(latest_row.get('large_inflow', 0)),
+                'medium_inflow': float(latest_row.get('medium_inflow', 0)),
+                'small_inflow': float(latest_row.get('small_inflow', 0))
+            }
             
             return result
             
         except Exception as e:
-            logger.debug(f"获取股票 {stock_code} 资金流失败: {e}")
+            logger.debug(f"获取肥羊 {sheep_code} 资金流失败: {e}")
             return None
     
     @staticmethod
-    def get_all_stocks_money_flow() -> Optional[pd.DataFrame]:
+    def get_all_sheep_money_flow() -> Optional[pd.DataFrame]:
         """
-        批量获取所有股票的资金流向数据（今日）
+        批量获取所有肥羊的资金流向数据（今日）
         
         Returns:
-            包含所有股票资金流的DataFrame
+            包含所有肥羊资金流的DataFrame
         """
         try:
             flow_data = ak.stock_individual_fund_flow_rank(indicator="今日")
@@ -182,9 +164,9 @@ class StockAdapter:
             result_df = pd.DataFrame()
             
             if '代码' in flow_data.columns:
-                result_df['stock_code'] = flow_data['代码'].astype(str).str.zfill(6)
-            elif '股票代码' in flow_data.columns:
-                result_df['stock_code'] = flow_data['股票代码'].astype(str).str.zfill(6)
+                result_df['sheep_code'] = flow_data['代码'].astype(str).str.zfill(6)
+            elif '肥羊代码' in flow_data.columns:
+                result_df['sheep_code'] = flow_data['肥羊代码'].astype(str).str.zfill(6)
             
             # 解析资金流列
             money_flow_cols = {
@@ -207,4 +189,64 @@ class StockAdapter:
             
         except Exception as e:
             logger.error(f"批量获取资金流数据失败: {e}", exc_info=True)
+            return None
+    
+    @staticmethod
+    def get_sheep_money_flow_history(sheep_code: str) -> Optional[pd.DataFrame]:
+        """
+        获取股票的历史资金流数据（近100个交易日）
+        
+        Args:
+            sheep_code: 股票代码（6位数字）
+            
+        Returns:
+            包含历史资金流数据的DataFrame，如果失败返回None
+        """
+        try:
+            # 构建市场代码和市场标识
+            if sheep_code.startswith('6'):
+                market = 'sh'
+            else:
+                market = 'sz'
+            
+            # 调用akshare接口获取近100个交易日的数据
+            # 注意：stock_individual_fund_flow 需要 stock（6位代码）和 market（sh/sz）参数
+            flow_df = ak.stock_individual_fund_flow(stock=sheep_code, market=market)
+            
+            if flow_df is None or flow_df.empty:
+                return None
+            
+            # 标准化列名
+            result_df = pd.DataFrame()
+            
+            # 提取日期列（akshare返回的列名是'日期'）
+            if '日期' in flow_df.columns:
+                result_df['trade_date'] = pd.to_datetime(flow_df['日期']).dt.date
+            else:
+                logger.warning(f"股票 {sheep_code} 无法找到日期列，列名: {list(flow_df.columns)}")
+                return None
+            
+            result_df['sheep_code'] = sheep_code
+            
+            # 解析资金流列（akshare返回的列名格式：'主力净流入-净额'等）
+            # 注意：akshare返回的是元，需要转换为万元
+            money_flow_mapping = {
+                'main_net_inflow': '主力净流入-净额',
+                'super_large_inflow': '超大单净流入-净额',
+                'large_inflow': '大单净流入-净额',
+                'medium_inflow': '中单净流入-净额',
+                'small_inflow': '小单净流入-净额'
+            }
+            
+            for target_col, source_col in money_flow_mapping.items():
+                if source_col in flow_df.columns:
+                    # 转换为万元（akshare返回的是元）
+                    result_df[target_col] = flow_df[source_col].fillna(0).astype(float) / 10000
+                else:
+                    result_df[target_col] = 0.0
+            
+            return result_df
+            
+        except Exception as e:
+            logger.debug(f"获取股票 {sheep_code} 资金流历史数据失败: {e}")
             return None
