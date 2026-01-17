@@ -5,7 +5,7 @@
 import akshare as ak
 import pandas as pd
 from datetime import date, datetime
-from typing import Optional, List
+from typing import Optional, List, Dict
 import logging
 
 logger = logging.getLogger(__name__)
@@ -165,3 +165,110 @@ class IndexAdapter:
     def get_index_list(cls) -> List[str]:
         """获取支持的指数代码列表"""
         return list(cls.INDEX_CODE_MAP.keys())
+    
+    @classmethod
+    def calculate_rsrs(cls, index_data: List[Dict], window: int = 18) -> Optional[Dict]:
+        """
+        计算RSRS指标
+        
+        Args:
+            index_data: 指数数据列表，每个元素包含high_price, low_price, trade_date
+            window: 回归窗口大小，默认18日
+            
+        Returns:
+            包含以下字段的字典：
+            - beta: 斜率β
+            - alpha: 截距α
+            - r_squared: 拟合优度R²
+            - zscore: RSRS标准分
+            - slope: 斜率（同beta）
+        """
+        try:
+            import numpy as np
+            import statsmodels.api as sm
+            
+            if len(index_data) < window:
+                return None
+            
+            # 提取最近N日的数据
+            recent_data = index_data[-window:]
+            
+            # 提取最高价和最低价序列
+            high_prices = np.array([d['high_price'] for d in recent_data])
+            low_prices = np.array([d['low_price'] for d in recent_data])
+            
+            # OLS线性回归：High = α + β * Low
+            X = sm.add_constant(low_prices)  # 添加常数项
+            y = high_prices
+            
+            try:
+                model = sm.OLS(y, X).fit()
+                beta = model.params[1]  # 斜率β
+                alpha = model.params[0]  # 截距α
+                r2 = model.rsquared  # 拟合优度R²
+            except Exception as e:
+                logger.error(f"RSRS回归计算失败: {e}")
+                return None
+            
+            # 计算标准分（简化版，使用历史窗口）
+            # 这里简化处理，实际应该使用更长的历史窗口计算β的均值和标准差
+            zscore = 0.0
+            if len(index_data) >= window * 2:
+                # 计算历史β值用于计算标准分
+                beta_history = []
+                for i in range(window, min(len(index_data), window + 100)):
+                    window_data = index_data[i - window:i]
+                    if len(window_data) >= window:
+                        try:
+                            h = np.array([d['high_price'] for d in window_data])
+                            l = np.array([d['low_price'] for d in window_data])
+                            X_hist = sm.add_constant(l)
+                            y_hist = h
+                            model_hist = sm.OLS(y_hist, X_hist).fit()
+                            beta_history.append(model_hist.params[1])
+                        except:
+                            continue
+                
+                if len(beta_history) >= 10:
+                    beta_mean = np.mean(beta_history)
+                    beta_std = np.std(beta_history)
+                    if beta_std > 0:
+                        zscore = (beta - beta_mean) / beta_std
+                    else:
+                        # 如果标准差为0，使用Beta本身判断
+                        zscore = (beta - 1.0) * 2
+                else:
+                    # 历史数据不足，使用Beta本身判断
+                    zscore = (beta - 1.0) * 2
+            else:
+                # 数据不足，使用Beta本身判断
+                zscore = (beta - 1.0) * 2
+            
+            return {
+                'beta': beta,
+                'alpha': alpha,
+                'r_squared': r2,
+                'zscore': zscore,
+                'slope': beta
+            }
+        except Exception as e:
+            logger.error(f"计算RSRS失败: {e}", exc_info=True)
+            return None
+    
+    @classmethod
+    def determine_market_regime(cls, zscore: float) -> str:
+        """
+        根据RSRS标准分判断市场状态
+        
+        Args:
+            zscore: RSRS标准分
+            
+        Returns:
+            市场状态：'Attack'（进攻）、'Defense'（防守）、'Balance'（震荡）
+        """
+        if zscore > 0.7:
+            return 'Attack'
+        elif zscore < -0.7:
+            return 'Defense'
+        else:
+            return 'Balance'

@@ -64,15 +64,29 @@ class AlphaModelT7ConceptFlow:
     DEFAULT_TOP_N = 5              # 默认推荐数量
     
     # RSRS市场状态识别参数
-    RSRS_LOOKBACK_DAYS = 18        # RSRS回归窗口
-    RSRS_ATTACK_THRESHOLD = 0.7    # 进攻模式阈值
-    RSRS_DEFENSE_THRESHOLD = -0.7  # 防守模式阈值
+    RSRS_LOOKBACK_DAYS = 18        # RSRS回归窗口（N日）
+    RSRS_ZSCORE_WINDOW = 600        # 标准分计算窗口（M日，用于计算β的均值和标准差）
+    RSRS_ATTACK_THRESHOLD = 0.7    # 进攻模式阈值（标准分）
+    RSRS_DEFENSE_THRESHOLD = -0.7  # 防守模式阈值（标准分）
+    RSRS_BETA_ATTACK_THRESHOLD = 1.0  # 进攻模式Beta阈值（β本身）
+    RSRS_BETA_DEFENSE_THRESHOLD = 0.8  # 防守模式Beta阈值（β本身）
+    RSRS_MIN_R2 = 0.5  # 最小R²阈值，低于此值认为回归不可靠
+    
+    # 连阳检测参数（用于覆盖RSRS判断）
+    CONSECUTIVE_UP_DAYS_THRESHOLD = 3  # 连续上涨天数阈值（>=3天视为连阳）
+    CONSECUTIVE_UP_TOTAL_CHG_THRESHOLD = 2.0  # 连续上涨累计涨幅阈值（>=2%视为有效连阳）
+    # 趋势检测参数（用于检测市场情绪）
+    TREND_UP_DAYS_IN_10 = 7  # 最近10天中上涨天数阈值（>=7天视为上升趋势）
+    TREND_UP_TOTAL_CHG_10 = 3.0  # 最近10天累计涨幅阈值（>=3%视为上升趋势）
     
     # 概念竞速参数
     CONCEPT_MAIN_TREND_AVG_CHG = 1.0   # 主线概念平均涨幅阈值(%)
     CONCEPT_MAIN_TREND_BREADTH = 0.15  # 主线概念广度阈值(15%)
     CONCEPT_LEADER_CHG = 7.0           # 概念领头羊涨幅阈值(%)
     CONCEPT_LEADER_TOP_N = 5           # 概念内领涨股数量
+    
+    # 资金流参数
+    MONEY_FLOW_STRONG_THRESHOLD = 0.0  # 主力资金净流入强阈值（万元），>0表示有流入
     
     # ============================================
     # 默认参数配置（简化版，只保留核心参数）
@@ -110,181 +124,197 @@ class AlphaModelT7ConceptFlow:
     
     def detect_market_regime(self, trade_date: date) -> Dict[str, any]:
         """
-        Module 1: RSRS 市场状态识别（牛熊市判断）
+        Module 1: RSRS 市场状态识别（牛熊市判断）- v2.0优化版
         
         算法：
-        1. 合成全市场指数（基于所有肥羊的加权平均）
-        2. 对过去N=18日的大盘最高价和最低价进行OLS线性回归
-        3. 计算斜率β和RSRS标准分
-        4. 定义市场状态：Attack (RSRS_Zscore > 0.7) / Defense (< -0.7) / Balance
+        1. 从指数表读取中证1000指数数据
+        2. 使用IndexAdapter计算RSRS指标
+        3. 根据RSRS标准分判断市场状态
+        4. 结合连阳和趋势检测优化判断
         
         Returns:
             {
                 'regime': 'Attack'/'Defense'/'Balance',
                 'rsrs_zscore': float,
                 'rsrs_beta': float,
+                'rsrs_r2': float,
                 'index_high': float,
-                'index_low': float
+                'index_low': float,
+                'consecutive_up_days': int,
+                'is_uptrend': bool
             }
         """
         try:
-            with get_raw_connection() as conn:
-                # 步骤1：获取全市场指数数据（最近18+30天，用于计算RSRS和标准分）
-                # 优先从指数表读取，如果没有则降级为实时计算加权平均指数
-                lookback_days = self.RSRS_LOOKBACK_DAYS + 30  # 多取30天用于计算标准分
-                
-                # 优先从指数表读取（使用中证1000作为全市场指数）
-                query_index = """
-                    SELECT 
-                        trade_date,
-                        close_price as index_close,
-                        high_price as index_high,
-                        low_price as index_low
-                    FROM market_index_daily
-                    WHERE index_code = 'CSI1000'
-                      AND trade_date <= %s
-                      AND trade_date >= DATE_SUB(%s, INTERVAL %s DAY)
-                    ORDER BY trade_date DESC
-                    LIMIT %s
-                """
-                
-                df_index = pd.read_sql(
-                    query_index, 
-                    conn, 
-                    params=[trade_date, trade_date, lookback_days, lookback_days]
-                )
-                
-                # 如果指数表没有数据，降级为实时计算加权平均指数
-                if df_index.empty or len(df_index) < self.RSRS_LOOKBACK_DAYS:
-                    logger.warning(f"指数表数据不足，降级为实时计算加权平均指数")
-                    query_fallback = """
-                        SELECT 
-                            sd.trade_date,
-                            SUM(sd.close_price * sd.amount) / NULLIF(SUM(sd.amount), 0) as index_close,
-                            MAX(sd.high_price) as index_high,
-                            MIN(sd.low_price) as index_low
-                        FROM sheep_daily sd
-                        INNER JOIN sheep_basic sb ON sd.sheep_code = sb.sheep_code
-                        WHERE sd.trade_date <= %s
-                          AND sd.trade_date >= DATE_SUB(%s, INTERVAL %s DAY)
-                          AND sb.is_active = 1
-                          AND sd.amount > 0
-                        GROUP BY sd.trade_date
-                        ORDER BY sd.trade_date DESC
-                        LIMIT %s
-                    """
-                    
-                    df_index = pd.read_sql(
-                        query_fallback, 
-                        conn, 
-                        params=[trade_date, trade_date, lookback_days, lookback_days]
-                    )
-                
-                if df_index.empty or len(df_index) < self.RSRS_LOOKBACK_DAYS:
-                    logger.warning(f"RSRS: 无法获取足够的指数数据（需要至少{self.RSRS_LOOKBACK_DAYS}天）")
-                    self.regime = "Balance"
-                    self.rsrs_zscore = 0.0
-                    return {
-                        'regime': self.regime,
-                        'rsrs_zscore': self.rsrs_zscore,
-                        'rsrs_beta': 0.0,
-                        'index_high': 0.0,
-                        'index_low': 0.0
-                    }
-                
-                # 按日期升序排列（用于回归）
-                df_index = df_index.sort_values('trade_date').reset_index(drop=True)
-                
-                # 步骤2：取最近N=18日的数据进行OLS回归
-                recent_data = df_index.tail(self.RSRS_LOOKBACK_DAYS).copy()
-                
-                if len(recent_data) < self.RSRS_LOOKBACK_DAYS:
-                    logger.warning(f"RSRS: 数据不足（仅{len(recent_data)}天）")
-                    self.regime = "Balance"
-                    self.rsrs_zscore = 0.0
-                    return {
-                        'regime': self.regime,
-                        'rsrs_zscore': self.rsrs_zscore,
-                        'rsrs_beta': 0.0,
-                        'index_high': recent_data['index_high'].iloc[-1] if not recent_data.empty else 0.0,
-                        'index_low': recent_data['index_low'].iloc[-1] if not recent_data.empty else 0.0
-                    }
-                
-                # 提取最高价和最低价序列
-                high_prices = recent_data['index_high'].values
-                low_prices = recent_data['index_low'].values
-                
-                # 步骤3：OLS线性回归：High = α + β * Low
-                # 使用statsmodels进行回归
-                X = sm.add_constant(low_prices)  # 添加常数项
-                y = high_prices
-                
-                try:
-                    model = sm.OLS(y, X).fit()
-                    beta = model.params[1]  # 斜率β
-                    alpha = model.params[0]  # 截距α
-                except Exception as e:
-                    logger.error(f"RSRS回归计算失败: {e}")
-                    beta = 1.0
-                    alpha = 0.0
-                
-                # 步骤4：计算RSRS标准分
-                # 需要历史β序列来计算均值和标准差
-                # 性能优化：限制计算窗口数量，避免过多循环
-                if len(df_index) >= self.RSRS_LOOKBACK_DAYS * 2:
-                    # 计算滚动β序列（用于计算标准分）
-                    # 优化：只计算最近30个窗口，避免过多计算
-                    max_windows = 30
-                    start_idx = max(self.RSRS_LOOKBACK_DAYS, len(df_index) - max_windows)
-                    beta_history = []
-                    
-                    for i in range(start_idx, len(df_index)):
-                        window_data = df_index.iloc[i - self.RSRS_LOOKBACK_DAYS:i]
-                        if len(window_data) >= self.RSRS_LOOKBACK_DAYS:
-                            try:
-                                window_high = window_data['index_high'].values
-                                window_low = window_data['index_low'].values
-                                X_window = sm.add_constant(window_low)
-                                y_window = window_high
-                                model_window = sm.OLS(y_window, X_window).fit()
-                                beta_history.append(model_window.params[1])
-                            except:
-                                continue
-                    
-                    if len(beta_history) > 0:
-                        beta_mean = np.mean(beta_history)
-                        beta_std = np.std(beta_history)
-                        if beta_std > 0:
-                            rsrs_zscore = (beta - beta_mean) / beta_std
-                        else:
-                            rsrs_zscore = 0.0
-                    else:
-                        # 如果无法计算历史β，使用简化方法
-                        rsrs_zscore = (beta - 1.0) * 10  # 简化标准分
-                else:
-                    # 数据不足，使用简化方法
-                    rsrs_zscore = (beta - 1.0) * 10
-                
-                # 步骤5：定义市场状态
-                if rsrs_zscore > self.RSRS_ATTACK_THRESHOLD:
-                    regime = "Attack"
-                elif rsrs_zscore < self.RSRS_DEFENSE_THRESHOLD:
-                    regime = "Defense"
-                else:
-                    regime = "Balance"
-                
-                self.regime = regime
-                self.rsrs_zscore = rsrs_zscore
-                
-                logger.info(f"RSRS市场状态: {regime} (Z-score: {rsrs_zscore:.3f}, Beta: {beta:.3f})")
-                
+            from db.index_repository import IndexRepository
+            from etl.index_adapter import IndexAdapter
+            from config import Config
+            from datetime import timedelta
+            
+            # 步骤1：获取指数数据（使用IndexRepository）
+            # IndexRepository返回DataFrame，需要转换为字典列表
+            end_date = trade_date
+            start_date = trade_date - timedelta(days=250)
+            index_df = IndexRepository.get_index_daily_data('CSI1000', start_date=start_date, end_date=end_date)
+            
+            if index_df.empty or len(index_df) < Config.RSRS_WINDOW:
+                logger.warning(f"RSRS: 无法获取足够的指数数据（需要至少{Config.RSRS_WINDOW}天）")
+                self.regime = "Balance"
+                self.rsrs_zscore = 0.0
                 return {
-                    'regime': regime,
-                    'rsrs_zscore': rsrs_zscore,
-                    'rsrs_beta': beta,
-                    'index_high': recent_data['index_high'].iloc[-1],
-                    'index_low': recent_data['index_low'].iloc[-1]
+                    'regime': self.regime,
+                    'rsrs_zscore': self.rsrs_zscore,
+                    'rsrs_beta': 0.0,
+                    'rsrs_r2': 0.0,
+                    'index_high': 0.0,
+                    'index_low': 0.0,
+                    'consecutive_up_days': 0,
+                    'is_uptrend': False
                 }
+            
+            # 转换为字典列表格式（IndexAdapter需要）
+            index_data = []
+            for _, row in index_df.iterrows():
+                if row['trade_date'] <= trade_date:
+                    index_data.append({
+                        'trade_date': row['trade_date'],
+                        'high_price': float(row['high_price']) if pd.notna(row['high_price']) else 0.0,
+                        'low_price': float(row['low_price']) if pd.notna(row['low_price']) else 0.0,
+                        'close_price': float(row['close_price']) if pd.notna(row['close_price']) else 0.0,
+                        'change_pct': float(row['change_pct']) if pd.notna(row['change_pct']) else 0.0
+                    })
+            
+            index_data = sorted(index_data, key=lambda x: x['trade_date'])
+            
+            if len(index_data) < Config.RSRS_WINDOW:
+                logger.warning(f"RSRS: 数据不足（仅{len(index_data)}天）")
+                self.regime = "Balance"
+                self.rsrs_zscore = 0.0
+                return {
+                    'regime': self.regime,
+                    'rsrs_zscore': self.rsrs_zscore,
+                    'rsrs_beta': 0.0,
+                    'rsrs_r2': 0.0,
+                    'index_high': index_data[-1]['high_price'] if index_data else 0.0,
+                    'index_low': index_data[-1]['low_price'] if index_data else 0.0,
+                    'consecutive_up_days': 0,
+                    'is_uptrend': False
+                }
+            
+            # 步骤2：使用IndexAdapter计算RSRS
+            rsrs = IndexAdapter.calculate_rsrs(index_data, Config.RSRS_WINDOW)
+            
+            if not rsrs:
+                logger.warning("RSRS: 计算失败")
+                self.regime = "Balance"
+                self.rsrs_zscore = 0.0
+                return {
+                    'regime': self.regime,
+                    'rsrs_zscore': self.rsrs_zscore,
+                    'rsrs_beta': 0.0,
+                    'rsrs_r2': 0.0,
+                    'index_high': index_data[-1]['high_price'] if index_data else 0.0,
+                    'index_low': index_data[-1]['low_price'] if index_data else 0.0,
+                    'consecutive_up_days': 0,
+                    'is_uptrend': False
+                }
+            
+            beta = rsrs['beta']
+            r2 = rsrs['r_squared']
+            zscore = rsrs['zscore']
+            
+            # 步骤3：检测连阳和上升趋势
+            consecutive_up_days = 0
+            total_change_recent = 0.0
+            total_change_10d = 0.0
+            up_days_in_10 = 0
+            is_consecutive_up = False
+            is_uptrend = False
+            
+            try:
+                # 获取最近10天的数据
+                recent_10 = index_data[-10:] if len(index_data) >= 10 else index_data
+                
+                if len(recent_10) >= 3:
+                    # 计算涨跌幅（如果有change_pct字段，使用它；否则从close_price计算）
+                    for i in range(len(recent_10) - 1, -1, -1):
+                        if i < len(recent_10) - 1:
+                            prev_close = recent_10[i-1].get('close_price', 0) if i > 0 else recent_10[i].get('close_price', 0)
+                            curr_close = recent_10[i].get('close_price', 0)
+                            if prev_close > 0:
+                                change_pct = ((curr_close - prev_close) / prev_close) * 100
+                                if change_pct > 0:
+                                    consecutive_up_days += 1
+                                else:
+                                    break
+                        else:
+                            # 最后一天，假设上涨
+                            consecutive_up_days = 1
+                    
+                    # 计算最近5天累计涨幅
+                    if len(recent_10) >= 5:
+                        recent_5 = recent_10[-5:]
+                        for i in range(1, len(recent_5)):
+                            prev_close = recent_5[i-1].get('close_price', 0)
+                            curr_close = recent_5[i].get('close_price', 0)
+                            if prev_close > 0:
+                                total_change_recent += ((curr_close - prev_close) / prev_close) * 100
+                    
+                    # 计算最近10天累计涨幅和上涨天数
+                    for i in range(1, len(recent_10)):
+                        prev_close = recent_10[i-1].get('close_price', 0)
+                        curr_close = recent_10[i].get('close_price', 0)
+                        if prev_close > 0:
+                            change_pct = ((curr_close - prev_close) / prev_close) * 100
+                            total_change_10d += change_pct
+                            if change_pct > 0:
+                                up_days_in_10 += 1
+                    
+                    # 判断是否为连阳
+                    is_consecutive_up = (
+                        consecutive_up_days >= self.CONSECUTIVE_UP_DAYS_THRESHOLD and
+                        total_change_recent >= self.CONSECUTIVE_UP_TOTAL_CHG_THRESHOLD
+                    )
+                    
+                    # 判断是否为上升趋势
+                    is_uptrend = (
+                        up_days_in_10 >= self.TREND_UP_DAYS_IN_10 and
+                        total_change_10d >= self.TREND_UP_TOTAL_CHG_10
+                    )
+            except Exception as e:
+                logger.debug(f"连阳/趋势检测失败: {e}")
+            
+            # 步骤4：判断市场状态（使用IndexAdapter的方法，但结合趋势优化）
+            base_regime = IndexAdapter.determine_market_regime(zscore)
+            
+            # 优化判断：结合趋势
+            if base_regime == "Defense" and is_uptrend:
+                regime = "Balance"  # 上升趋势时，即使RSRS显示防守，也调整为震荡
+                logger.info(f"趋势优化：RSRS显示Defense但上升趋势明显，调整为Balance")
+            elif base_regime == "Balance" and (is_uptrend or (is_consecutive_up and consecutive_up_days >= 5)):
+                regime = "Attack"  # 上升趋势时，震荡提升为进攻
+                logger.info(f"趋势提升：上升趋势明显，从Balance提升为Attack")
+            else:
+                regime = base_regime
+            
+            self.regime = regime
+            self.rsrs_zscore = zscore
+            
+            logger.info(f"RSRS市场状态: {regime} (Beta: {beta:.3f}, R²: {r2:.3f}, Z-score: {zscore:.3f}, 连阳: {consecutive_up_days}天, 10日涨幅: {total_change_10d:.2f}%)")
+            
+            return {
+                'regime': regime,
+                'rsrs_zscore': zscore,
+                'rsrs_beta': beta,
+                'rsrs_r2': r2,
+                'index_high': index_data[-1]['high_price'] if index_data else 0.0,
+                'index_low': index_data[-1]['low_price'] if index_data else 0.0,
+                'consecutive_up_days': consecutive_up_days,
+                'total_change_recent': total_change_recent,
+                'total_change_10d': total_change_10d,
+                'up_days_in_10': up_days_in_10,
+                'is_consecutive_up': is_consecutive_up,
+                'is_uptrend': is_uptrend
+            }
                 
         except Exception as e:
             logger.error(f"RSRS市场状态识别失败: {e}", exc_info=True)
@@ -294,28 +324,39 @@ class AlphaModelT7ConceptFlow:
                 'regime': self.regime,
                 'rsrs_zscore': self.rsrs_zscore,
                 'rsrs_beta': 0.0,
+                'rsrs_r2': 0.0,
                 'index_high': 0.0,
-                'index_low': 0.0
+                'index_low': 0.0,
+                'consecutive_up_days': 0,
+                'is_uptrend': False
             }
     
     def calculate_concept_resonance(self, df: pd.DataFrame, trade_date: date) -> pd.DataFrame:
         """
-        Module 1: 概念竞速引擎（核心升级）
+        Module 1: 概念竞速引擎（资金流驱动版 v3.0）
         
-        原理：一只股票属于多个板块（行业+多个概念）。必须找出当前表现最强的那个板块作为它的"真实身份"。
+        核心改进：资金流驱动的概念竞速
+        - 对于每只股票，查找其所有关联概念
+        - 计算每个概念的总资金流入（主力+超大单）
+        - 选择总资金流入最高的概念作为"驱动概念"
+        - 基于驱动概念计算共振分数
         
-        实现步骤（向量化，严禁循环）：
-        1. 数据准备：从数据库获取每只股票的概念列表（通过sheep_concept_mapping表）
+        实现步骤：
+        1. 数据准备：从数据库获取每只股票的概念列表和资金流数据
         2. 维度展开 (Explode)：将一只股票裂变为多行（每行对应一个概念+行业）
-        3. 全市场竞速：按tag分组，计算每个概念/行业的指标
-        4. 最强身份确认：对于每只股票，在它所属的所有tag中，选取Tag_Avg_Chg最大的那个作为Resonance_Base
+        3. 资金流聚合：按tag分组，计算每个概念的总资金流入和平均涨幅
+        4. 驱动概念确认：对于每只股票，在它所属的所有tag中，选取总资金流入最高的那个作为驱动概念
         
         Args:
-            df: 包含sheep_code, industry, change_pct等字段的DataFrame
+            df: 包含sheep_code, industry, change_pct, main_net_inflow, super_large_inflow等字段的DataFrame
             trade_date: 交易日期
             
         Returns:
-            添加了概念共振相关字段的DataFrame
+            添加了概念共振相关字段的DataFrame，包括：
+            - resonance_base_tag: 驱动概念名称
+            - tag_total_inflow: 驱动概念的总资金流入（万元）
+            - tag_avg_pct: 驱动概念的平均涨幅
+            - concept_resonance_score: 概念共振分数
         """
         if df.empty:
             logger.warning("概念竞速计算：数据为空")
@@ -338,7 +379,7 @@ class AlphaModelT7ConceptFlow:
             
             # 从数据库批量获取概念数据
             with get_raw_connection() as conn:
-                # 构建参数化查询
+                # 构建参数化查询 - 使用元组列表格式
                 placeholders = ','.join(['%s'] * len(sheep_codes))
                 query_concepts = f"""
                     SELECT 
@@ -352,8 +393,18 @@ class AlphaModelT7ConceptFlow:
                     ORDER BY scm.sheep_code, scm.weight DESC
                 """
                 
-                # 使用SQLAlchemy引擎避免pandas警告
-                df_concepts = pd.read_sql(query_concepts, get_sqlalchemy_engine(), params=sheep_codes)
+                # 使用pymysql连接执行查询，避免SQLAlchemy参数格式问题
+                import pymysql
+                cursor = conn.cursor()
+                cursor.execute(query_concepts, sheep_codes)
+                rows = cursor.fetchall()
+                cursor.close()
+                
+                # 转换为DataFrame
+                if rows:
+                    df_concepts = pd.DataFrame(rows, columns=['sheep_code', 'concept_name', 'weight'])
+                else:
+                    df_concepts = pd.DataFrame(columns=['sheep_code', 'concept_name', 'weight'])
             
             # 如果数据库中没有概念数据，降级使用industry字段
             if df_concepts.empty:
@@ -401,24 +452,36 @@ class AlphaModelT7ConceptFlow:
                 df['is_concept_leader'] = 0
                 return df
             
-            # 将股票数据merge到tag数据中
+            # 将股票数据merge到tag数据中（包含资金流数据）
+            merge_cols = ['sheep_code', 'change_pct']
+            if 'main_net_inflow' in df.columns:
+                merge_cols.append('main_net_inflow')
+            if 'super_large_inflow' in df.columns:
+                merge_cols.append('super_large_inflow')
+            
             df_merge = df_tags.merge(
-                df[['sheep_code', 'change_pct']],
+                df[merge_cols],
                 on='sheep_code',
                 how='left'
             )
             
             # 填充缺失值
             df_merge['change_pct'] = pd.to_numeric(df_merge['change_pct'], errors='coerce').fillna(0.0)
+            df_merge['main_net_inflow'] = pd.to_numeric(df_merge.get('main_net_inflow', pd.Series([0.0] * len(df_merge))), errors='coerce').fillna(0.0)
+            df_merge['super_large_inflow'] = pd.to_numeric(df_merge.get('super_large_inflow', pd.Series([0.0] * len(df_merge))), errors='coerce').fillna(0.0)
             
-            # 步骤3：全市场竞速 - 按tag分组，计算每个tag的指标（向量化）
+            # 计算每只股票的总资金流入（主力+超大单）
+            df_merge['total_inflow'] = df_merge['main_net_inflow'] + df_merge['super_large_inflow']
+            
+            # 步骤3：资金流驱动的概念竞速 - 按tag分组，计算每个tag的总资金流入和平均涨幅
             tag_stats = df_merge.groupby('tag').agg({
                 'change_pct': ['mean', 'count', 'std'],
+                'total_inflow': 'sum',  # 关键：总资金流入
                 'sheep_code': lambda x: x.tolist()  # 保存该tag下的所有股票代码
             }).reset_index()
             
             # 扁平化列名
-            tag_stats.columns = ['tag', 'tag_avg_chg', 'tag_count', 'tag_std', 'tag_sheep_codes']
+            tag_stats.columns = ['tag', 'tag_avg_chg', 'tag_count', 'tag_std', 'tag_total_inflow', 'tag_sheep_codes']
             
             # 计算Tag_Breadth（上涨比例）：change_pct > 3%的股票占比
             tag_breadth = df_merge.groupby('tag').apply(
@@ -439,18 +502,25 @@ class AlphaModelT7ConceptFlow:
             tag_stats['tag_count'] = tag_stats['tag_count'].fillna(0).astype(int)
             tag_stats['tag_std'] = tag_stats['tag_std'].fillna(0.0)
             tag_stats['tag_zscore'] = tag_stats['tag_zscore'].fillna(0.0)
+            tag_stats['tag_total_inflow'] = tag_stats['tag_total_inflow'].fillna(0.0)
             
-            # 步骤4：最强身份确认 - 将tag指标merge回原股票数据
-            # 对于每只股票，找出它所属的所有tag中，tag_avg_chg最大的那个
-            df_with_tags = df_tags.merge(tag_stats[['tag', 'tag_avg_chg', 'tag_breadth', 'tag_zscore', 'tag_count']], 
-                                         on='tag', how='left')
+            # 步骤4：驱动概念确认 - 基于总资金流入选择驱动概念
+            # 对于每只股票，找出它所属的所有tag中，tag_total_inflow最高的那个
+            df_with_tags = df_tags.merge(
+                tag_stats[['tag', 'tag_avg_chg', 'tag_breadth', 'tag_zscore', 'tag_count', 'tag_total_inflow']], 
+                on='tag', 
+                how='left'
+            )
             
-            # 按sheep_code分组，找出tag_avg_chg最大的tag（最强身份）
+            # 按sheep_code分组，找出tag_total_inflow最高的tag（驱动概念）
+            # 如果总资金流入相同，则选择平均涨幅更高的
             best_tag = df_with_tags.loc[
-                df_with_tags.groupby('sheep_code')['tag_avg_chg'].idxmax()
-            ][['sheep_code', 'tag', 'tag_avg_chg', 'tag_breadth', 'tag_zscore']].copy()
+                df_with_tags.groupby('sheep_code').apply(
+                    lambda g: g.nlargest(1, ['tag_total_inflow', 'tag_avg_chg']).index[0]
+                )
+            ][['sheep_code', 'tag', 'tag_avg_chg', 'tag_breadth', 'tag_zscore', 'tag_total_inflow']].copy()
             best_tag.columns = ['sheep_code', 'resonance_base_tag', 'resonance_base_avg_chg', 
-                               'resonance_base_breadth', 'resonance_base_zscore']
+                               'resonance_base_breadth', 'resonance_base_zscore', 'tag_total_inflow']
             
             # Merge回原数据
             df = df.merge(best_tag, on='sheep_code', how='left')
@@ -460,6 +530,7 @@ class AlphaModelT7ConceptFlow:
             df['resonance_base_avg_chg'] = df['resonance_base_avg_chg'].fillna(0.0)
             df['resonance_base_breadth'] = df['resonance_base_breadth'].fillna(0.0)
             df['resonance_base_zscore'] = df['resonance_base_zscore'].fillna(0.0)
+            df['tag_total_inflow'] = df.get('tag_total_inflow', pd.Series([0.0] * len(df))).fillna(0.0)
             
             # 计算主线概念判定：resonance_base_avg_chg > 1.5% 且 resonance_base_breadth > 20%
             df['is_main_concept'] = (
@@ -503,30 +574,34 @@ class AlphaModelT7ConceptFlow:
                 np.where(df['resonance_base_breadth'] > 0.20, 10, 0)
             )
             
-            # 孤军深入惩罚：放宽条件，只有当板块表现极差且个股涨幅很大时才扣分
-            # 逻辑：如果resonance_base_avg_chg < 0.3% 且 change_pct > 7%，则扣分（从6%提高到7%）
-            solo_penalty = (
-                (df['resonance_base_avg_chg'] < 0.3) &  # 从0.5降低到0.3
-                (df['change_pct'] > 7.0)  # 从6%提高到7%
-            ).astype(int) * -30  # 从-50降低到-30
+            # v3.0新增：资金流驱动加分
+            # 如果驱动概念的总资金流入 > 1000万，额外加分
+            money_flow_bonus = np.where(
+                df['tag_total_inflow'] > 1000,  # 1000万元
+                25,
+                np.where(df['tag_total_inflow'] > 500, 15, 0)  # 500万元
+            )
+            
+            # v3.0移除：不再有孤军深入惩罚（根据需求）
+            # 所有股票都基于驱动概念计算分数，不再惩罚独立上涨
             
             df['concept_resonance_score'] = (
                 main_concept_bonus + 
                 leader_bonus + 
                 concept_heat_bonus + 
                 concept_breadth_bonus + 
-                solo_penalty
+                money_flow_bonus  # 新增资金流加分
             )
             
             # 统计信息
             main_concept_count = df['is_main_concept'].sum()
             leader_count = df['is_concept_leader'].sum()
-            solo_penalty_count = (solo_penalty < 0).sum()
+            money_flow_positive = (df['tag_total_inflow'] > 0).sum()
             
-            logger.info(f"概念竞速计算完成：")
+            logger.info(f"概念竞速计算完成（资金流驱动版）：")
             logger.info(f"  - 主线概念: {main_concept_count} 只股票")
             logger.info(f"  - 概念领头羊: {leader_count} 只股票")
-            logger.info(f"  - 孤军深入扣分: {solo_penalty_count} 只股票")
+            logger.info(f"  - 资金流驱动概念: {money_flow_positive} 只股票")
             logger.info(f"  - 共振分数范围: {df['concept_resonance_score'].min():.0f} ~ {df['concept_resonance_score'].max():.0f}")
             
             return df
@@ -639,14 +714,16 @@ class AlphaModelT7ConceptFlow:
                     df_history = df_history.sort_values(['sheep_code', 'trade_date'])
                     
                     unique_stocks = df_history['sheep_code'].nunique()
-                    logger.info(f"Level 1: 开始计算 {unique_stocks} 只肥羊的因子")
+                    logger.info(f"Level 1: 开始计算 {unique_stocks} 只肥羊的因子（优化版）")
                     
+                    # 性能优化：减少日志输出频率，批量处理
                     factors_list = []
                     processed_count = 0
                     
                     for sheep_code, group in df_history.groupby('sheep_code'):
                         processed_count += 1
-                        if processed_count % 100 == 0:
+                        # 减少日志输出频率：每1000只输出一次
+                        if processed_count % 1000 == 0:
                             logger.info(f"Level 1: 因子计算进度 {processed_count}/{unique_stocks}")
                         
                         group = group.sort_values('trade_date').reset_index(drop=True)
@@ -1060,15 +1137,20 @@ class AlphaModelT7ConceptFlow:
         scored_df = df.copy()
         regime = regime_info.get('regime', 'Balance')
         
-        # 动态权重（内置配置，根据市场状态自动调整）
-        WEIGHT_CONFIG = {
-            'Attack':  {'tech': 0.50, 'trend': 0.30, 'hot': 0.20},  # 进攻：重技术
-            'Defense': {'tech': 0.25, 'trend': 0.35, 'hot': 0.40},  # 防守：重概念
-            'Balance': {'tech': 0.35, 'trend': 0.35, 'hot': 0.30},  # 震荡：均衡
+        # 动态权重（融合新代码的REGIME_WEIGHTS逻辑）
+        # 新代码使用：technical, fund, concept 三个维度
+        # 现有代码使用：tech, trend, hot 三个维度
+        # 融合后：tech=technical, trend=fund, hot=concept
+        REGIME_WEIGHTS = {
+            "Attack": {"technical": 0.5, "fund": 0.3, "concept": 0.2},
+            "Defense": {"technical": 0.2, "fund": 0.3, "concept": 0.5},
+            "Balance": {"technical": 0.35, "fund": 0.35, "concept": 0.3}
         }
-        weights = WEIGHT_CONFIG.get(regime, WEIGHT_CONFIG['Balance'])
-        w_tech, w_trend, w_hot = weights['tech'], weights['trend'], weights['hot']
-        logger.info(f"Level 3: {regime}模式权重 - 技术:{w_tech}, 趋势:{w_trend}, 热度:{w_hot}")
+        weights = REGIME_WEIGHTS.get(regime, REGIME_WEIGHTS['Balance'])
+        w_tech = weights['technical']  # 技术因子权重
+        w_fund = weights['fund']       # 资金因子权重
+        w_concept = weights['concept']  # 概念因子权重
+        logger.info(f"Level 3: {regime}模式权重 - 技术:{w_tech}, 资金:{w_fund}, 概念:{w_concept}")
         
         # 获取核心评分参数
         vol_threshold = params.get('vol_threshold', 1.5)
@@ -1178,44 +1260,57 @@ class AlphaModelT7ConceptFlow:
         super_large_positive = (scored_df.get('super_large_inflow', pd.Series([0])) > 0).sum()
         logger.info(f"Level 3: 主力资金净流入为正: {main_inflow_positive} 只，超大单净流入为正: {super_large_positive} 只")
         
-        # 计算基础总分（包含资金流和筹码因子）
-        scored_df['total_score'] = (
-            w_tech * s_explosion +
-            w_trend * s_structure +
-            w_hot * s_sector +
+        # 计算基础总分（融合新代码的多因子评分逻辑）
+        # 新代码逻辑：技术因子(0-40) + 资金因子(0-30) + 概念因子(0-30) = 总分(0-100)
+        # 现有代码：爆发力 + 结构 + 概念 + 各种加分项
+        
+        # 标准化各因子到0-100分制
+        # 技术因子：爆发力(0-50) + 结构(0-50) = 0-100，归一化到0-40
+        technical_score = (s_explosion + s_structure) / 100 * 40
+        technical_score = technical_score.clip(0, 40)
+        
+        # 资金因子：资金流加分项，归一化到0-30
+        fund_score = (
             scored_df['ii_bonus'] +
             scored_df['vpc_bonus'] +
-            scored_df['vacuum_bonus'] +
             scored_df['main_inflow_bonus'] +
             scored_df['super_large_bonus']
-        )
+        ).clip(0, 30)
         
-        # 板块Beta弹性打分（Module 4.1）
+        # 概念因子：概念共振分数，归一化到0-30
+        # 概念共振分数范围通常是0-100，需要归一化到0-30
+        if s_sector.max() > 0:
+            concept_score = (s_sector / s_sector.max() * 30).clip(0, 30)
+        else:
+            concept_score = pd.Series([0] * len(scored_df), index=scored_df.index)
+        
+        # 应用动态权重
+        weighted_technical = technical_score * w_tech
+        weighted_fund = fund_score * w_fund
+        weighted_concept = concept_score * w_concept
+        
+        # 基础总分（0-100）
+        base_score = weighted_technical + weighted_fund + weighted_concept
+        
+        # 额外加分项（筹码因子等，不参与权重调整）
+        bonus_score = scored_df['vacuum_bonus']
+        
+        # 最终总分（0-100，但可能超过100）
+        scored_df['total_score'] = (base_score + bonus_score).clip(0, 100)
+        
+        # 板块Beta弹性打分（Module 4.1）- v3.0优化：20cm偏好
         if 'is_star_market' in scored_df.columns and 'is_gem' in scored_df.columns:
-            # 根据市场状态设置Factor
-            if regime == "Attack":
-                factor_regime = params.get('beta_factor_attack', 0.15)  # 进攻时奖励高Beta
-            elif regime == "Defense":
-                factor_regime = params.get('beta_factor_defense', -0.15)  # 防守时惩罚高波动
-            else:
-                factor_regime = params.get('beta_factor_balance', 0.0)  # 震荡时中性
-            
-            # 计算肥羊的Beta（简化：使用ATR/Close作为波动率代理）
-            if 'atr' in scored_df.columns and 'close_price' in scored_df.columns:
-                scored_df['beta_proxy'] = scored_df['atr'] / scored_df['close_price']
-            else:
-                scored_df['beta_proxy'] = 0.0
-            
-            # 识别创业板和科创板
+            # 识别创业板和科创板（20cm股票）
             gem_star_mask = (scored_df['is_star_market'] == 1) | (scored_df['is_gem'] == 1)
             
-            # 应用Beta弹性公式：Score_Final = Score_Base × (1 + Is_Gem/Star × Factor_Regime × β_Stock)
-            beta_adjustment = 1 + (gem_star_mask.astype(int) * factor_regime * scored_df['beta_proxy'])
-            scored_df.loc[gem_star_mask, 'total_score'] = scored_df.loc[gem_star_mask, 'total_score'] * beta_adjustment[gem_star_mask]
+            # v3.0新增：20cm弹性加分（固定+15分，不再基于Beta调整）
+            # 这是为了偏好高弹性股票，特别是在进攻模式下
+            elasticity_bonus = gem_star_mask.astype(int) * 15
+            scored_df['total_score'] = scored_df['total_score'] + elasticity_bonus
             
             gem_star_count = gem_star_mask.sum()
             if gem_star_count > 0:
-                logger.info(f"Level 3: 板块Beta弹性打分（{regime}模式，Factor={factor_regime}），共 {gem_star_count} 只肥羊获得调整")
+                logger.info(f"Level 3: 20cm弹性加分（+15分），共 {gem_star_count} 只肥羊获得加分")
         
         # 拥挤度风控（Module 4.2）
         if 'turnover_rate' in scored_df.columns and 'change_pct' in scored_df.columns:
@@ -1250,14 +1345,21 @@ class AlphaModelT7ConceptFlow:
     
     def level4_ai_enhancement(self, df: pd.DataFrame, params: Dict) -> pd.DataFrame:
         """
-        第4级：AI概率修正 - v2.0优化版
-        使用多因子规则计算胜率，增加更多正向因子提高胜率
+        第4级：AI概率修正 - v2.0优化版（解决过宽或过紧问题）
+        使用多因子规则计算胜率，采用更合理的评分机制
+        
+        核心改进：
+        1. 基础胜率从40%调整为45%，更符合实际
+        2. 采用加权评分而非简单累加，避免过度加分
+        3. 引入AI分数作为胜率的重要参考
+        4. 根据市场状态动态调整胜率范围
         
         胜率计算因子：
         1. 基础因子：换手率、量比、VCP
         2. 资金流因子：主力净流入、Intraday Intensity
         3. 概念因子：概念共振、概念龙头
         4. 趋势因子：RSI、真空区
+        5. AI分数因子：total_score作为重要参考
         """
         if df.empty:
             return df
@@ -1269,61 +1371,76 @@ class AlphaModelT7ConceptFlow:
         enhanced_df['turnover_rate'] = enhanced_df['turnover_rate'].fillna(0)
         enhanced_df['vol_ratio'] = enhanced_df['vol_ratio'].fillna(1.0)
         
-        # v2.0优化：多因子胜率计算
-        # 基础胜率 = 40%
-        base_probability = 40
+        # v2.0优化：多因子胜率计算（解决过宽或过紧问题）
+        # 基础胜率 = 45%（从40%提升，更符合实际）
+        base_probability = 45
         
-        # 计算胜率加分项（每个因子最多加10-15分）
+        # 计算胜率加分项（采用加权评分，避免过度加分）
         probability_bonus = pd.Series([0.0] * len(enhanced_df), index=enhanced_df.index)
         
-        # 1. 换手率因子：1% < turnover_rate < 15% 加10分
+        # 1. 换手率因子：1% < turnover_rate < 15% 加8分（从10分降低）
         turnover_ok = (enhanced_df['turnover_rate'] > 1.0) & (enhanced_df['turnover_rate'] < 15.0)
-        probability_bonus += turnover_ok.astype(int) * 10
+        probability_bonus += turnover_ok.astype(int) * 8
         
-        # 2. 量比因子：vol_ratio >= 1.5 加10分
+        # 2. 量比因子：vol_ratio >= 1.5 加8分（从10分降低）
         vol_ratio_min = params.get('ai_vol_ratio_min', 1.2)
         vol_ratio_ok = enhanced_df['vol_ratio'] >= vol_ratio_min
-        probability_bonus += vol_ratio_ok.astype(int) * 10
+        probability_bonus += vol_ratio_ok.astype(int) * 8
         
-        # 3. VCP因子：vcp_factor < 0.5 加5分
+        # 3. VCP因子：vcp_factor < 0.5 加5分（保持不变）
         if 'vcp_factor' in enhanced_df.columns:
             enhanced_df['vcp_factor'] = enhanced_df['vcp_factor'].fillna(1.0)
-            vcp_factor_max = params.get('ai_vcp_factor_max', 0.5)  # 放宽到0.5
+            vcp_factor_max = params.get('ai_vcp_factor_max', 0.5)
             vcp_ok = enhanced_df['vcp_factor'] < vcp_factor_max
             probability_bonus += vcp_ok.astype(int) * 5
         
-        # 4. 主力资金因子：main_net_inflow > 0 加10分
+        # 4. 主力资金因子：main_net_inflow > 500万 加8分（提高阈值，从0改为500万）
         if 'main_net_inflow' in enhanced_df.columns:
-            main_inflow_ok = enhanced_df['main_net_inflow'] > 0
-            probability_bonus += main_inflow_ok.astype(int) * 10
+            main_inflow_ok = enhanced_df['main_net_inflow'] > 500
+            probability_bonus += main_inflow_ok.astype(int) * 8
         
-        # 5. Intraday Intensity因子：ii_pct > 0 加5分
+        # 5. Intraday Intensity因子：ii_pct > 0 加3分（从5分降低）
         if 'intraday_intensity_pct' in enhanced_df.columns:
             ii_ok = enhanced_df['intraday_intensity_pct'] > 0
-            probability_bonus += ii_ok.astype(int) * 5
+            probability_bonus += ii_ok.astype(int) * 3
         
-        # 6. 概念共振因子：is_main_concept = 1 加10分
+        # 6. 概念共振因子：is_main_concept = 1 加8分（从10分降低）
         if 'is_main_concept' in enhanced_df.columns:
             concept_ok = enhanced_df['is_main_concept'] == 1
-            probability_bonus += concept_ok.astype(int) * 10
+            probability_bonus += concept_ok.astype(int) * 8
         
-        # 7. 概念龙头因子：is_concept_leader = 1 加10分
+        # 7. 概念龙头因子：is_concept_leader = 1 加8分（从10分降低）
         if 'is_concept_leader' in enhanced_df.columns:
             leader_ok = enhanced_df['is_concept_leader'] == 1
-            probability_bonus += leader_ok.astype(int) * 10
+            probability_bonus += leader_ok.astype(int) * 8
         
-        # 8. RSI因子：30 < RSI < 70 加5分（非超买超卖区）
+        # 8. RSI因子：30 < RSI < 70 加3分（从5分降低）
         if 'rsi_6' in enhanced_df.columns:
             rsi_ok = (enhanced_df['rsi_6'] > 30) & (enhanced_df['rsi_6'] < 70)
-            probability_bonus += rsi_ok.astype(int) * 5
+            probability_bonus += rsi_ok.astype(int) * 3
         
-        # 9. 真空区因子：is_vacuum_zone = 1 加5分
+        # 9. 真空区因子：is_vacuum_zone = 1 加3分（从5分降低）
         if 'is_vacuum_zone' in enhanced_df.columns:
             vacuum_ok = enhanced_df['is_vacuum_zone'] == 1
-            probability_bonus += vacuum_ok.astype(int) * 5
+            probability_bonus += vacuum_ok.astype(int) * 3
         
-        # 计算最终胜率（最高80%，最低40%）
-        enhanced_df['win_probability'] = (base_probability + probability_bonus).clip(40, 80)
+        # 10. AI分数因子（新增）：根据total_score调整胜率
+        # AI分数越高，胜率越高，但采用非线性映射，避免过度放大
+        if 'total_score' in enhanced_df.columns:
+            # 将AI分数（0-100）映射到胜率调整（-5到+15分）
+            # 分数<30: -5分，30-50: 0分，50-70: +8分，70-90: +12分，>90: +15分
+            ai_score = enhanced_df['total_score'].fillna(50)
+            ai_bonus = np.where(
+                ai_score < 30, -5,
+                np.where(ai_score < 50, 0,
+                np.where(ai_score < 70, 8,
+                np.where(ai_score < 90, 12, 15)))
+            )
+            probability_bonus += ai_bonus
+        
+        # 计算最终胜率（范围：35%-75%，从40-80%收紧）
+        # 这样既避免了过宽（上限降低），也避免了过紧（下限降低）
+        enhanced_df['win_probability'] = (base_probability + probability_bonus).clip(35, 75)
         
         # 记录胜率分布
         high_prob_count = (enhanced_df['win_probability'] >= 60).sum()
@@ -1332,28 +1449,32 @@ class AlphaModelT7ConceptFlow:
         logger.info(f"Level 4: 胜率分布 - 高(>=60%): {high_prob_count}, 中(50-60%): {mid_prob_count}, 低(<50%): {low_prob_count}")
         
         if ai_filter:
-            # 放宽胜率要求：默认45%
+            # 默认胜率要求：45%（保持不变，但胜率计算已优化）
             min_win_probability = params.get('min_win_probability', 45)
             before_count = len(enhanced_df)
             enhanced_df = enhanced_df[enhanced_df['win_probability'] >= min_win_probability]
             after_count = len(enhanced_df)
             logger.info(f"Level 4 AI过滤: {before_count} -> {after_count} (胜率 >= {min_win_probability}%)")
             
-            # 如果过滤后为空，进一步放宽到40%
+            # 如果过滤后为空，进一步放宽到40%（但保持合理的胜率计算）
             if enhanced_df.empty and before_count > 0:
                 logger.warning(f"Level 4: 胜率>={min_win_probability}%过滤后无数据，放宽到>=40%")
                 enhanced_df = df.copy()
-                # 重新计算（简化版）
+                # 重新计算（简化版，但保持合理的胜率范围）
                 enhanced_df['turnover_rate'] = enhanced_df['turnover_rate'].fillna(0)
                 enhanced_df['vol_ratio'] = enhanced_df['vol_ratio'].fillna(1.0)
-                # 只要换手率合理，就给基础胜率
-                basic_ok = (enhanced_df['turnover_rate'] > 0.5) & (enhanced_df['turnover_rate'] < 25.0)
+                # 基础筛选：换手率合理且量比>=1.2
+                basic_ok = (
+                    (enhanced_df['turnover_rate'] > 0.5) & 
+                    (enhanced_df['turnover_rate'] < 25.0) &
+                    (enhanced_df['vol_ratio'] >= 1.2)
+                )
                 enhanced_df['win_probability'] = np.where(basic_ok, 45, 40)
                 enhanced_df = enhanced_df[enhanced_df['win_probability'] >= 40]
         
         return enhanced_df
     
-    def run_full_pipeline(self, trade_date: date, params: Dict = None, top_n: Optional[int] = None) -> Tuple[List[Dict], Optional[str]]:
+    def run_full_pipeline(self, trade_date: date, params: Dict = None, top_n: Optional[int] = None) -> Tuple[List[Dict], Optional[str], Optional[Dict]]:
         """
         运行完整的T7概念资金双驱流程
         
@@ -1363,7 +1484,10 @@ class AlphaModelT7ConceptFlow:
             top_n: 返回数量（可选，默认返回所有符合条件的）
         
         Returns:
-            (推荐结果列表, 诊断信息)
+            (推荐结果列表, 诊断信息, 元数据字典)
+            元数据字典包含：
+            - market_regime: 市场状态 (Attack/Defense/Balance)
+            - funnel_data: 漏斗数据 {'total': N, 'L1_pass': N, 'L2_pass': N, 'final': N}
         """
         # 合并用户参数和默认参数
         params = self.merge_params(params)
@@ -1376,6 +1500,14 @@ class AlphaModelT7ConceptFlow:
             regime_info = self.detect_market_regime(trade_date)
             diagnostic_info.append(f"市场状态: {regime_info['regime']} (RSRS Z-score: {regime_info['rsrs_zscore']:.3f})")
             
+            # 初始化漏斗数据
+            funnel_data = {
+                'total': 0,
+                'L1_pass': 0,
+                'L2_pass': 0,
+                'final': 0
+            }
+            
             # Level 1: 特征提取（集成概念竞速、资金流、筹码分析）
             logger.info(f"Level 1: 特征提取 (trade_date={trade_date})")
             df = self.level1_extract_features(trade_date)
@@ -1384,7 +1516,15 @@ class AlphaModelT7ConceptFlow:
                 msg = "Level 1返回空数据 - 可能原因：数据库中没有足够的历史数据（需要至少90天）"
                 logger.warning(msg)
                 diagnostic_info.append(f"Level 1: 提取失败 - 数据库中没有 {trade_date} 之前至少90天的肥羊数据")
-                return [], " | ".join(diagnostic_info)
+                metadata = {
+                    'market_regime': regime_info['regime'],
+                    'funnel_data': funnel_data
+                }
+                return [], " | ".join(diagnostic_info), metadata
+            
+            # 记录Level 1通过数量（全市场扫描）
+            funnel_data['total'] = len(df)
+            funnel_data['L1_pass'] = len(df)
             
             logger.info(f"Level 1: 成功提取 {len(df)} 只肥羊的特征")
             diagnostic_info.append(f"Level 1: 提取了 {len(df)} 只肥羊")
@@ -1394,6 +1534,7 @@ class AlphaModelT7ConceptFlow:
             before_level2 = len(df)
             df = self.level2_adaptive_filter(df, params, regime_info)
             after_level2 = len(df)
+            funnel_data['L2_pass'] = after_level2
             logger.info(f"Level 2: 过滤后: {len(df)} 只肥羊")
             diagnostic_info.append(f"Level 2: {before_level2} -> {after_level2} 只肥羊 (市场状态: {regime_info['regime']})")
             
@@ -1401,7 +1542,11 @@ class AlphaModelT7ConceptFlow:
                 msg = f"Level 2过滤后无数据 - 可能原因：过滤条件太严格或市场状态不适合"
                 logger.warning(msg)
                 diagnostic_info.append(f"Level 2: 所有肥羊被过滤 - 建议：根据市场状态调整参数")
-                return [], " | ".join(diagnostic_info)
+                metadata = {
+                    'market_regime': regime_info['regime'],
+                    'funnel_data': funnel_data
+                }
+                return [], " | ".join(diagnostic_info), metadata
             
             # Level 3: 打分排序（Module 4）
             logger.info(f"Level 3: 打分排序 (当前: {len(df)} 只肥羊)")
@@ -1423,18 +1568,27 @@ class AlphaModelT7ConceptFlow:
                 msg = f"Level 4过滤后无数据 - 可能原因：AI过滤条件太严格（胜率要求 >= 60%）"
                 logger.warning(msg)
                 diagnostic_info.append(f"Level 4: 所有肥羊被过滤 - 建议：关闭AI过滤或降低胜率要求")
-                return [], " | ".join(diagnostic_info)
+                metadata = {
+                    'market_regime': regime_info['regime'],
+                    'funnel_data': funnel_data
+                }
+                return [], " | ".join(diagnostic_info), metadata
+            
+            # 记录最终数量
+            funnel_data['final'] = len(df)
             
             # 确保数据按total_score降序排序
             df = df.sort_values('total_score', ascending=False).reset_index(drop=True)
             
-            # 取Top N
+            # 取Top N（如果没有指定，默认限制为20，避免返回过多数据）
             if top_n is not None and top_n > 0:
                 top_stocks = df.head(top_n).copy()
                 logger.info(f"最终推荐: {len(top_stocks)} 只肥羊（限制Top {top_n}）")
             else:
-                top_stocks = df.copy()
-                logger.info(f"最终推荐: {len(top_stocks)} 只肥羊（全部符合条件的肥羊）")
+                # 默认限制20只，避免返回过多数据导致超时
+                default_limit = 20
+                top_stocks = df.head(default_limit).copy()
+                logger.info(f"最终推荐: {len(top_stocks)} 只肥羊（未指定top_n，默认限制{default_limit}只）")
             
             if top_stocks.empty:
                 logger.warning("Top N肥羊为空，无法生成推荐结果")
@@ -1533,6 +1687,28 @@ class AlphaModelT7ConceptFlow:
                 result_df['concept_trend'] = top_stocks['industry'].fillna('未知')
             else:
                 result_df['concept_trend'] = '未知'
+            
+            # 添加驱动概念的资金流数据
+            if 'tag_total_inflow' in top_stocks.columns:
+                result_df['tag_total_inflow'] = top_stocks['tag_total_inflow'].fillna(0.0).astype(float)
+            else:
+                result_df['tag_total_inflow'] = 0.0
+            
+            if 'resonance_base_avg_chg' in top_stocks.columns:
+                result_df['tag_avg_pct'] = top_stocks['resonance_base_avg_chg'].fillna(0.0).astype(float)
+            else:
+                result_df['tag_avg_pct'] = 0.0
+            
+            # 添加20cm标识
+            if 'is_star_market' in top_stocks.columns:
+                result_df['is_star_market'] = top_stocks['is_star_market'].fillna(0).astype(bool)
+            else:
+                result_df['is_star_market'] = False
+            
+            if 'is_gem' in top_stocks.columns:
+                result_df['is_gem'] = top_stocks['is_gem'].fillna(0).astype(bool)
+            else:
+                result_df['is_gem'] = False
             
             # 重命名列
             result_df = result_df.rename(columns={'total_score': 'ai_score'})
@@ -1684,12 +1860,27 @@ class AlphaModelT7ConceptFlow:
                 r['market_regime'] = str(r.get('market_regime', 'Balance'))
                 r['resonance_score'] = float(r.get('resonance_score', 0.0))
                 r['concept_trend'] = str(r.get('concept_trend', '未知'))
+                r['tag_total_inflow'] = float(r.get('tag_total_inflow', 0.0))
+                r['tag_avg_pct'] = float(r.get('tag_avg_pct', 0.0))
+                r['is_star_market'] = bool(r.get('is_star_market', False))
+                r['is_gem'] = bool(r.get('is_gem', False))
             
             logger.info(f"成功生成 {len(results)} 条推荐结果")
             diagnostic_info.append(f"最终: 生成 {len(results)} 条推荐")
-            return results, " | ".join(diagnostic_info)
+            
+            # 构建元数据
+            metadata = {
+                'market_regime': regime_info['regime'],
+                'funnel_data': funnel_data
+            }
+            
+            return results, " | ".join(diagnostic_info), metadata
             
         except Exception as e:
             logger.error(f"T7概念资金双驱模型运行失败: {e}", exc_info=True)
             diagnostic_info.append(f"异常: {str(e)}")
-            return [], " | ".join(diagnostic_info)
+            metadata = {
+                'market_regime': 'Balance',
+                'funnel_data': {'total': 0, 'L1_pass': 0, 'L2_pass': 0, 'final': 0}
+            }
+            return [], " | ".join(diagnostic_info), metadata

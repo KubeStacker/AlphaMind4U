@@ -403,7 +403,7 @@ const Tab1: React.FC = () => {
         {
           type: 'inside',
           xAxisIndex: [0, 1],
-          start: 70,
+          start: dailyData.length > 30 ? ((dailyData.length - 30) / dailyData.length * 100) : 0,
           end: 100,
         },
         {
@@ -411,7 +411,7 @@ const Tab1: React.FC = () => {
           xAxisIndex: [0, 1],
           type: 'slider',
           top: '90%',
-          start: 70,
+          start: dailyData.length > 30 ? ((dailyData.length - 30) / dailyData.length * 100) : 0,
           end: 100,
         },
       ],

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { Card, Button, Slider, InputNumber, Switch, Space, message, Tabs, Table, Tag, Statistic, Row, Col, Modal, DatePicker, Alert, Collapse, Divider, Tooltip } from 'antd'
+import { Card, Button, Slider, InputNumber, Switch, Space, message, Tabs, Table, Tag, Statistic, Row, Col, Modal, DatePicker, Alert, Collapse, Divider, Tooltip, Badge, Popover } from 'antd'
 import { ThunderboltOutlined, RocketOutlined, DeleteOutlined, ClearOutlined, QuestionCircleOutlined, SettingOutlined } from '@ant-design/icons'
 import ReactECharts from 'echarts-for-react'
 import { modelKApi, BacktestParams, BacktestResult, Recommendation, RecommendationHistory } from '../api/modelK'
@@ -35,6 +35,8 @@ const ModelK: React.FC = () => {
   const [diagnosticInfo, setDiagnosticInfo] = useState<string>('')
   const [historyLoading, setHistoryLoading] = useState(false)
   const [historyData, setHistoryData] = useState<RecommendationHistory[]>([])
+  const [marketRegime, setMarketRegime] = useState<string>('')
+  const [funnelData, setFunnelData] = useState<{total: number, L1_pass: number, L2_pass: number, final: number} | null>(null)
 
   const handleBacktest = async () => {
     if (!dateRange[0] || !dateRange[1]) { message.warning('请选择回测日期范围'); return }
@@ -56,10 +58,28 @@ const ModelK: React.FC = () => {
     try {
       // 如果用户选择了日期，使用用户选择的日期；否则使用null（后端会自动使用最近的交易日）
       const tradeDate = selectedRecommendDate ? selectedRecommendDate.format('YYYY-MM-DD') : undefined
-      const result = await modelKApi.getRecommendations(params, tradeDate)
+      // 默认限制返回20只，避免超时和返回过多数据
+      const result = await modelKApi.getRecommendations(params, tradeDate, 20)
       setRecommendations(result.recommendations || [])
       setRecommendDate(result.trade_date || '')
       setDiagnosticInfo(result.diagnostic_info || '')
+      
+      // 设置市场状态和漏斗数据
+      if (result.metadata) {
+        setMarketRegime(result.metadata.market_regime || '')
+        setFunnelData(result.metadata.funnel_data || null)
+        // 调试日志
+        if (import.meta.env.DEV) {
+          console.log('接收到的metadata:', result.metadata)
+          console.log('funnel_data:', result.metadata.funnel_data)
+        }
+      } else {
+        setMarketRegime('')
+        setFunnelData(null)
+        if (import.meta.env.DEV) {
+          console.warn('未接收到metadata数据，result:', result)
+        }
+      }
       if (result.count > 0) {
         message.success(`获取到 ${result.count} 只推荐肥羊（${result.trade_date}）`)
       } else {
@@ -74,6 +94,8 @@ const ModelK: React.FC = () => {
       setRecommendations([])
       setRecommendDate('')
       setDiagnosticInfo('')
+      setMarketRegime('')
+      setFunnelData(null)
     }
     finally { setRecommendLoading(false) }
   }
@@ -150,12 +172,45 @@ const ModelK: React.FC = () => {
         }
       },
       { 
-        title: '板块', 
-        dataIndex: 'sector_trend', 
-        key: 'sector_trend', 
-        width: 100, 
+        title: '驱动概念', 
+        dataIndex: 'concept_trend', 
+        key: 'concept_trend', 
+        width: 120, 
         ellipsis: true,
-        render: (sector: string) => sector || '-'
+        render: (concept: string, record: Recommendation) => {
+          const conceptName = concept || record.sector_trend || '-'
+          if (conceptName === '-') return '-'
+          
+          // 显示驱动概念徽章，hover时显示资金流信息
+          const inflow = record.tag_total_inflow
+          const avgPct = record.tag_avg_pct
+          
+          return (
+            <Tooltip 
+              title={
+                <div>
+                  <div>概念: {conceptName}</div>
+                  {inflow !== undefined && <div>板块资金流入: {inflow > 0 ? '+' : ''}{(inflow / 10000).toFixed(2)}亿元</div>}
+                  {avgPct !== undefined && <div>板块平均涨幅: {avgPct > 0 ? '+' : ''}{avgPct.toFixed(2)}%</div>}
+                </div>
+              }
+            >
+              <Tag color="blue">{conceptName}</Tag>
+            </Tooltip>
+          )
+        }
+      },
+      {
+        title: '弹性',
+        key: 'elasticity',
+        width: 80,
+        render: (_: any, record: Recommendation) => {
+          const is20cm = record.is_star_market || record.is_gem
+          if (is20cm) {
+            return <Tag color="purple">20cm</Tag>
+          }
+          return '-'
+        }
       },
       { 
         title: '共振分', 
@@ -199,24 +254,29 @@ const ModelK: React.FC = () => {
       children: (
         <Card>
           {recommendations.length > 0 ? <>
-            <div style={{ marginBottom: '16px', color: '#666' }}>
-              推荐日期: {recommendDate}
-              {recommendations.length > 0 && recommendations[0].market_regime && (
-                <span style={{ marginLeft: '16px' }}>
-                  市场状态: 
-                  <Tag 
-                    color={
-                      recommendations[0].market_regime === 'Attack' ? 'red' : 
-                      recommendations[0].market_regime === 'Defense' ? 'blue' : 
-                      'default'
-                    }
-                    style={{ marginLeft: '8px' }}
-                  >
-                    {recommendations[0].market_regime === 'Attack' ? '进攻' : 
-                     recommendations[0].market_regime === 'Defense' ? '防守' : 
-                     '震荡'}
-                  </Tag>
-                </span>
+            <div style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
+              <div style={{ color: '#666' }}>推荐日期: {recommendDate}</div>
+              {marketRegime && (
+                <Badge 
+                  status={marketRegime === 'Attack' ? 'success' : marketRegime === 'Defense' ? 'error' : 'default'}
+                  text={
+                    <span>
+                      市场状态: 
+                      <Tag 
+                        color={
+                          marketRegime === 'Attack' ? 'green' : 
+                          marketRegime === 'Defense' ? 'red' : 
+                          'default'
+                        }
+                        style={{ marginLeft: '8px' }}
+                      >
+                        {marketRegime === 'Attack' ? '进攻' : 
+                         marketRegime === 'Defense' ? '防守' : 
+                         '震荡'}
+                      </Tag>
+                    </span>
+                  }
+                />
               )}
             </div>
             <Table 
@@ -531,17 +591,49 @@ const ModelK: React.FC = () => {
             </div>
 
             <div style={{ marginTop: '16px' }}>
-              <Button 
-                type="primary" 
-                icon={<RocketOutlined />} 
-                block 
-                size="large"
-                onClick={handleGetRecommendations} 
-                loading={recommendLoading}
-                style={{ height: '48px', fontSize: '16px' }}
+              <Popover
+                content={
+                  funnelData && (funnelData.total > 0 || funnelData.L1_pass > 0 || funnelData.L2_pass > 0 || funnelData.final > 0) ? (
+                    <div style={{ fontSize: '14px', minWidth: '200px' }}>
+                      <div style={{ marginBottom: '8px', display: 'flex', justifyContent: 'space-between' }}>
+                        <span>全市场扫描:</span>
+                        <strong style={{ color: '#1890ff' }}>{funnelData.total || 0}</strong>
+                      </div>
+                      <div style={{ marginBottom: '8px', display: 'flex', justifyContent: 'space-between' }}>
+                        <span>初筛合格:</span>
+                        <strong style={{ color: '#52c41a' }}>{funnelData.L1_pass || 0}</strong>
+                      </div>
+                      <div style={{ marginBottom: '8px', display: 'flex', justifyContent: 'space-between' }}>
+                        <span>资金/形态过滤:</span>
+                        <strong style={{ color: '#faad14' }}>{funnelData.L2_pass || 0}</strong>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span>最终优选:</span>
+                        <strong style={{ color: '#ff4d4f' }}>{funnelData.final || 0}</strong>
+                      </div>
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: '14px', color: '#999', minWidth: '200px' }}>
+                      {recommendLoading ? '正在计算中...' : '点击按钮获取推荐后显示漏斗数据'}
+                    </div>
+                  )
+                }
+                title="筛选漏斗"
+                trigger="hover"
+                placement="top"
               >
-                智能推荐 (Get Alpha)
-              </Button>
+                <Button 
+                  type="primary" 
+                  icon={<RocketOutlined />} 
+                  block 
+                  size="large"
+                  onClick={handleGetRecommendations} 
+                  loading={recommendLoading}
+                  style={{ height: '48px', fontSize: '16px' }}
+                >
+                  智能推荐 (Get Alpha)
+                </Button>
+              </Popover>
             </div>
           </Card>
         </Col>

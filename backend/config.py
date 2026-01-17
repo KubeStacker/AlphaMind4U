@@ -21,3 +21,6 @@ class Config:
     # 定时任务配置
     DATA_UPDATE_HOUR = 18  # 每天18点更新数据
     DATA_UPDATE_MINUTE = 0
+    
+    # RSRS市场状态识别参数
+    RSRS_WINDOW = 18  # RSRS回归窗口（N日）

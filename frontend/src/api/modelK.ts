@@ -87,8 +87,13 @@ export interface Recommendation {
   return_10d?: number  // 10日涨幅（%）
   return_nd?: number  // 最近N天涨幅（%，10个交易日内时使用）
   market_regime?: string  // 市场状态：Attack/Defense/Balance
-  sector_trend?: string  // 所属板块
+  concept_trend?: string  // 驱动概念（原sector_trend）
+  sector_trend?: string  // 所属板块（兼容旧字段）
   resonance_score?: number  // 板块共振分数
+  tag_total_inflow?: number  // 驱动概念总资金流入（万元）
+  tag_avg_pct?: number  // 驱动概念平均涨幅（%）
+  is_star_market?: boolean  // 是否科创板
+  is_gem?: boolean  // 是否创业板
 }
 
 export interface RecommendResponse {
@@ -96,6 +101,15 @@ export interface RecommendResponse {
   recommendations: Recommendation[]
   count: number
   diagnostic_info?: string
+  metadata?: {
+    market_regime?: string  // 市场状态：Attack/Defense/Balance
+    funnel_data?: {
+      total: number  // 全市场扫描
+      L1_pass: number  // 初筛合格
+      L2_pass: number  // 资金/形态过滤
+      final: number  // 最终优选
+    }
+  }
 }
 
 export interface RecommendationHistory {
@@ -126,10 +140,11 @@ export const modelKApi = {
   },
 
   // 获取智能推荐
-  getRecommendations: async (params: BacktestParams, tradeDate?: string): Promise<RecommendResponse> => {
+  getRecommendations: async (params: BacktestParams, tradeDate?: string, topN?: number): Promise<RecommendResponse> => {
     const response = await client.post('/model-k/recommend', {
       params,
-      trade_date: tradeDate
+      trade_date: tradeDate,
+      top_n: topN || 20  // 默认返回20只，避免返回过多数据导致超时
     })
     return response.data
   },

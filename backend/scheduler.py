@@ -25,9 +25,6 @@ def collect_natural_day_data():
 
 def collect_trading_day_data():
     """交易日数据采集任务（仅在交易日15:00执行）"""
-    from db.task_execution_repository import TaskExecutionRepository
-    
-    task_name = 'trading_day_data_collection'
     today = date.today()
     
     try:
@@ -44,23 +41,19 @@ def collect_trading_day_data():
         # 采集资金流向数据（仅在交易日）
         service.collect_money_flow_data()
         
-        # 采集板块资金流向数据（仅在交易日，15:00最终刷新）
-        service.collect_sector_money_flow_data(target_date=today)
+        # 采集概念资金流向数据（仅在交易日，15:00最终刷新）
+        service.collect_concept_money_flow_data(target_date=today)
         
         # 采集大盘指数数据（仅在交易日，用于RSRS牛熊市判断）
         service.collect_index_data(index_code='CSI1000')
         
-        # 记录执行成功
-        TaskExecutionRepository.record_execution(task_name, 'success', '交易日数据采集完成', today)
         logger.info("交易日数据采集任务完成")
     except Exception as e:
         error_msg = f"交易日数据采集失败: {e}"
-        # 记录执行失败
-        TaskExecutionRepository.record_execution(task_name, 'failed', error_msg, today)
         logger.error(error_msg, exc_info=True)
 
-def collect_sector_money_flow_realtime():
-    """板块资金流实时采集任务（交易时间每30分钟执行）"""
+def collect_concept_money_flow_realtime():
+    """概念资金流实时采集任务（交易时间每30分钟执行）"""
     from datetime import datetime
     
     try:
@@ -74,11 +67,11 @@ def collect_sector_money_flow_realtime():
             return
         
         service = DataCollectionService()
-        # 采集当日板块资金流数据（实时刷新）
-        service.collect_sector_money_flow_data(target_date=today)
-        logger.info("板块资金流实时采集任务完成")
+        # 采集当日概念资金流数据（实时刷新）
+        service.collect_concept_money_flow_data(target_date=today)
+        logger.info("概念资金流实时采集任务完成")
     except Exception as e:
-        logger.error(f"板块资金流实时采集失败: {e}", exc_info=True)
+        logger.error(f"概念资金流实时采集失败: {e}", exc_info=True)
 
 def collect_concept_data():
     """概念板块数据采集任务（每天凌晨3点执行）"""
@@ -89,6 +82,18 @@ def collect_concept_data():
     except Exception as e:
         logger.error(f"概念板块数据采集失败: {e}", exc_info=True)
 
+def sync_concept_metadata():
+    """概念元数据同步任务（每天08:00执行，开盘前同步最新概念）"""
+    try:
+        service = DataCollectionService()
+        result = service.sync_concept_metadata()
+        if result['success']:
+            logger.info(f"概念元数据同步完成: 新增 {result['new_concepts']} 个概念，共 {result['total_stocks']} 只股票")
+        else:
+            logger.error(f"概念元数据同步失败: {result.get('errors', [])}")
+    except Exception as e:
+        logger.error(f"概念元数据同步失败: {e}", exc_info=True)
+
 def cleanup_old_data():
     """数据清理任务（每天凌晨4点执行）"""
     try:
@@ -97,8 +102,8 @@ def cleanup_old_data():
         # 清理资金流旧数据（保留最近3年）
         service.cleanup_old_money_flow_data()
         
-        # 清理板块资金流旧数据（保留最近3个月）
-        service.cleanup_old_sector_money_flow_data()
+        # 清理概念资金流旧数据（保留最近3个月）
+        service.cleanup_old_concept_money_flow_data()
         
         logger.info("数据清理任务完成")
     except Exception as e:
@@ -106,25 +111,19 @@ def cleanup_old_data():
 
 def check_and_trigger_missed_tasks():
     """检查并触发错过的任务（启动时和定期检查）"""
-    from db.task_execution_repository import TaskExecutionRepository
     from datetime import datetime
     
     today = date.today()
     current_time = datetime.now()
     
     # 检查交易日数据采集任务
-    if TradeDateAdapter.is_trading_day(today):
-        task_name = 'trading_day_data_collection'
-        has_executed = TaskExecutionRepository.has_executed_today(task_name, today)
-        
-        # 如果今天还没执行成功，且当前时间已经过了15:00，立即执行
-        # 注意：如果之前执行失败，也会重新执行
-        if not has_executed and current_time.hour >= 15:
-            logger.info(f"检测到今天交易日数据采集任务未执行或执行失败，当前时间已过15:00，立即触发执行")
-            try:
-                collect_trading_day_data()
-            except Exception as e:
-                logger.error(f"补偿执行交易日数据采集失败: {e}", exc_info=True)
+    # 如果当前时间已经过了15:00，且是交易日，立即执行
+    if TradeDateAdapter.is_trading_day(today) and current_time.hour >= 15:
+        logger.info(f"检测到当前时间已过15:00，且是交易日，触发交易日数据采集任务")
+        try:
+            collect_trading_day_data()
+        except Exception as e:
+            logger.error(f"补偿执行交易日数据采集失败: {e}", exc_info=True)
 
 def start_scheduler():
     """启动定时任务调度器"""
@@ -157,6 +156,15 @@ def start_scheduler():
         replace_existing=True
     )
     
+    # 概念元数据同步：每天08:00执行（开盘前同步最新概念）
+    scheduler.add_job(
+        sync_concept_metadata,
+        trigger=CronTrigger(hour=8, minute=0),
+        id='concept_metadata_sync',
+        name='概念元数据同步（EastMoney）',
+        replace_existing=True
+    )
+    
     # 数据清理任务：每天凌晨4点执行
     scheduler.add_job(
         cleanup_old_data,
@@ -166,12 +174,12 @@ def start_scheduler():
         replace_existing=True
     )
     
-    # 板块资金流实时采集：交易时间每30分钟执行（9:30-15:00）
+    # 概念资金流实时采集：交易时间每30分钟执行（9:30-15:00）
     scheduler.add_job(
-        collect_sector_money_flow_realtime,
+        collect_concept_money_flow_realtime,
         trigger=CronTrigger(hour='9-14', minute='0,30'),  # 9:00-14:59每30分钟
-        id='sector_money_flow_realtime',
-        name='板块资金流实时采集（交易时间每30分钟）',
+        id='concept_money_flow_realtime',
+        name='概念资金流实时采集（交易时间每30分钟）',
         replace_existing=True
     )
     
@@ -187,10 +195,11 @@ def start_scheduler():
     scheduler.start()
     logger.info("定时任务调度器已启动")
     logger.info("- 每天18:00执行自然日数据采集（热度榜）")
-    logger.info("- 交易日15:00执行交易日数据采集（肥羊数据、资金流、板块资金流，仅在交易日）")
-    logger.info("- 交易时间每30分钟执行板块资金流实时采集（9:00-14:59）")
+    logger.info("- 交易日15:00执行交易日数据采集（肥羊数据、资金流、概念资金流，仅在交易日）")
+    logger.info("- 交易时间每30分钟执行概念资金流实时采集（9:00-14:59）")
     logger.info("- 每天03:00执行概念板块数据采集")
-    logger.info("- 每天04:00执行数据清理（资金流保留3年；板块资金流保留3个月）")
+    logger.info("- 每天08:00执行概念元数据同步（EastMoney，开盘前同步最新概念）")
+    logger.info("- 每天04:00执行数据清理（资金流保留3年；概念资金流保留3个月）")
     logger.info("- 每小时检查错过的任务（15:00-23:59）")
     
     # 启动时延迟检查并触发错过的任务（避免阻塞HTTP服务器启动）

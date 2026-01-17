@@ -2,22 +2,23 @@
 数据采集服务层
 """
 from datetime import date, datetime, timedelta
-from typing import Optional
+from typing import Optional, List, Dict, Set
 import logging
 from etl.trade_date_adapter import TradeDateAdapter
 from etl.sheep_adapter import SheepAdapter
 from etl.concept_adapter import ConceptAdapter
 from etl.hot_rank_adapter import HotRankAdapter
 from etl.index_adapter import IndexAdapter
+from etl.financial_adapter import FinancialAdapter
 from etl.concept_filter import should_filter_concept
 from db.sheep_repository import SheepRepository
 from db.money_flow_repository import MoneyFlowRepository
 from db.concept_repository import ConceptRepository
 from db.hot_rank_repository import HotRankRepository
 from db.index_repository import IndexRepository
+from db.financial_repository import FinancialRepository
 from config import Config
 import pandas as pd
-from datetime import timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,7 @@ class DataCollectionService:
         self.concept_adapter = ConceptAdapter
         self.hot_rank_adapter = HotRankAdapter
         self.index_adapter = IndexAdapter
+        self.financial_adapter = FinancialAdapter
     
     @staticmethod
     def _validate_change_pct(value) -> Optional[float]:
@@ -572,6 +574,159 @@ class DataCollectionService:
         
         logger.info(f"概念板块数据采集完成！成功: {success_count}, 失败: {error_count}")
     
+    def sync_concept_metadata(self) -> Dict[str, any]:
+        """
+        同步概念元数据：从EastMoney获取最新概念列表，增量更新数据库
+        
+        Returns:
+            {
+                'success': bool,
+                'total_concepts': int,
+                'new_concepts': int,
+                'updated_concepts': int,
+                'total_stocks': int,
+                'errors': List[str]
+            }
+        """
+        result = {
+            'success': False,
+            'total_concepts': 0,
+            'new_concepts': 0,
+            'updated_concepts': 0,
+            'total_stocks': 0,
+            'errors': []
+        }
+        
+        try:
+            logger.info("开始同步概念元数据...")
+            
+            # 步骤1: 从EastMoney获取最新概念列表（带重试机制）
+            concept_df = self.concept_adapter.fetch_eastmoney_concepts()
+            
+            if concept_df is None or concept_df.empty:
+                error_msg = "无法从EastMoney获取概念列表"
+                logger.error(error_msg)
+                result['errors'].append(error_msg)
+                return result
+            
+            # 提取概念名称列
+            # akshare返回的列名可能是：'板块名称', '概念名称', 'name', '板块'等
+            concept_name_col = None
+            possible_name_columns = ['板块名称', '概念名称', 'name', '板块', '概念']
+            
+            for col_name in possible_name_columns:
+                if col_name in concept_df.columns:
+                    concept_name_col = col_name
+                    break
+            
+            if concept_name_col is None and len(concept_df.columns) > 0:
+                # 如果没找到标准列名，使用第一列
+                concept_name_col = concept_df.columns[0]
+            
+            if concept_name_col is None:
+                error_msg = "无法识别概念名称列"
+                logger.error(error_msg)
+                result['errors'].append(error_msg)
+                return result
+            
+            # 获取概念名称列表
+            eastmoney_concepts = set(concept_df[concept_name_col].dropna().astype(str).unique())
+            result['total_concepts'] = len(eastmoney_concepts)
+            
+            logger.info(f"从EastMoney获取到 {len(eastmoney_concepts)} 个概念")
+            
+            # 步骤2: 从数据库获取现有概念列表
+            existing_concepts = self._get_existing_concepts()
+            logger.info(f"数据库中现有 {len(existing_concepts)} 个概念")
+            
+            # 步骤3: 计算差异 - 找出新增/缺失的概念
+            new_concepts = eastmoney_concepts - existing_concepts
+            missing_concepts = new_concepts  # 新增的概念就是缺失的概念
+            
+            logger.info(f"发现 {len(missing_concepts)} 个新概念需要同步")
+            
+            # 步骤4: 增量更新 - 只处理缺失的概念
+            synced_count = 0
+            total_stocks_synced = 0
+            
+            for concept_name in missing_concepts:
+                try:
+                    logger.info(f"正在同步概念: {concept_name}")
+                    
+                    # 获取概念下的股票列表（带重试机制）
+                    stock_codes = self.concept_adapter.fetch_concept_constituents(concept_name)
+                    
+                    if stock_codes is None or len(stock_codes) == 0:
+                        logger.warning(f"概念 {concept_name} 没有股票数据，跳过")
+                        continue
+                    
+                    # 插入或更新概念
+                    concept_id = ConceptRepository.upsert_concept(
+                        concept_name=concept_name,
+                        source='em',  # EastMoney
+                        description=f'从EastMoney同步，包含{len(stock_codes)}只股票'
+                    )
+                    
+                    if concept_id > 0:
+                        # 批量插入股票-概念关联
+                        ConceptRepository.batch_upsert_sheep_concept_mapping(
+                            concept_id=concept_id,
+                            sheep_codes=stock_codes
+                        )
+                        
+                        synced_count += 1
+                        total_stocks_synced += len(stock_codes)
+                        
+                        logger.info(f"成功同步概念: {concept_name} ({len(stock_codes)} 只股票)")
+                    else:
+                        error_msg = f"概念 {concept_name} 插入失败"
+                        logger.error(error_msg)
+                        result['errors'].append(error_msg)
+                        
+                except Exception as e:
+                    error_msg = f"同步概念 {concept_name} 失败: {str(e)}"
+                    logger.error(error_msg, exc_info=True)
+                    result['errors'].append(error_msg)
+                    continue
+            
+            result['success'] = True
+            result['new_concepts'] = synced_count
+            result['total_stocks'] = total_stocks_synced
+            
+            logger.info(f"概念元数据同步完成: 新增 {synced_count} 个概念，共 {total_stocks_synced} 只股票")
+            
+        except Exception as e:
+            error_msg = f"概念元数据同步过程失败: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            result['errors'].append(error_msg)
+            result['success'] = False
+        
+        return result
+    
+    @staticmethod
+    def _get_existing_concepts() -> Set[str]:
+        """
+        从数据库获取现有概念名称集合
+        
+        Returns:
+            概念名称集合
+        """
+        from db.database import get_raw_connection
+        
+        existing_concepts = set()
+        
+        try:
+            with get_raw_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT DISTINCT concept_name FROM concept_theme WHERE is_active = 1")
+                rows = cursor.fetchall()
+                existing_concepts = {row[0] for row in rows if row[0]}
+                cursor.close()
+        except Exception as e:
+            logger.error(f"获取现有概念列表失败: {e}", exc_info=True)
+        
+        return existing_concepts
+    
     def collect_index_data(self, index_code: str = 'CSI1000', days: int = None):
         """
         采集大盘指数数据（用于RSRS牛熊市判断）
@@ -623,14 +778,14 @@ class DataCollectionService:
         except Exception as e:
             logger.error(f"采集指数数据失败: {index_code}, 错误: {e}", exc_info=True)
     
-    def collect_sector_money_flow_data(self, target_date=None):
+    def collect_concept_money_flow_data(self, target_date=None):
         """
-        采集板块资金流向数据（仅在交易日执行）
+        采集概念资金流向数据（仅在交易日执行）
         
         Args:
             target_date: 目标日期，如果为None则使用今天
         """
-        from services.sector_money_flow_service import SectorMoneyFlowService
+        from services.concept_money_flow_service import ConceptMoneyFlowService
         from datetime import date
         
         if target_date is None:
@@ -638,26 +793,386 @@ class DataCollectionService:
         
         # 判断是否为交易日
         if not self.trade_date_adapter.is_trading_day(target_date):
-            logger.info(f"{target_date} 不是交易日，跳过板块资金流数据采集")
+            logger.info(f"{target_date} 不是交易日，跳过概念资金流数据采集")
             return
         
-        logger.info(f"开始采集板块资金流向数据（日期: {target_date}）...")
+        logger.info(f"开始采集概念资金流向数据（日期: {target_date}）...")
         
         try:
-            SectorMoneyFlowService.collect_sector_money_flow_data(target_date)
-            logger.info("板块资金流向数据采集完成")
+            ConceptMoneyFlowService.collect_concept_money_flow_data(target_date)
+            logger.info("概念资金流向数据采集完成")
         except Exception as e:
-            logger.error(f"采集板块资金流向数据失败: {e}", exc_info=True)
+            logger.error(f"采集概念资金流向数据失败: {e}", exc_info=True)
     
-    def cleanup_old_sector_money_flow_data(self):
+    def cleanup_old_concept_money_flow_data(self):
         """
-        清理板块资金流旧数据（保留最近3个月）
+        清理概念资金流旧数据（保留最近3个月）
         """
-        from services.sector_money_flow_service import SectorMoneyFlowService
-        logger.info("开始清理板块资金流旧数据...")
+        from services.concept_money_flow_service import ConceptMoneyFlowService
+        logger.info("开始清理概念资金流旧数据...")
         try:
-            deleted_count = SectorMoneyFlowService.cleanup_old_data(Config.SECTOR_MONEY_FLOW_RETENTION_DAYS)
-            logger.info(f"板块资金流数据清理完成，删除了 {deleted_count} 条旧数据")
+            deleted_count = ConceptMoneyFlowService.cleanup_old_data(Config.SECTOR_MONEY_FLOW_RETENTION_DAYS)
+            logger.info(f"概念资金流数据清理完成，删除了 {deleted_count} 条旧数据")
         except Exception as e:
-            logger.error(f"清理板块资金流旧数据失败: {e}", exc_info=True)
+            logger.error(f"清理概念资金流旧数据失败: {e}", exc_info=True)
+    
+    def collect_all_data(self, force_trading_day: bool = False) -> Dict[str, any]:
+        """
+        一次采集所有数据
+        
+        Args:
+            force_trading_day: 是否强制在非交易日也执行（默认False，非交易日会跳过交易日数据）
+            
+        Returns:
+            {
+                'success': bool,
+                'results': {
+                    'sheep_daily': {'success': bool, 'message': str},
+                    'money_flow': {'success': bool, 'message': str},
+                    'concept_money_flow': {'success': bool, 'message': str},
+                    'hot_rank': {'success': bool, 'message': str},
+                    'concept_data': {'success': bool, 'message': str},
+                    'index_data': {'success': bool, 'message': str},
+                    'concept_metadata_sync': {'success': bool, 'message': str},
+                },
+                'total_time': float
+            }
+        """
+        import time
+        start_time = time.time()
+        results = {}
+        
+        logger.info("=" * 60)
+        logger.info("开始批量采集所有数据")
+        logger.info("=" * 60)
+        
+        today = date.today()
+        is_trading_day = self.trade_date_adapter.is_trading_day(today)
+        
+        # 1. 采集肥羊日K数据
+        try:
+            if is_trading_day or force_trading_day:
+                logger.info("[1/7] 开始采集肥羊日K数据...")
+                self.collect_sheep_daily_data()
+                results['sheep_daily'] = {'success': True, 'message': '采集成功'}
+            else:
+                results['sheep_daily'] = {'success': False, 'message': '非交易日，跳过'}
+        except Exception as e:
+            error_msg = f"采集失败: {str(e)}"
+            logger.error(f"肥羊日K数据{error_msg}", exc_info=True)
+            results['sheep_daily'] = {'success': False, 'message': error_msg}
+        
+        # 2. 采集资金流向数据
+        try:
+            if is_trading_day or force_trading_day:
+                logger.info("[2/7] 开始采集资金流向数据...")
+                self.collect_money_flow_data()
+                results['money_flow'] = {'success': True, 'message': '采集成功'}
+            else:
+                results['money_flow'] = {'success': False, 'message': '非交易日，跳过'}
+        except Exception as e:
+            error_msg = f"采集失败: {str(e)}"
+            logger.error(f"资金流向数据{error_msg}", exc_info=True)
+            results['money_flow'] = {'success': False, 'message': error_msg}
+        
+        # 3. 采集概念资金流向数据
+        try:
+            if is_trading_day or force_trading_day:
+                logger.info("[3/7] 开始采集概念资金流向数据...")
+                self.collect_concept_money_flow_data(target_date=today)
+                results['concept_money_flow'] = {'success': True, 'message': '采集成功'}
+            else:
+                results['concept_money_flow'] = {'success': False, 'message': '非交易日，跳过'}
+        except Exception as e:
+            error_msg = f"采集失败: {str(e)}"
+            logger.error(f"概念资金流向数据{error_msg}", exc_info=True)
+            results['concept_money_flow'] = {'success': False, 'message': error_msg}
+        
+        # 4. 采集热度榜数据（自然日数据，总是执行）
+        try:
+            logger.info("[4/7] 开始采集热度榜数据...")
+            self.collect_hot_rank_data()
+            results['hot_rank'] = {'success': True, 'message': '采集成功'}
+        except Exception as e:
+            error_msg = f"采集失败: {str(e)}"
+            logger.error(f"热度榜数据{error_msg}", exc_info=True)
+            results['hot_rank'] = {'success': False, 'message': error_msg}
+        
+        # 5. 采集概念板块数据（自然日数据，总是执行）
+        try:
+            logger.info("[5/7] 开始采集概念板块数据...")
+            self.collect_concept_data()
+            results['concept_data'] = {'success': True, 'message': '采集成功'}
+        except Exception as e:
+            error_msg = f"采集失败: {str(e)}"
+            logger.error(f"概念板块数据{error_msg}", exc_info=True)
+            results['concept_data'] = {'success': False, 'message': error_msg}
+        
+        # 6. 采集大盘指数数据
+        try:
+            if is_trading_day or force_trading_day:
+                logger.info("[6/7] 开始采集大盘指数数据...")
+                self.collect_index_data(index_code='CSI1000')
+                results['index_data'] = {'success': True, 'message': '采集成功'}
+            else:
+                results['index_data'] = {'success': False, 'message': '非交易日，跳过'}
+        except Exception as e:
+            error_msg = f"采集失败: {str(e)}"
+            logger.error(f"大盘指数数据{error_msg}", exc_info=True)
+            results['index_data'] = {'success': False, 'message': error_msg}
+        
+        # 7. 同步概念元数据（总是执行）
+        try:
+            logger.info("[7/7] 开始同步概念元数据...")
+            sync_result = self.sync_concept_metadata()
+            if sync_result['success']:
+                results['concept_metadata_sync'] = {
+                    'success': True, 
+                    'message': f"同步成功：新增 {sync_result['new_concepts']} 个概念，共 {sync_result['total_stocks']} 只股票"
+                }
+            else:
+                results['concept_metadata_sync'] = {
+                    'success': False,
+                    'message': f"同步失败：{', '.join(sync_result.get('errors', []))}"
+                }
+        except Exception as e:
+            error_msg = f"同步失败: {str(e)}"
+            logger.error(f"概念元数据{error_msg}", exc_info=True)
+            results['concept_metadata_sync'] = {'success': False, 'message': error_msg}
+        
+        total_time = time.time() - start_time
+        success_count = sum(1 for r in results.values() if r.get('success', False))
+        total_count = len(results)
+        
+        logger.info("=" * 60)
+        logger.info(f"批量采集完成！成功: {success_count}/{total_count}，总耗时: {total_time:.2f}秒")
+        logger.info("=" * 60)
+        
+        return {
+            'success': success_count == total_count,
+            'results': results,
+            'total_time': round(total_time, 2),
+            'success_count': success_count,
+            'total_count': total_count
+        }
+    
+    def collect_specific_data(self, data_type: str, **kwargs) -> Dict[str, any]:
+        """
+        采集特定数据表
+        
+        Args:
+            data_type: 数据类型，可选值：
+                - 'sheep_daily': 肥羊日K数据
+                - 'money_flow': 资金流向数据
+                - 'concept_money_flow': 概念资金流向数据
+                - 'hot_rank': 热度榜数据
+                - 'concept_data': 概念板块数据
+                - 'index_data': 大盘指数数据
+                - 'concept_metadata_sync': 概念元数据同步
+            **kwargs: 额外参数
+                - days: 对于sheep_daily和index_data，指定采集天数
+                - target_date: 对于需要日期的数据，指定目标日期
+                - force: 是否强制在非交易日执行
+                
+        Returns:
+            {
+                'success': bool,
+                'message': str,
+                'data_type': str
+            }
+        """
+        import time
+        start_time = time.time()
+        
+        data_type_map = {
+            'sheep_daily': {
+                'name': '肥羊日K数据',
+                'method': self._collect_sheep_daily_wrapper,
+                'requires_trading_day': True
+            },
+            'money_flow': {
+                'name': '资金流向数据',
+                'method': self._collect_money_flow_wrapper,
+                'requires_trading_day': True
+            },
+            'concept_money_flow': {
+                'name': '概念资金流向数据',
+                'method': self._collect_concept_money_flow_wrapper,
+                'requires_trading_day': True
+            },
+            'hot_rank': {
+                'name': '热度榜数据',
+                'method': self._collect_hot_rank_wrapper,
+                'requires_trading_day': False
+            },
+            'concept_data': {
+                'name': '概念板块数据',
+                'method': self._collect_concept_data_wrapper,
+                'requires_trading_day': False
+            },
+            'index_data': {
+                'name': '大盘指数数据',
+                'method': self._collect_index_data_wrapper,
+                'requires_trading_day': True
+            },
+            'concept_metadata_sync': {
+                'name': '概念元数据同步',
+                'method': self._sync_concept_metadata_wrapper,
+                'requires_trading_day': False
+            },
+            'financial_data': {
+                'name': '财务数据',
+                'method': self._collect_financial_data_wrapper,
+                'requires_trading_day': False
+            }
+        }
+        
+        if data_type not in data_type_map:
+            return {
+                'success': False,
+                'message': f'不支持的数据类型: {data_type}',
+                'data_type': data_type
+            }
+        
+        config = data_type_map[data_type]
+        today = date.today()
+        is_trading_day = self.trade_date_adapter.is_trading_day(today)
+        force = kwargs.get('force', False)
+        
+        # 检查是否需要交易日
+        if config['requires_trading_day'] and not is_trading_day and not force:
+            return {
+                'success': False,
+                'message': f'{config["name"]}需要在交易日执行，当前不是交易日',
+                'data_type': data_type
+            }
+        
+        try:
+            logger.info(f"开始采集 {config['name']}...")
+            result = config['method'](**kwargs)
+            elapsed_time = time.time() - start_time
+            logger.info(f"{config['name']}采集完成，耗时: {elapsed_time:.2f}秒")
+            
+            return {
+                'success': True,
+                'message': result.get('message', '采集成功'),
+                'data_type': data_type,
+                'elapsed_time': round(elapsed_time, 2)
+            }
+        except Exception as e:
+            error_msg = str(e)
+            logger.error(f"{config['name']}采集失败: {error_msg}", exc_info=True)
+            return {
+                'success': False,
+                'message': f'采集失败: {error_msg}',
+                'data_type': data_type
+            }
+    
+    def _collect_sheep_daily_wrapper(self, **kwargs):
+        """肥羊日K数据采集包装器"""
+        days = kwargs.get('days', None)
+        self.collect_sheep_daily_data(days=days)
+        return {'message': '采集成功'}
+    
+    def _collect_money_flow_wrapper(self, **kwargs):
+        """资金流向数据采集包装器"""
+        self.collect_money_flow_data()
+        return {'message': '采集成功'}
+    
+    def _collect_concept_money_flow_wrapper(self, **kwargs):
+        """概念资金流向数据采集包装器"""
+        target_date = kwargs.get('target_date', date.today())
+        self.collect_concept_money_flow_data(target_date=target_date)
+        return {'message': '采集成功'}
+    
+    def _collect_hot_rank_wrapper(self, **kwargs):
+        """热度榜数据采集包装器"""
+        target_date = kwargs.get('target_date', None)
+        self.collect_hot_rank_data(target_date=target_date)
+        return {'message': '采集成功'}
+    
+    def _collect_concept_data_wrapper(self, **kwargs):
+        """概念板块数据采集包装器"""
+        self.collect_concept_data()
+        return {'message': '采集成功'}
+    
+    def _collect_index_data_wrapper(self, **kwargs):
+        """大盘指数数据采集包装器"""
+        index_code = kwargs.get('index_code', 'CSI1000')
+        days = kwargs.get('days', None)
+        self.collect_index_data(index_code=index_code, days=days)
+        return {'message': '采集成功'}
+    
+    def _sync_concept_metadata_wrapper(self, **kwargs):
+        """概念元数据同步包装器"""
+        result = self.sync_concept_metadata()
+        if result['success']:
+            return {
+                'message': f"同步成功：新增 {result['new_concepts']} 个概念，共 {result['total_stocks']} 只股票"
+            }
+        else:
+            return {
+                'message': f"同步失败：{', '.join(result.get('errors', []))}"
+            }
+    
+    def _collect_financial_data_wrapper(self, **kwargs):
+        """财务数据采集包装器"""
+        sheep_codes = kwargs.get('sheep_codes', None)
+        self.collect_financial_data(sheep_codes=sheep_codes)
+        return {'message': '采集成功'}
+    
+    def collect_financial_data(self, sheep_codes: Optional[List[str]] = None):
+        """
+        采集财务数据（季度/年度数据，非每日采集）
+        
+        Args:
+            sheep_codes: 需要采集的肥羊代码列表，如果为None则采集所有肥羊
+        """
+        logger.info("开始采集财务数据...")
+        
+        # 获取需要采集的肥羊列表
+        if sheep_codes is None:
+            sheep_list = self.sheep_adapter.get_all_sheep_codes()
+            sheep_codes = [item['code'] for item in sheep_list]
+        
+        if not sheep_codes:
+            logger.warning("没有需要采集的肥羊")
+            return
+        
+        logger.info(f"共需处理 {len(sheep_codes)} 只肥羊的财务数据")
+        
+        success_count = 0
+        error_count = 0
+        total_records = 0
+        
+        for idx, sheep_code in enumerate(sheep_codes):
+            try:
+                # 获取财务数据
+                df = self.financial_adapter.get_financial_data(sheep_code)
+                
+                if df is None or df.empty:
+                    continue
+                
+                # 标准化财务数据
+                financial_data = self.financial_adapter.normalize_financial_data(df, sheep_code)
+                
+                if financial_data:
+                    # 批量保存
+                    FinancialRepository.batch_upsert_financial_data(financial_data)
+                    total_records += len(financial_data)
+                    success_count += 1
+                
+                if (idx + 1) % 100 == 0:
+                    logger.info(f"进度: {idx + 1}/{len(sheep_codes)}, 成功: {success_count}, 失败: {error_count}, 记录: {total_records}")
+                
+                # 延迟，避免请求过快
+                import time
+                time.sleep(0.1)  # 100ms延迟
+                
+            except Exception as e:
+                logger.warning(f"处理肥羊 {sheep_code} 财务数据失败: {e}")
+                error_count += 1
+                continue
+        
+        logger.info(f"财务数据采集完成！成功: {success_count}, 失败: {error_count}, 总记录: {total_records}")
     

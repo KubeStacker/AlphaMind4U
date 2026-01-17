@@ -29,6 +29,14 @@ export interface SectorSheep {
   consecutive_days: number
 }
 
+export interface SectorStockByChange {
+  sheep_code: string
+  sheep_name: string
+  change_pct: number
+  current_price?: number
+  rank?: number
+}
+
 export const hotApi = {
   getHotSheeps: async (source?: string): Promise<HotSheep[]> => {
     const response = await client.get('/hot-sheep', { params: { source } })
@@ -48,6 +56,11 @@ export const hotApi = {
   getSectorSheeps: async (sectorName: string): Promise<SectorSheep[]> => {
     const response = await client.get(`/sectors/${encodeURIComponent(sectorName)}/sheep`)
     return response.data.sheep || []
+  },
+
+  getSectorStocksByChange: async (sectorName: string, limit: number = 10): Promise<SectorStockByChange[]> => {
+    const response = await client.get(`/sectors/${encodeURIComponent(sectorName)}/stocks-by-change`, { params: { limit } })
+    return response.data.stocks || []
   },
 
   refreshHotSheeps: async (): Promise<void> => {
@@ -91,9 +104,19 @@ export interface SectorMoneyFlowInfo {
   daily_data?: SectorMoneyFlowDailyData[]  // 每日详细数据（用于多天统计）
 }
 
+export interface SectorMoneyFlowMetadata {
+  total_days_in_db: number
+  actual_days_used: number
+  requested_days: number
+  has_sufficient_data: boolean
+  warning?: string
+}
+
 export const sectorMoneyFlowApi = {
-  getRecommendations: async (days: number = 1, limit: number = 20): Promise<{ sectors: SectorMoneyFlowInfo[], days: number }> => {
-    const response = await client.get('/sector-money-flow/recommend', { params: { days, limit } })
+  getRecommendations: async (days: number = 1, limit: number = 30): Promise<{ sectors: SectorMoneyFlowInfo[], days: number, metadata?: SectorMoneyFlowMetadata }> => {
+    // 限制最大返回数量为30
+    const actualLimit = limit > 30 ? 30 : limit
+    const response = await client.get('/sector-money-flow/recommend', { params: { days, limit: actualLimit } })
     return response.data
   },
 }

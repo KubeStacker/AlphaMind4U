@@ -4,7 +4,7 @@ import { ReloadOutlined, FireOutlined, RobotOutlined, BulbOutlined, DollarOutlin
 import ReactECharts from 'echarts-for-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { hotApi, HotSheep, SectorInfo, SectorSheep } from '../api/hot'
+import { hotApi, HotSheep, SectorInfo, SectorSheep, SectorStockByChange } from '../api/hot'
 import { capitalInflowApi, CapitalInflowStock, sectorMoneyFlowApi, SectorMoneyFlowInfo } from '../api/hot'
 import { sheepApi, SheepDailyData } from '../api/sheep'
 import { aiApi } from '../api/ai'
@@ -80,8 +80,13 @@ const Tab2: React.FC = () => {
   const [sectorInflowLoading, setSectorInflowLoading] = useState(false)
   const [sectorInflowPage, setSectorInflowPage] = useState<number>(1)
   const [sectorInflowLoaded, setSectorInflowLoaded] = useState<boolean>(false)  // 是否已加载数据
+  const [sectorInflowMetadata, setSectorInflowMetadata] = useState<{ total_days_in_db: number, actual_days_used: number, requested_days: number, has_sufficient_data: boolean, warning?: string } | null>(null)
   const [capitalInflowLoaded, setCapitalInflowLoaded] = useState<boolean>(false)  // 是否已加载数据
   const [hotSectorsPage, setHotSectorsPage] = useState<number>(1)  // 热门板块分页
+  const [hotSectorsLoaded, setHotSectorsLoaded] = useState<boolean>(false)  // 热门板块是否已加载数据
+  const [sectorStocksModalVisible, setSectorStocksModalVisible] = useState<boolean>(false)
+  const [selectedSectorForStocks, setSelectedSectorForStocks] = useState<{ name: string; stocks: SectorStockByChange[] } | null>(null)
+  const [sectorStocksLoading, setSectorStocksLoading] = useState<boolean>(false)
 
   const loadData = async () => {
     setLoading(true)
@@ -125,11 +130,27 @@ const Tab2: React.FC = () => {
   const loadSectorInflowData = async (days: number) => {
     setSectorInflowLoading(true)
     try {
-      const result = await sectorMoneyFlowApi.getRecommendations(days, 20)
+      const result = await sectorMoneyFlowApi.getRecommendations(days, 30)
       setSectorInflowSectors(result.sectors || [])
+      setSectorInflowMetadata(result.metadata || null)
+      if (result.sectors && result.sectors.length === 0) {
+        message.info('暂无板块资金流入数据，请稍后再试')
+      } else if (result.metadata?.warning) {
+        message.warning(result.metadata.warning)
+      }
     } catch (error: any) {
       console.error('加载板块资金流入推荐失败:', error)
-      const errorMsg = error?.response?.data?.detail || error?.message || '未知错误'
+      // 处理不同类型的错误
+      let errorMsg = '未知错误'
+      if (error?.code === 'ECONNABORTED' || error?.message?.includes('timeout')) {
+        errorMsg = '请求超时，请稍后重试'
+      } else if (error?.code === 'ERR_NETWORK' || error?.message === 'Network Error') {
+        errorMsg = '网络连接失败，请检查网络或稍后重试'
+      } else if (error?.response?.data?.detail) {
+        errorMsg = error.response.data.detail
+      } else if (error?.message) {
+        errorMsg = error.message
+      }
       message.error(`加载板块资金流入推荐失败: ${errorMsg}`)
       setSectorInflowSectors([])
     } finally {
@@ -284,6 +305,23 @@ const Tab2: React.FC = () => {
       setSectorSheepsModalVisible(true)
     } catch (error) {
       message.error('加载板块肥羊列表失败')
+    }
+  }
+
+  const handleSectorStocksClick = async (sectorName: string) => {
+    setSectorStocksModalVisible(true)
+    setSectorStocksLoading(true)
+    setSelectedSectorForStocks(null)
+    try {
+      const stocks = await hotApi.getSectorStocksByChange(sectorName, 10)
+      setSelectedSectorForStocks({ name: sectorName, stocks })
+    } catch (error: any) {
+      console.error('加载板块涨幅前10概念股失败:', error)
+      const errorMsg = error?.response?.data?.detail || error?.message || '未知错误'
+      message.error(`加载板块涨幅前10概念股失败: ${errorMsg}`)
+      setSelectedSectorForStocks({ name: sectorName, stocks: [] })
+    } finally {
+      setSectorStocksLoading(false)
     }
   }
 
@@ -721,50 +759,68 @@ const Tab2: React.FC = () => {
 
   return (
     <div>
-      <Card
+      {/* 热门板块推荐 */}
+      <Collapse 
+        defaultActiveKey={[]} 
         style={{ marginBottom: 24 }}
-        title={
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span>
-              <FireOutlined style={{ marginRight: 8 }} />
-              热门板块推荐
-            </span>
-            <Space>
-              {availableModels.length > 0 && (
-                <Select
-                  value={selectedModel}
-                  onChange={setSelectedModel}
-                  style={{ width: 150 }}
-                  placeholder="选择模型"
+        onChange={(keys: string | string[]) => {
+          const activeKeys = Array.isArray(keys) ? keys : [keys]
+          if (activeKeys.includes('hotSectors') && !hotSectorsLoaded) {
+            setHotSectorsLoaded(true)
+            loadData()
+          }
+        }}
+      >
+        <Panel
+          header={
+            <div 
+              style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', paddingRight: 16 }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <span>
+                <FireOutlined style={{ marginRight: 8 }} />
+                热门板块推荐
+              </span>
+              <Space>
+                {availableModels.length > 0 && (
+                  <Select
+                    value={selectedModel}
+                    onChange={setSelectedModel}
+                    style={{ width: 150 }}
+                    placeholder="选择模型"
+                    size="small"
+                  >
+                    {availableModels.map(model => (
+                      <Select.Option key={model.id} value={model.model_name}>
+                        {model.model_display_name}
+                      </Select.Option>
+                    ))}
+                  </Select>
+                )}
+                <Button
+                  type="default"
+                  icon={<RobotOutlined />}
+                  onClick={handleAIRecommend}
+                  title="AI推荐"
                   size="small"
                 >
-                  {availableModels.map(model => (
-                    <Select.Option key={model.id} value={model.model_name}>
-                      {model.model_display_name}
-                    </Select.Option>
-                  ))}
-                </Select>
-              )}
-              <Button
-                type="default"
-                icon={<RobotOutlined />}
-                onClick={handleAIRecommend}
-                title="AI推荐"
-              >
-                AI推荐
-              </Button>
-              <Button
-                type="primary"
-                icon={<ReloadOutlined />}
-                onClick={handleRefresh}
-                loading={refreshing}
-              >
-                刷新数据
-              </Button>
-            </Space>
-          </div>
-        }
-      >
+                  AI推荐
+                </Button>
+                <Button
+                  type="primary"
+                  icon={<ReloadOutlined />}
+                  onClick={handleRefresh}
+                  loading={refreshing}
+                  size="small"
+                >
+                  刷新数据
+                </Button>
+              </Space>
+            </div>
+          }
+          key="hotSectors"
+        >
+          <div>
         {loading ? (
           <div style={{ textAlign: 'center', padding: 20 }}>
             <Spin />
@@ -900,7 +956,9 @@ const Tab2: React.FC = () => {
             </div>
           </div>
         )}
-      </Card>
+          </div>
+        </Panel>
+      </Collapse>
 
       {/* 净流入肥羊推荐 */}
       <Collapse 
@@ -1017,8 +1075,22 @@ const Tab2: React.FC = () => {
               <div style={{ marginBottom: 16, color: '#666', fontSize: '14px' }}>
                 找到 <strong style={{ color: '#1890ff' }}>{sectorInflowSectors.length}</strong> 个资金净流入板块
                 <span style={{ marginLeft: 16, fontSize: '12px', color: '#999' }}>
-                  （单位：亿元，按净流入倒序排序）
+                  （单位：亿元）
+                  {sectorInflowDays === 1 && ' - 当日为最近交易日的资金流入'}
+                  {sectorInflowDays === 3 && ' - 最近3天为最近3个交易日的资金总量'}
+                  {sectorInflowDays === 5 && ' - 最近5天为最近5个交易日的资金总量'}
                 </span>
+                {sectorInflowMetadata && (
+                  <div style={{ marginTop: 8, fontSize: '12px' }}>
+                    <span style={{ color: sectorInflowMetadata.has_sufficient_data ? '#52c41a' : '#ff9800' }}>
+                      数据库中有 {sectorInflowMetadata.total_days_in_db} 天的数据，
+                      实际使用 {sectorInflowMetadata.actual_days_used} 天
+                      {!sectorInflowMetadata.has_sufficient_data && sectorInflowMetadata.warning && (
+                        <span style={{ color: '#ff4d4f', marginLeft: 8 }}>⚠️ {sectorInflowMetadata.warning}</span>
+                      )}
+                    </span>
+                  </div>
+                )}
               </div>
               <Table
                 dataSource={sectorInflowSectors}
@@ -1029,7 +1101,13 @@ const Tab2: React.FC = () => {
                     key: 'sector_name',
                     width: 200,
                     render: (name: string) => (
-                      <span style={{ fontWeight: 500 }}>{name}</span>
+                      <span 
+                        style={{ fontWeight: 500, cursor: 'pointer', color: '#1890ff' }}
+                        onClick={() => handleSectorStocksClick(name)}
+                        title="点击查看涨幅前10关联概念股"
+                      >
+                        {name}
+                      </span>
                     )
                   },
                   {
@@ -1051,39 +1129,67 @@ const Tab2: React.FC = () => {
                     sorter: (a: SectorMoneyFlowInfo, b: SectorMoneyFlowInfo) => {
                       const aVal = sectorInflowDays === 1 ? (a.main_net_inflow || 0) : (a.total_inflow || 0)
                       const bVal = sectorInflowDays === 1 ? (b.main_net_inflow || 0) : (b.total_inflow || 0)
+                      // bVal - aVal 表示降序（大的在前）
                       return bVal - aVal
-                    },
-                    defaultSortOrder: 'descend'
+                    }
                   },
                   ...(sectorInflowDays > 1 ? [{
-                    title: '每日净流入',
+                    title: '每日净流入趋势',
                     key: 'daily_chart',
-                    width: 200,
+                    width: sectorInflowDays === 3 ? 120 : 180,
                     render: (_: any, record: SectorMoneyFlowInfo) => {
                       const dailyData = record.daily_data || []
                       if (dailyData.length === 0) return '-'
                       
+                      // 后端已按日期正序返回（从旧到新），取最后N天（最近的N个交易日）
+                      const recentData = dailyData.slice(-sectorInflowDays)
+                      
                       // 计算最大值用于归一化
-                      const maxInflow = Math.max(...dailyData.map(d => Math.abs(d.main_net_inflow)), 1)
+                      const maxInflow = Math.max(...recentData.map(d => Math.abs(d.main_net_inflow)), 1)
+                      
+                      // 小巧的正方形柱状图
+                      const barSize = sectorInflowDays === 3 ? 20 : 24  // 3天用20px，5天用24px
+                      const gap = 3  // 柱子之间的间距
                       
                       return (
-                        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, height: 40 }}>
-                          {dailyData.slice(0, sectorInflowDays).map((day, idx) => {
-                            const height = Math.abs(day.main_net_inflow) / maxInflow * 30
+                        <div style={{ 
+                          display: 'flex', 
+                          alignItems: 'flex-end', 
+                          justifyContent: 'center',
+                          gap: gap,
+                          height: barSize + 20,
+                          paddingTop: 2
+                        }}>
+                          {recentData.map((day, idx) => {
+                            const height = Math.abs(day.main_net_inflow) / maxInflow * barSize
                             const color = day.main_net_inflow >= 0 ? '#ff4d4f' : '#52c41a'
                             return (
-                              <div key={idx} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                              <div 
+                                key={idx} 
+                                style={{ 
+                                  display: 'flex', 
+                                  flexDirection: 'column', 
+                                  alignItems: 'center',
+                                  position: 'relative'
+                                }}
+                                title={`${day.trade_date}: ${(day.main_net_inflow / 10000).toFixed(2)} 亿元`}
+                              >
                                 <div
                                   style={{
-                                    width: '100%',
-                                    height: `${height}px`,
+                                    width: `${barSize}px`,
+                                    height: `${Math.max(height, day.main_net_inflow === 0 ? 1 : 2)}px`,
                                     backgroundColor: color,
-                                    minHeight: day.main_net_inflow === 0 ? 1 : undefined,
-                                    borderRadius: '2px 2px 0 0',
+                                    borderRadius: '2px',
+                                    minHeight: day.main_net_inflow === 0 ? 1 : 2,
                                   }}
-                                  title={`${day.trade_date}: ${(day.main_net_inflow / 10000).toFixed(2)} 亿元`}
                                 />
-                                <div style={{ fontSize: 10, color: '#999', marginTop: 2 }}>
+                                <div style={{ 
+                                  fontSize: 9, 
+                                  color: '#999', 
+                                  marginTop: 2,
+                                  transform: 'scale(0.85)',
+                                  whiteSpace: 'nowrap'
+                                }}>
                                   {day.trade_date.split('-').slice(1).join('/')}
                                 </div>
                               </div>
@@ -1362,6 +1468,100 @@ const Tab2: React.FC = () => {
         ) : (
           <div style={{ textAlign: 'center', padding: 50, color: '#999' }}>
             暂无分析结果
+          </div>
+        )}
+      </Modal>
+
+      {/* 板块涨幅前10概念股Modal */}
+      <Modal
+        title={`${selectedSectorForStocks?.name || ''} - 涨幅前10关联概念股`}
+        open={sectorStocksModalVisible}
+        onCancel={() => setSectorStocksModalVisible(false)}
+        footer={null}
+        width={isMobile ? '95%' : 800}
+        style={{ top: 20 }}
+      >
+        {sectorStocksLoading ? (
+          <div style={{ textAlign: 'center', padding: 50 }}>
+            <Spin size="large" />
+            <div style={{ marginTop: 16, color: '#999' }}>正在加载数据...</div>
+          </div>
+        ) : selectedSectorForStocks && selectedSectorForStocks.stocks.length > 0 ? (
+          <Table
+            dataSource={selectedSectorForStocks.stocks}
+            columns={[
+              {
+                title: '排名',
+                key: 'index',
+                width: 80,
+                render: (_: any, __: any, index: number) => index + 1,
+              },
+              {
+                title: '标的代码',
+                dataIndex: 'sheep_code',
+                key: 'sheep_code',
+                width: 120,
+              },
+              {
+                title: '标的名称',
+                dataIndex: 'sheep_name',
+                key: 'sheep_name',
+                width: 150,
+                render: (name: string, record: SectorStockByChange) => {
+                  const displayName = getDisplayName(name, record.sheep_code)
+                  return (
+                    <span 
+                      style={{ cursor: 'pointer', color: '#1890ff' }} 
+                      onClick={() => handleSheepClick(record.sheep_code, displayName)}
+                    >
+                      {displayName}
+                    </span>
+                  )
+                },
+              },
+              {
+                title: '当前价格',
+                dataIndex: 'current_price',
+                key: 'current_price',
+                width: 100,
+                render: (price: number) => price ? (
+                  <span style={{ fontWeight: 'bold', color: '#1890ff' }}>
+                    ¥{price.toFixed(2)}
+                  </span>
+                ) : '-',
+              },
+              {
+                title: '涨幅',
+                dataIndex: 'change_pct',
+                key: 'change_pct',
+                width: 100,
+                render: (pct: number) => pct !== undefined && pct !== null ? (
+                  <Tag color={pct >= 0 ? 'red' : 'green'}>
+                    {pct >= 0 ? '+' : ''}{pct.toFixed(2)}%
+                  </Tag>
+                ) : '-',
+                sorter: (a: SectorStockByChange, b: SectorStockByChange) => (b.change_pct || 0) - (a.change_pct || 0),
+                defaultSortOrder: 'descend',
+              },
+              {
+                title: '热度排名',
+                dataIndex: 'rank',
+                key: 'rank',
+                width: 100,
+                render: (rank: number) => rank ? <Tag color="orange">#{rank}</Tag> : '-',
+              },
+            ]}
+            rowKey="sheep_code"
+            pagination={false}
+            size="small"
+            onRow={(record) => ({
+              onClick: () => handleSheepClick(record.sheep_code, getDisplayName(record.sheep_name, record.sheep_code)),
+              style: { cursor: 'pointer' }
+            })}
+          />
+        ) : (
+          <div style={{ textAlign: 'center', padding: 50, color: '#999' }}>
+            暂无概念股数据
           </div>
         )}
       </Modal>

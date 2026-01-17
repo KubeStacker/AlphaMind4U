@@ -381,6 +381,16 @@ async def get_sector_sheep(sector_name: str, current_user: dict = Depends(get_cu
         logger.error(f"获取板块肥羊失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/sectors/{sector_name}/stocks-by-change")
+async def get_sector_stocks_by_change(sector_name: str, limit: int = 10, current_user: dict = Depends(get_current_user)):
+    """获取板块涨幅前N的概念股"""
+    try:
+        stocks = ConceptService.get_sector_stocks_by_change_pct(sector_name, limit)
+        return {"stocks": stocks}
+    except Exception as e:
+        logger.error(f"获取板块涨幅前N概念股失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/api/capital-inflow/recommend")
 async def get_capital_inflow_recommend(days: int = 5, current_user: dict = Depends(get_current_user)):
     """获取资金持续流入推荐（最近N天持续流入的标的）"""
@@ -396,27 +406,44 @@ async def get_capital_inflow_recommend(days: int = 5, current_user: dict = Depen
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/sector-money-flow/recommend")
-async def get_sector_money_flow_recommend(days: int = 1, limit: int = 20, current_user: dict = Depends(get_current_user)):
+async def get_sector_money_flow_recommend(days: int = 1, limit: int = 30, current_user: dict = Depends(get_current_user)):
     """
-    获取板块资金净流入推荐
+    获取概念资金净流入推荐（API路径保持sector以保持向后兼容）
     
     Args:
         days: 统计天数（1=当日，3=最近3天，5=最近5天）
-        limit: 返回数量，默认20
+        limit: 返回数量，默认30，最大30
     """
     try:
         if days not in [1, 3, 5]:
             raise HTTPException(status_code=400, detail="days参数必须是1、3或5")
         
-        from services.sector_money_flow_service import SectorMoneyFlowService
-        sectors = SectorMoneyFlowService.get_top_sectors_by_inflow(days=days, limit=limit)
+        # 限制最大返回数量为30
+        if limit > 30:
+            limit = 30
         
-        return {"sectors": sectors, "days": days}
+        from services.concept_money_flow_service import ConceptMoneyFlowService
+        import asyncio
+        
+        # 使用异步执行避免阻塞
+        concepts, metadata = await asyncio.to_thread(
+            ConceptMoneyFlowService.get_top_concepts_by_inflow, 
+            days=days, 
+            limit=limit
+        )
+        
+        return {
+            "sectors": concepts,  # 保持字段名为sectors以保持向后兼容
+            "days": days,
+            "metadata": metadata
+        }
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"获取板块资金净流入推荐失败: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"获取概念资金净流入推荐失败: {e}", exc_info=True)
+        import traceback
+        logger.error(f"异常详情:\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"获取板块资金净流入推荐失败: {str(e)}")
 
 # ========== 数据采集管理API ==========
 @app.post("/api/admin/trigger-missed-tasks")
@@ -429,6 +456,124 @@ async def trigger_missed_tasks(current_user: dict = Depends(is_admin_user)):
     except Exception as e:
         logger.error(f"触发错过任务失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/admin/data-collection/collect-all")
+async def collect_all_data_new(force_trading_day: bool = False, current_user: dict = Depends(get_current_user)):
+    """
+    一次采集所有数据（新接口）
+    
+    Args:
+        force_trading_day: 是否强制在非交易日也执行交易日数据采集
+    """
+    if not current_user.get('is_admin'):
+        raise HTTPException(status_code=403, detail="需要管理员权限")
+    
+    try:
+        service = DataCollectionService()
+        result = service.collect_all_data(force_trading_day=force_trading_day)
+        return result
+    except Exception as e:
+        logger.error(f"批量采集所有数据失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/admin/data-collection/collect-specific")
+async def collect_specific_data(
+    data_type: str,
+    days: Optional[int] = None,
+    target_date: Optional[str] = None,
+    force: bool = False,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    采集特定数据表
+    
+    Args:
+        data_type: 数据类型（sheep_daily, money_flow, concept_money_flow, hot_rank, concept_data, index_data, concept_metadata_sync）
+        days: 采集天数（仅对sheep_daily和index_data有效）
+        target_date: 目标日期（YYYY-MM-DD格式，可选）
+        force: 是否强制在非交易日执行
+    """
+    if not current_user.get('is_admin'):
+        raise HTTPException(status_code=403, detail="需要管理员权限")
+    
+    try:
+        service = DataCollectionService()
+        
+        kwargs = {'force': force}
+        if days is not None:
+            kwargs['days'] = days
+        if target_date:
+            try:
+                kwargs['target_date'] = datetime.strptime(target_date, '%Y-%m-%d').date()
+            except ValueError:
+                raise HTTPException(status_code=400, detail="日期格式错误，请使用YYYY-MM-DD格式")
+        
+        result = service.collect_specific_data(data_type, **kwargs)
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"采集特定数据失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/admin/data-collection/types")
+async def get_data_collection_types(current_user: dict = Depends(get_current_user)):
+    """获取可用的数据类型列表"""
+    if not current_user.get('is_admin'):
+        raise HTTPException(status_code=403, detail="需要管理员权限")
+    
+    return {
+        'types': [
+            {
+                'value': 'sheep_daily',
+                'label': '肥羊日K数据',
+                'description': '股票日K线数据（开高低收、成交量、技术指标等）',
+                'requires_trading_day': True
+            },
+            {
+                'value': 'money_flow',
+                'label': '资金流向数据',
+                'description': '股票主力资金流向（主力、超大单、大单、中单、小单）',
+                'requires_trading_day': True
+            },
+            {
+                'value': 'concept_money_flow',
+                'label': '概念资金流向数据',
+                'description': '概念资金净流入数据',
+                'requires_trading_day': True
+            },
+            {
+                'value': 'hot_rank',
+                'label': '热度榜数据',
+                'description': '市场热门股票排名（多数据源）',
+                'requires_trading_day': False
+            },
+            {
+                'value': 'concept_data',
+                'label': '概念板块数据',
+                'description': '概念主题列表、股票与概念的关联关系',
+                'requires_trading_day': False
+            },
+            {
+                'value': 'index_data',
+                'label': '大盘指数数据',
+                'description': '大盘指数日K数据（用于RSRS市场状态识别）',
+                'requires_trading_day': True
+            },
+            {
+                'value': 'concept_metadata_sync',
+                'label': '概念元数据同步',
+                'description': '从EastMoney同步最新概念列表',
+                'requires_trading_day': False
+            },
+            {
+                'value': 'financial_data',
+                'label': '财务数据',
+                'description': '股票财务数据（研发费用、净利润、营业收入等，季度/年度数据）',
+                'requires_trading_day': False
+            }
+        ]
+    }
 
 @app.post("/api/admin/collect-all-data")
 async def collect_all_data(current_user: dict = Depends(get_current_user)):
@@ -1248,8 +1393,7 @@ async def ai_analyze_sheep(
         raise HTTPException(status_code=500, detail=str(e))
 
 # ========== 模型老K API ==========
-from services.alpha_model_t4 import AlphaModelT4
-from services.alpha_model_t6_resonance import AlphaModelT6Resonance
+
 from services.alpha_model_t7_concept_flow import AlphaModelT7ConceptFlow
 from services.backtest_engine import BacktestEngine
 from db.strategy_recommendation_repository import StrategyRecommendationRepository
@@ -1423,16 +1567,16 @@ async def get_recommendations(
             trade_date = db_latest_date
             logger.info(f"未指定日期，使用数据库最新交易日: {trade_date}")
             
-            # 交易时段自动刷新当日板块资金流数据
+            # 交易时段自动刷新当日概念资金流数据
             today = date.today()
             if TradeDateAdapter.is_trading_day(today) and TradeDateAdapter.is_trading_hours():
                 try:
-                    logger.info("检测到交易时段，自动刷新板块资金流数据...")
-                    from services.sector_money_flow_service import SectorMoneyFlowService
-                    SectorMoneyFlowService.collect_sector_money_flow_data(today)
-                    logger.info("板块资金流数据刷新完成")
+                    logger.info("检测到交易时段，自动刷新概念资金流数据...")
+                    from services.concept_money_flow_service import ConceptMoneyFlowService
+                    ConceptMoneyFlowService.collect_concept_money_flow_data(today)
+                    logger.info("概念资金流数据刷新完成")
                 except Exception as e:
-                    logger.warning(f"刷新板块资金流数据失败（不影响推荐）: {e}")
+                    logger.warning(f"刷新概念资金流数据失败（不影响推荐）: {e}")
         
         # 最终验证：确保trade_date不超过数据库最新日期
         if trade_date > db_latest_date:
@@ -1441,15 +1585,19 @@ async def get_recommendations(
         
         logger.info(f"T7概念资金双驱推荐最终使用交易日期: {trade_date} (数据库最新日期: {db_latest_date})")
         
+        # 如果没有指定top_n，强制限制为20，避免返回过多数据和超时
+        if request.top_n is None or request.top_n <= 0:
+            request.top_n = 20
+            logger.info(f"未指定top_n或top_n<=0，自动限制为20只，避免超时")
+        
         # 根据top_n参数动态调整超时时间
-        # 如果top_n较小（<=10），使用较短超时；如果top_n较大或未指定，使用较长超时
-        top_n_value = request.top_n if request.top_n else 100  # 默认假设返回100条
+        top_n_value = request.top_n
         if top_n_value <= 10:
             timeout_seconds = 300.0  # 5分钟（小批量）
         elif top_n_value <= 50:
             timeout_seconds = 450.0  # 7.5分钟（中批量）
         else:
-            timeout_seconds = 600.0  # 10分钟（大批量或全部）
+            timeout_seconds = 600.0  # 10分钟（大批量）
         
         logger.info(f"T7推荐超时设置: {timeout_seconds}秒 (top_n: {request.top_n})")
         
@@ -1466,7 +1614,16 @@ async def get_recommendations(
             start_time = datetime.now()
             result = await asyncio.wait_for(run_model(), timeout=timeout_seconds)
             elapsed_time = (datetime.now() - start_time).total_seconds()
-            recommendations, diagnostic_info = result if isinstance(result, tuple) else (result, None)
+            # 处理新的返回值格式：(recommendations, diagnostic_info, metadata)
+            if isinstance(result, tuple) and len(result) == 3:
+                recommendations, diagnostic_info, metadata = result
+            elif isinstance(result, tuple) and len(result) == 2:
+                recommendations, diagnostic_info = result
+                metadata = None
+            else:
+                recommendations = result
+                diagnostic_info = None
+                metadata = None
             logger.info(f"T7概念资金双驱推荐完成，耗时: {elapsed_time:.2f}秒，返回 {len(recommendations) if recommendations else 0} 条结果")
         except asyncio.TimeoutError:
             elapsed_time = timeout_seconds
@@ -1514,8 +1671,18 @@ async def get_recommendations(
             "trade_date": trade_date.isoformat(),
             "recommendations": recommendations or [],
             "count": len(recommendations) if recommendations else 0,
-            "diagnostic_info": diagnostic_info if diagnostic_info else None
+            "diagnostic_info": diagnostic_info if diagnostic_info else None,
+            "metadata": metadata if metadata else None
         }
+        
+        # 调试日志：检查metadata是否正确返回
+        if metadata:
+            logger.info(f"返回metadata: market_regime={metadata.get('market_regime')}, funnel_data={metadata.get('funnel_data')}")
+            # 确保funnel_data是字典格式
+            if isinstance(metadata.get('funnel_data'), dict):
+                logger.info(f"漏斗数据: total={metadata['funnel_data'].get('total')}, L1={metadata['funnel_data'].get('L1_pass')}, L2={metadata['funnel_data'].get('L2_pass')}, final={metadata['funnel_data'].get('final')}")
+        else:
+            logger.warning("metadata为空，可能未正确返回")
         logger.info(f"API返回: trade_date={response['trade_date']}, count={response['count']}")
         if diagnostic_info:
             logger.info(f"诊断信息: {diagnostic_info}")

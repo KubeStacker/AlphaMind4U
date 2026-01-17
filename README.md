@@ -1,6 +1,6 @@
 # 股票数据分析系统
 
-一个基于 FastAPI + React 的股票数据采集、分析和可视化系统，支持股票搜索、热度榜、板块分析、资金流向等功能。
+一个基于 FastAPI + React 的股票数据采集、分析和可视化系统，支持股票搜索、热度榜、板块分析、资金流向、AI智能推荐等功能。
 
 ## 📋 目录
 
@@ -10,25 +10,38 @@
 - [快速开始](#快速开始)
 - [数据库设计](#数据库设计)
 - [API 文档](#api-文档)
-- [板块匹配算法](#板块匹配算法)
+- [模型老K（T7概念资金双驱模型）](#模型老k)
 - [定时任务](#定时任务)
 - [部署说明](#部署说明)
 - [环境配置](#环境配置)
 
 ## ✨ 功能特性
 
+### 核心功能
 - **股票搜索**：支持股票代码和名称搜索
 - **股票日K数据**：查看股票历史K线数据
-- **资金流向**：分析股票主力资金流向
+- **资金流向**：分析股票主力资金流向（主力、超大单、大单、中单、小单）
 - **热度榜**：实时展示市场热门股票排名
 - **热门板块**：基于虚拟板块聚合算法，智能匹配热门股到主板块
 - **板块分析**：查看板块K线和板块内股票
+- **板块资金流**：分析板块资金净流入，识别热门板块
 - **概念管理**：管理股票概念和虚拟板块映射
-- **模型老K**：T-4级联火箭模型，智能选股推荐系统
-  - 支持选择历史日期进行推荐
-  - 自动处理非交易日，转换为最近交易日
+
+### 模型老K（T7概念资金双驱模型 v2.0）
+- **智能推荐**：基于T7模型的智能选股推荐系统
+  - 概念竞速引擎：精准捕捉最强概念驱动力
+  - 主力资金验证：结合资金流数据验证主力意图
+  - 动态权重调整：根据市场状态自动优化评分权重
+  - 多因子胜率模型：综合技术、资金、概念多维度评估
 - **回测功能**：时光机逻辑，验证策略历史表现
+- **历史战绩**：自动保存和验证推荐记录
+- **市场状态识别**：自动识别市场状态（进攻/防守/震荡）并调整策略
+
+### 系统管理
 - **用户认证**：JWT认证，支持登录日志和安全锁定
+- **用户管理**：支持用户创建、更新、删除（仅管理员）
+- **AI管理**：支持多AI模型配置和管理
+- **数据管理**：数据完整性检查、缺失数据刷新、数据清理
 
 ## 🛠 技术栈
 
@@ -39,6 +52,7 @@
 - **数据源**：akshare（股票数据）
 - **定时任务**：APScheduler 3.10
 - **认证**：JWT (python-jose)
+- **量化分析**：pandas, numpy, statsmodels, scipy
 
 ### 前端
 - **框架**：React 18.2 + TypeScript
@@ -46,6 +60,7 @@
 - **UI组件**：Ant Design 5.11
 - **图表**：ECharts 5.4
 - **路由**：React Router 6.20
+- **Markdown渲染**：react-markdown
 
 ### 部署
 - **容器化**：Docker + Docker Compose
@@ -65,30 +80,48 @@
 │   ├── db/                     # DB层：数据库操作
 │   │   ├── __init__.py
 │   │   ├── database.py        # 数据库连接管理
-│   │   ├── stock_repository.py
+│   │   ├── sheep_repository.py
 │   │   ├── money_flow_repository.py
+│   │   ├── sector_money_flow_repository.py
 │   │   ├── concept_repository.py
 │   │   ├── hot_rank_repository.py
+│   │   ├── index_repository.py
+│   │   ├── ai_config_repository.py
+│   │   ├── ai_model_config_repository.py
+│   │   ├── ai_cache_repository.py
+│   │   ├── strategy_recommendation_repository.py
 │   │   └── virtual_board_repository.py
 │   ├── etl/                    # ETL层：数据采集适配器
 │   │   ├── __init__.py
 │   │   ├── trade_date_adapter.py
-│   │   ├── stock_adapter.py
+│   │   ├── sheep_adapter.py
 │   │   ├── concept_adapter.py
 │   │   ├── concept_filter.py
-│   │   └── hot_rank_adapter.py
+│   │   ├── hot_rank_adapter.py
+│   │   ├── index_adapter.py
+│   │   └── sector_money_flow_adapter.py
 │   ├── services/               # Service层：业务逻辑
 │   │   ├── __init__.py
 │   │   ├── data_collection_service.py
-│   │   ├── stock_service.py
+│   │   ├── sheep_service.py
 │   │   ├── hot_rank_service.py
 │   │   ├── concept_service.py
 │   │   ├── concept_management_service.py
-│   │   └── sector_matching_service.py
+│   │   ├── sector_matching_service.py
+│   │   ├── sector_money_flow_service.py
+│   │   ├── user_service.py
+│   │   ├── ai_service.py
+│   │   ├── alpha_model_t4.py
+│   │   ├── alpha_model_t6_resonance.py
+│   │   ├── alpha_model_t7_concept_flow.py
+│   │   └── backtest_engine.py
+│   ├── scripts/                # 维护脚本
+│   │   └── check_data_gaps.py # 数据完整性检查工具
 │   ├── config.py              # 配置文件
 │   ├── scheduler.py            # 定时任务调度器
 │   ├── requirements.txt        # Python依赖
-│   └── Dockerfile              # Docker配置
+│   ├── Dockerfile              # Docker配置
+│   └── PERFORMANCE_OPTIMIZATION.md  # 性能优化文档
 ├── frontend/                   # 前端应用
 │   ├── src/
 │   │   ├── api/               # API客户端
@@ -102,7 +135,9 @@
 ├── database/
 │   └── init.sql               # 数据库初始化脚本
 ├── docs/                      # 文档目录
-│   └── model-k-algorithm.md  # 模型老K算法文档
+│   ├── model-k-usage.md      # 模型老K使用指南
+│   ├── SECTOR_RESONANCE_EXPLAIN.md  # 板块共振说明
+│   └── RSRS_MARKET_REGIME.md  # RSRS市场状态识别说明
 ├── docker-compose.yml         # Docker Compose配置
 ├── deploy.sh                  # 一键部署脚本
 └── README.md                  # 本文档
@@ -134,6 +169,10 @@ docker-compose up -d --build
 - 后端API：http://localhost:8000
 - API文档：http://localhost:8000/docs
 
+默认管理员账号：
+- 用户名：`admin`
+- 密码：`admin123`（首次登录后请修改）
+
 ### 手动部署
 
 #### 后端
@@ -164,15 +203,21 @@ npm run dev
 
 ### 核心表结构
 
-1. **stock_basic** - 股票基本信息表
-2. **stock_daily** - 股票交易日数据表
-3. **concept_theme** - 概念主题表
-4. **stock_concept_mapping** - 股票与概念关联关系表（多对多）
-5. **virtual_board_aggregation** - 虚拟板块聚合表
-6. **market_hot_rank** - 市场热度排名表
-7. **stock_money_flow** - 股票资金流向表
-8. **users** - 用户表
-9. **login_logs** - 登录日志表
+1. **sheep_basic** - 股票基本信息表
+2. **sheep_daily** - 股票交易日数据表
+3. **sheep_money_flow** - 股票资金流向表
+4. **concept_theme** - 概念主题表
+5. **stock_concept_mapping** - 股票与概念关联关系表（多对多）
+6. **virtual_board_aggregation** - 虚拟板块聚合表
+7. **market_hot_rank** - 市场热度排名表
+8. **sector_money_flow** - 板块资金流向表
+9. **market_index_daily** - 大盘指数日K数据表
+10. **users** - 用户表
+11. **login_logs** - 登录日志表
+12. **ai_config** - AI配置表
+13. **ai_model_config** - AI模型配置表
+14. **ai_cache** - AI分析缓存表
+15. **strategy_recommendation** - 策略推荐记录表
 
 详细表结构见 `database/init.sql`
 
@@ -206,28 +251,22 @@ GET /api/auth/me
 Authorization: Bearer {token}
 ```
 
-#### 登出
-```http
-POST /api/auth/logout
-Authorization: Bearer {token}
-```
-
 ### 股票相关
 
 #### 搜索股票
 ```http
-GET /api/stocks/search?q=平安
+GET /api/sheep/search?q=平安
 ```
 
 #### 获取股票日K数据
 ```http
-GET /api/stocks/{stock_code}/daily
+GET /api/sheep/{sheep_code}/daily
 Authorization: Bearer {token}
 ```
 
 #### 获取资金流向数据
 ```http
-GET /api/stocks/{stock_code}/capital-flow
+GET /api/sheep/{sheep_code}/capital-flow?days=60
 Authorization: Bearer {token}
 ```
 
@@ -235,38 +274,12 @@ Authorization: Bearer {token}
 
 #### 获取热度榜
 ```http
-GET /api/hot-stocks?source=xueqiu
+GET /api/hot-sheep?source=xueqiu
 ```
 
 #### 获取热门板块
 ```http
 GET /api/hot-sectors
-```
-
-响应示例：
-```json
-{
-  "sectors": [
-    {
-      "sector_name": "AI应用",
-      "hot_score": 11,
-      "color": "red",
-      "hot_stocks": [
-        {
-          "stock_code": "000001",
-          "stock_name": "平安银行",
-          "rank": 1
-        }
-      ]
-    }
-  ]
-}
-```
-
-#### 刷新热度榜
-```http
-POST /api/refresh-hot-stocks
-Authorization: Bearer {token}
 ```
 
 ### 板块相关
@@ -279,85 +292,87 @@ Authorization: Bearer {token}
 
 #### 获取板块股票
 ```http
-GET /api/sectors/{sector_name}/stocks
+GET /api/sectors/{sector_name}/sheep
 Authorization: Bearer {token}
 ```
 
-### 概念管理
-
-#### 获取概念列表
+#### 获取板块资金净流入推荐
 ```http
-GET /api/concepts?limit=100&offset=0
+GET /api/sector-money-flow/recommend?days=1&limit=30
 Authorization: Bearer {token}
 ```
 
-#### 创建概念
+### 模型老K相关
+
+#### 获取智能推荐
 ```http
-POST /api/concepts
+POST /api/model-k/recommend
 Authorization: Bearer {token}
 Content-Type: application/json
 
 {
-  "concept_name": "AI智能体",
-  "concept_code": "THS001",
-  "source": "ths",
-  "description": "AI智能体概念"
+  "params": {
+    "min_change_pct": 2.0,
+    "max_change_pct": 9.5,
+    "vol_threshold": 1.5,
+    "rps_threshold": 80,
+    "concept_boost": true,
+    "ai_filter": true,
+    "min_win_probability": 45
+  },
+  "trade_date": "2026-01-15",
+  "top_n": 20
 }
 ```
 
-#### 更新概念
+#### 执行回测
 ```http
-PUT /api/concepts/{concept_id}
+POST /api/model-k/backtest
 Authorization: Bearer {token}
 Content-Type: application/json
 
 {
-  "concept_name": "AI智能体",
-  "is_active": true
+  "start_date": "2025-01-01",
+  "end_date": "2025-12-31",
+  "params": {
+    "min_change_pct": 2.0,
+    "max_change_pct": 9.5,
+    "vol_threshold": 1.5
+  }
 }
 ```
 
-#### 删除概念（软删除）
+#### 获取推荐历史
 ```http
-DELETE /api/concepts/{concept_id}
+GET /api/model-k/history?run_date=2026-01-15&limit=100&offset=0
 Authorization: Bearer {token}
 ```
 
-### 虚拟板块管理
+### AI相关
 
-#### 获取虚拟板块列表
+#### AI推荐肥羊
 ```http
-GET /api/virtual-boards
-Authorization: Bearer {token}
-```
-
-#### 创建虚拟板块映射
-```http
-POST /api/virtual-boards/mappings
+POST /api/ai/recommend-sheep
 Authorization: Bearer {token}
 Content-Type: application/json
 
 {
-  "virtual_board_name": "AI应用",
-  "source_concept_name": "AI智能体",
-  "weight": 1.0,
-  "description": "AI应用板块"
+  "model_name": "gpt-4"
 }
 ```
 
-#### 删除虚拟板块映射
+#### AI分析肥羊
 ```http
-DELETE /api/virtual-boards/mappings?virtual_board_name=AI应用&source_concept_name=AI智能体
+POST /api/ai/analyze-sheep/{sheep_code}
 Authorization: Bearer {token}
+Content-Type: application/json
+
+{
+  "model_name": "gpt-4"
+}
 ```
 
-#### 导入sector_mapping数据
-```http
-POST /api/virtual-boards/import-sector-mapping
-Authorization: Bearer {token}
-```
-
-### 数据采集管理
+### 管理相关（仅管理员）
 
 #### 手动触发全量数据采集
 ```http
@@ -365,99 +380,72 @@ POST /api/admin/collect-all-data
 Authorization: Bearer {token}
 ```
 
-采集顺序：
-1. 概念板块数据
-2. 股票日K数据
-3. 资金流向数据（仅在交易日）
-4. 热度榜数据
+#### 检查数据缺失
+```http
+GET /api/admin/check-data-gaps?days=30&data_type=all
+Authorization: Bearer {token}
+```
 
-## 🧮 板块匹配算法
+#### 刷新缺失数据
+```http
+POST /api/admin/refresh-missing-data
+Authorization: Bearer {token}
+Content-Type: application/json
 
-### 算法概述
+{
+  "data_type": "all",
+  "days": 30
+}
+```
 
-实现了基于**虚拟板块聚合**的算法，将热门股的细分概念匹配到主板块。算法核心思想：**通过virtual_board_aggregation表，将细分概念（如AI智能体、AIGC概念）聚合到主板块（如AI应用）**。
+更多API文档请访问：http://localhost:8000/docs
 
-### 数据表结构
+## 🚀 模型老K（T7概念资金双驱模型 v2.0）
 
-#### virtual_board_aggregation表
-- `virtual_board_name`: 主板块名称（如"AI应用"）
-- `source_concept_name`: 细分概念名称（如"AI智能体"、"AIGC概念"等）
-- `weight`: 聚合权重
-- `is_active`: 是否有效
+### 功能概述
 
-**映射关系**：细分概念 -> 主板块（一对多，一个细分概念可能属于多个主板块）
+模型老K是一个基于T7概念资金双驱模型v2.0的智能选股推荐系统，采用概念竞速引擎 + 资金流验证 + 动态龙头筛选 + 筹码获利盘分析。
 
-### 算法流程
+**T7 v2.0 核心特性：**
+1. **简化配置**：参数从20+个收敛到7个核心参数，操作更简单
+2. **自动优化**：市场状态自动识别并调整策略，权重自动调整
+3. **概念竞速引擎**：从单一行业进化为"最强概念竞速"，精准捕捉个股的真实上涨驱动力
+4. **资金流因子**：引入主力资金净流入、超大单净流入等资金流数据验证主力意图
+5. **动态龙头筛选**：基于最强概念的领涨股豁免机制
+6. **筹码获利盘**：ASR和真空区判断
+7. **多日概念热度**：考虑概念3日累计表现，提升推荐质量
 
-#### 1. 数据准备
-- 获取热门股票列表（top100）
-- 批量获取所有热门股的概念（单次查询优化）
-- 加载虚拟板块映射关系（从virtual_board_aggregation表）
+### 快速开始
 
-#### 2. 概念到主板块映射
+1. 进入"模型老K"页面
+2. 调整策略参数（可选，默认参数已优化）
+3. **选择推荐日期**（可选，留空使用最近交易日）
+4. 点击"智能推荐 (Get Alpha)"按钮
+5. 查看推荐结果和回测数据
 
-对每个热门股：
-1. **获取股票的所有概念**：从`stock_concept_mapping`表获取（细分概念）
-2. **概念到主板块映射**：通过`virtual_board_aggregation`表，将细分概念映射到主板块
-   - 一个细分概念可能对应多个主板块
-   - 例如："AI智能体" -> ["AI应用", "人工智能"]
+### 核心功能
 
-#### 3. 主板块匹配决策
+#### 智能推荐
+- **实时推荐**：基于最新市场数据，动态生成推荐
+- **历史日期推荐**：支持选择任意历史日期，查看该日期的推荐结果
+- **自动日期处理**：自动处理非交易日，转换为最近的交易日
+- **参数可调**：支持实时调整策略参数，立即生效
 
-对每个股票，根据匹配到的主板块数量进行决策：
+#### 回测验证
+- **时光机逻辑**：使用历史数据模拟交易
+- **多维度指标**：胜率、Alpha收益率、总收益率、最大回撤
+- **收益曲线**：可视化展示策略历史表现
 
-**情况1：只匹配到一个主板块**
-- 直接归到这个主板块
+#### 历史战绩
+- **自动保存**：每次推荐自动保存记录
+- **自动验证**：推荐日期距离今天超过5个交易日自动验证
+- **结果分析**：显示后5日最大涨幅、后5日涨幅、成功/失败标记
 
-**情况2：匹配到多个主板块**
-- 统计每个主板块在top100中包含的股票数量
-- 选择包含最多热门股的主板块
-- **原理**：板块越热（包含的股票越多），该股票越可能属于这个板块
+### 详细文档
 
-#### 4. 板块聚合
-
-将所有股票按主板块聚合：
-- 统计每个主板块下的股票列表
-- 记录每个主板块的最佳排名（排名最好的股票）
-
-#### 5. 板块排序
-
-按以下规则排序：
-1. **股票数量**（降序）：板块下热门股数量
-2. **最佳排名**（升序）：板块中排名最好的股票
-
-#### 6. 颜色标识
-
-- **第1名板块**：红色（red）
-- **第2名板块**：橙色（orange）
-- **其他板块**：蓝色（blue）
-
-### 性能优化
-
-1. **批量查询优化**：使用单次SQL查询获取所有热门股的概念，避免N+1查询问题
-2. **缓存机制**：虚拟板块映射关系缓存（单例模式），减少重复数据库查询
-3. **算法复杂度**：
-   - 时间复杂度：O(N × M)，N为股票数，M为平均概念数
-   - 空间复杂度：O(N + S)，S为板块数
-   - 实际运行：100只股票，平均每个股票5个概念，耗时<100ms
-
-### 数据过滤
-
-算法会自动过滤无意义的概念：
-- 技术性板块（融资融券、转融券标的等）
-- 指数类板块（沪深300、中证500等）
-- 地域性板块（江苏板块、浙江板块等）
-- 其他无意义分类
-
-详见：`backend/etl/concept_filter.py`
-
-### 算法特点
-
-1. **虚拟板块聚合**：将细分概念聚合到主板块，符合用户习惯
-2. **唯一匹配**：每个股票只匹配一个主板块，避免重叠
-3. **集聚效应决策**：当股票匹配到多个主板块时，选择包含最多热门股的主板块
-4. **性能优化**：批量查询，单例缓存，高效算法
-5. **自动过滤**：自动过滤无意义的概念和板块
+- [模型老K使用指南](./docs/model-k-usage.md) - 完整的使用说明和参数配置
+- [板块共振说明](./docs/SECTOR_RESONANCE_EXPLAIN.md) - 板块共振算法详解
+- [RSRS市场状态识别](./docs/RSRS_MARKET_REGIME.md) - 市场状态识别算法说明
 
 ## ⏰ 定时任务
 
@@ -466,21 +454,25 @@ Authorization: Bearer {token}
 ### 自然日数据采集（每天18:00）
 - **热度榜数据**：采集市场热门股票排名
 
-### 交易日数据采集（每天20:00，仅在交易日）
-- **股票日K数据**：采集股票历史K线数据
+### 交易日数据采集（每天15:00，仅在交易日）
+- **肥羊日K数据**：采集股票历史K线数据
 - **资金流向数据**：采集股票主力资金流向
+- **板块资金流向数据**：采集板块资金流向
+- **大盘指数数据**：采集中证1000指数数据（用于RSRS计算）
 
 ### 概念板块数据采集（每天03:00）
 - **概念板块列表**：采集概念主题列表
 - **股票-概念关联关系**：采集股票与概念的关联关系
 
-### 配置说明
+### 板块资金流实时采集（交易时间每30分钟）
+- **板块资金流数据**：交易时间（9:00-14:59）每30分钟刷新一次
 
-定时任务配置在 `backend/config.py` 中：
-```python
-DATA_UPDATE_HOUR = 18  # 每天18点更新数据
-DATA_UPDATE_MINUTE = 0
-```
+### 数据清理任务（每天04:00）
+- **资金流数据清理**：保留最近3年数据
+- **板块资金流数据清理**：保留最近3个月数据
+
+### 补偿检查任务（每小时，15:00-23:59）
+- **错过任务检查**：检查并触发错过的数据采集任务
 
 ## 🚢 部署说明
 
@@ -511,33 +503,6 @@ DATA_UPDATE_MINUTE = 0
    docker-compose logs -f
    ```
 
-### 单独部署
-
-#### 后端部署
-
-```bash
-cd backend
-docker build -t stock-backend .
-docker run -d --name stock-backend \
-  --network host \
-  -e DB_HOST=localhost \
-  -e DB_USER=admin \
-  -e DB_PASSWORD=admin \
-  -e DB_NAME=stock \
-  -p 8000:8000 \
-  stock-backend
-```
-
-#### 前端部署
-
-```bash
-cd frontend
-docker build -t stock-frontend .
-docker run -d --name stock-frontend \
-  -p 80:80 \
-  stock-frontend
-```
-
 ### 生产环境建议
 
 1. **使用环境变量**：不要在代码中硬编码敏感信息
@@ -564,8 +529,8 @@ DB_NAME=stock
 JWT_SECRET_KEY=your-secret-key-change-in-production
 
 # 数据保留天数
-STOCK_DATA_RETENTION_DAYS=90
-SECTOR_DATA_RETENTION_DAYS=10
+STOCK_DATA_RETENTION_DAYS=1095  # 3年
+SECTOR_DATA_RETENTION_DAYS=90   # 3个月
 
 # 定时任务配置
 DATA_UPDATE_HOUR=18
@@ -587,122 +552,6 @@ VITE_API_BASE_URL=http://localhost:8000
 首次部署后，系统会自动创建管理员用户：
 - 用户名：`admin`
 - 密码：`admin123`（首次登录后请修改）
-
-## 🚀 模型老K（T-4级联火箭模型）
-
-### 功能概述
-
-模型老K是一个基于T-4级联火箭模型的量化选股系统，通过四级过滤机制，从全市场股票中筛选出最具潜力的投资标的。
-
-### 核心特性
-
-- **四级过滤**：特征提取 → 硬约束 → 打分排序 → AI修正
-- **动态参数**：支持实时调整策略参数
-- **智能推荐**：基于技术面、趋势面、热度面综合打分
-- **回测验证**：时光机逻辑，验证策略历史表现
-- **风险控制**：自动计算止损价，控制回撤
-
-### 快速开始
-
-1. 进入"模型老K"页面
-2. 调整策略参数（可选）
-3. **选择推荐日期**（可选，留空使用最近交易日）
-   - 支持选择任意历史日期
-   - 如果选择的日期不是交易日，系统会自动转换为最近的交易日
-   - 不能选择未来日期
-4. 点击"智能推荐 (Get Alpha)"按钮
-5. 查看推荐结果和回测数据
-
-### 核心功能
-
-#### 智能推荐
-- **实时推荐**：基于最新市场数据，动态生成推荐
-- **历史日期推荐**：支持选择任意历史日期，查看该日期的推荐结果
-- **自动日期处理**：自动处理非交易日，转换为最近的交易日
-- **参数可调**：支持实时调整策略参数，立即生效
-
-#### 回测验证
-- **时光机逻辑**：使用历史数据模拟交易
-- **多维度指标**：胜率、Alpha收益率、总收益率、最大回撤
-- **收益曲线**：可视化展示策略历史表现
-
-### API接口
-
-#### 获取智能推荐
-```http
-POST /api/model-k/recommend
-Authorization: Bearer {token}
-Content-Type: application/json
-
-{
-  "params": {
-    "ma_support": "MA60",
-    "vol_threshold": 2.0,
-    "rps_threshold": 90,
-    "ai_filter": true,
-    "w_tech": 0.4,
-    "w_trend": 0.4,
-    "w_hot": 0.2
-  },
-  "trade_date": "2026-01-15"  // 可选，YYYY-MM-DD格式，留空使用最近交易日
-}
-```
-
-响应：
-```json
-{
-  "trade_date": "2026-01-15",
-  "recommendations": [
-    {
-      "stock_code": "000001",
-      "stock_name": "平安银行",
-      "entry_price": 12.50,
-      "ai_score": 85.5,
-      "win_probability": 70,
-      "reason_tags": "倍量2.5倍 + RPS强势 + VCP收敛",
-      "stop_loss_price": 11.63,
-      "vol_ratio": 2.5,
-      "rps_250": 95.2,
-      "vcp_factor": 0.25
-    }
-  ],
-  "count": 1
-}
-```
-
-**参数说明**：
-- `trade_date`：可选，推荐使用的交易日期（YYYY-MM-DD格式）
-  - 留空：使用最近的交易日
-  - 指定日期：使用该日期（如果不是交易日，自动转换为最近的交易日）
-  - 不能选择未来日期
-
-#### 执行回测
-```http
-POST /api/model-k/backtest
-Authorization: Bearer {token}
-Content-Type: application/json
-
-{
-  "start_date": "2025-01-01",
-  "end_date": "2025-12-31",
-  "params": {
-    "ma_support": "MA60",
-    "vol_threshold": 2.0,
-    "rps_threshold": 90,
-    "ai_filter": true
-  }
-}
-```
-
-#### 获取推荐历史
-```http
-GET /api/model-k/history?run_date=2026-01-15&limit=100&offset=0
-Authorization: Bearer {token}
-```
-
-### 详细文档
-
-完整的算法说明、参数配置和使用方法，请查看：[模型老K算法文档](./docs/model-k-algorithm.md)
 
 ## 📝 代码分层说明
 
@@ -748,23 +597,11 @@ npm run dev
 - 前端：使用 ESLint 和 Prettier 格式化代码
 - 提交信息：使用清晰的提交信息
 
-## 📄 许可证
-
-本项目仅供学习和研究使用。
-
-## 🤝 贡献
-
-欢迎提交 Issue 和 Pull Request！
-
-## 📞 联系方式
-
-如有问题，请提交 Issue 或联系项目维护者。
-
----
-
 ## 📚 文档
 
-- [模型老K算法文档](./docs/model-k-algorithm.md) - T-4级联火箭模型详细说明
+- [模型老K使用指南](./docs/model-k-usage.md) - T7模型详细使用说明
+- [板块共振说明](./docs/SECTOR_RESONANCE_EXPLAIN.md) - 板块共振算法详解
+- [RSRS市场状态识别](./docs/RSRS_MARKET_REGIME.md) - 市场状态识别算法说明
 - [性能优化文档](./backend/PERFORMANCE_OPTIMIZATION.md) - 后端性能优化说明
 
 ## 📄 许可证
@@ -782,9 +619,3 @@ npm run dev
 ---
 
 **最后更新**：2026-01-15
-
-### 更新内容
-
-- ✅ 支持选择历史日期进行推荐
-- ✅ 自动处理非交易日，转换为最近交易日
-- ✅ 优化推荐结果展示和错误处理

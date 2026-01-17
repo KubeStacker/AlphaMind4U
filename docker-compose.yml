@@ -54,6 +54,12 @@ services:
     networks:
       - stock-network
     command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import socket; s=socket.socket(); s.settimeout(2); result=s.connect_ex((\"localhost\", 8000)); s.close(); exit(0 if result == 0 else 1)'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
   frontend:
     build:

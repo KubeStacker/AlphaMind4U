@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react'
 import { Menu, Layout } from 'antd'
-import { SettingOutlined, UserOutlined, AppstoreOutlined, RobotOutlined } from '@ant-design/icons'
+import { SettingOutlined, UserOutlined, AppstoreOutlined, RobotOutlined, DatabaseOutlined } from '@ant-design/icons'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import SectorMappingManagement from './Settings'
 import AIManagement from './AIManagement'
 import UserManagement from './UserManagement'
+import DataManagement from './DataManagement'
 
 const { Sider, Content } = Layout
 
@@ -27,11 +28,18 @@ const SettingsMain: React.FC = () => {
       icon: <RobotOutlined />,
       label: 'AI管理',
     },
-    ...(isAdmin ? [{
-      key: '/settings/users',
-      icon: <UserOutlined />,
-      label: '用户管理',
-    }] : []),
+    ...(isAdmin ? [
+      {
+        key: '/settings/data-management',
+        icon: <DatabaseOutlined />,
+        label: '数据管理',
+      },
+      {
+        key: '/settings/users',
+        icon: <UserOutlined />,
+        label: '用户管理',
+      }
+    ] : []),
   ]
 
   const handleMenuClick = ({ key }: { key: string }) => {
@@ -46,6 +54,9 @@ const SettingsMain: React.FC = () => {
     }
     if (path.includes('/ai')) {
       return '/settings/ai'
+    }
+    if (path.includes('/data-management')) {
+      return '/settings/data-management'
     }
     if (path.includes('/users')) {
       return '/settings/users'
@@ -67,6 +78,9 @@ const SettingsMain: React.FC = () => {
     const path = location.pathname
     if (path.includes('/ai')) {
       return <AIManagement />
+    }
+    if (path.includes('/data-management')) {
+      return <DataManagement />
     }
     if (path.includes('/users')) {
       return <UserManagement />

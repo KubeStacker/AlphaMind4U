@@ -9,7 +9,7 @@ from datetime import date, datetime, timedelta
 import logging
 from sqlalchemy import text
 from db.database import get_db, get_raw_connection, engine
-from services.alpha_model_t6_resonance import AlphaModelT6Resonance
+# from services.alpha_model_t6_resonance import AlphaModelT6Resonance  # 已移除，不再使用
 from services.alpha_model_t7_concept_flow import AlphaModelT7ConceptFlow
 
 logger = logging.getLogger(__name__)
