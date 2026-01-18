@@ -58,16 +58,22 @@ export const aiApi = {
   },
 
   // AI推荐肥羊
-  recommendSheeps: async (modelName?: string): Promise<AIRecommendResponse> => {
-    const response = await apiClient.post('/ai/recommend-sheep', { model_name: modelName }, {
+  recommendSheeps: async (modelName?: string, customPrompt?: string): Promise<AIRecommendResponse> => {
+    const response = await apiClient.post('/ai/recommend-sheep', { 
+      model_name: modelName,
+      custom_prompt: customPrompt
+    }, {
       timeout: 180000 // 180秒，AI推荐可能需要更长时间
     })
     return response.data
   },
 
   // AI分析肥羊
-  analyzeSheep: async (stockCode: string, modelName?: string): Promise<AIAnalyzeResponse> => {
-    const response = await apiClient.post(`/ai/analyze-sheep/${stockCode}`, { model_name: modelName }, {
+  analyzeSheep: async (stockCode: string, modelName?: string, customPrompt?: string): Promise<AIAnalyzeResponse> => {
+    const response = await apiClient.post(`/ai/analyze-sheep/${stockCode}`, { 
+      model_name: modelName,
+      custom_prompt: customPrompt
+    }, {
       timeout: 180000 // 180秒，AI分析可能需要更长时间
     })
     return response.data

@@ -5,7 +5,7 @@ from typing import List, Dict, Tuple
 from datetime import date
 from db.sector_money_flow_repository import SectorMoneyFlowRepository
 from etl.sector_money_flow_adapter import SectorMoneyFlowAdapter
-from etl.concept_filter import CONCEPT_BLACKLIST
+from etl.concept_filter import should_filter_concept
 import logging
 
 logger = logging.getLogger(__name__)
@@ -24,7 +24,7 @@ class ConceptMoneyFlowService:
         if target_date is None:
             target_date = date.today()
         
-        logger.info(f"开始采集概念资金流向数据（日期: {target_date}）...")
+        logger.debug(f"开始采集概念资金流向数据（日期: {target_date}）...")
         
         # 获取所有概念资金流数据
         all_data = SectorMoneyFlowAdapter.get_all_sector_money_flow_today()
@@ -40,7 +40,7 @@ class ConceptMoneyFlowService:
         # 保存到数据库
         SectorMoneyFlowRepository.batch_upsert_sector_money_flow(all_data)
         
-        logger.info(f"概念资金流向数据采集完成！共 {len(all_data)} 条")
+        logger.debug(f"概念资金流向数据采集完成！共 {len(all_data)} 条")
     
     @staticmethod
     def get_concept_money_flow(concept_name: str, limit: int = 90) -> List[Dict]:
@@ -68,21 +68,21 @@ class ConceptMoneyFlowService:
         """
         from typing import Tuple
         
-        # 获取原始数据（需要多取一些，因为要过滤黑名单）
-        # 如果limit=30，我们取limit*2=60个，过滤后应该还有足够的数量
-        fetch_limit = limit * 2 if limit > 10 else limit + 20
+        # 获取原始数据（需要多取一些，因为要过滤掉无意义的板块）
+        # 如果limit=30，我们取limit*3=90个，过滤后应该还有足够的数量
+        fetch_limit = limit * 3 if limit > 10 else limit + 40
         sectors, metadata = SectorMoneyFlowRepository.get_top_sectors_by_inflow(days, fetch_limit)
         
-        # 过滤黑名单中的板块
+        # 使用完整的过滤逻辑过滤掉无意义的板块
         filtered_sectors = [
             sector for sector in sectors 
-            if sector.get('sector_name') not in CONCEPT_BLACKLIST
+            if not should_filter_concept(sector.get('sector_name', ''))
         ]
         
         # 限制返回数量
         filtered_sectors = filtered_sectors[:limit]
         
-        logger.info(f"过滤前: {len(sectors)} 个板块，过滤后: {len(filtered_sectors)} 个板块（剔除黑名单）")
+        logger.info(f"过滤前: {len(sectors)} 个板块，过滤后: {len(filtered_sectors)} 个板块（使用concept_filter过滤）")
         
         return filtered_sectors, metadata
     

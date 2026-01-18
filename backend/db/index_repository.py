@@ -186,3 +186,22 @@ class IndexRepository:
         except Exception as e:
             logger.error(f"获取最新交易日期失败: {index_code}, 错误: {e}")
             return None
+    
+    @staticmethod
+    def get_index_data_count_for_date(trade_date: date, index_code: str = 'CSI1000') -> int:
+        """获取某个交易日的指数数据数量（通常为1或0）"""
+        try:
+            with get_db() as db:
+                query = text("""
+                    SELECT COUNT(*) as count
+                    FROM market_index_daily
+                    WHERE index_code = :index_code AND trade_date = :trade_date
+                """)
+                result = db.execute(query, {'index_code': index_code, 'trade_date': trade_date})
+                row = result.fetchone()
+                if row and row[0]:
+                    return int(row[0])
+                return 0
+        except Exception as e:
+            logger.error(f"获取交易日 {trade_date} 的指数数据数量失败: {e}")
+            return 0

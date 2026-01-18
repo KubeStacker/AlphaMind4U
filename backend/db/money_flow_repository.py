@@ -46,21 +46,26 @@ class MoneyFlowRepository:
         获取肥羊资金流向数据（默认返回最新的数据）
         
         Args:
-            sheep_code: 股票代码
+            sheep_code: 肥羊代码
             limit: 返回的记录数，默认60条（最新的60天）
             
         Returns:
             按日期升序排列的资金流数据列表（从旧到新）
         """
         with get_db() as db:
-            # 先获取最新的N条数据（按日期降序），然后在应用层按日期升序排列
+            # 直接按日期升序查询，避免在应用层排序
             query = text(f"""
                 SELECT trade_date, main_net_inflow, super_large_inflow, large_inflow,
                        medium_inflow, small_inflow
-                FROM sheep_money_flow
-                WHERE sheep_code = :code
-                ORDER BY trade_date DESC
-                LIMIT {limit}
+                FROM (
+                    SELECT trade_date, main_net_inflow, super_large_inflow, large_inflow,
+                           medium_inflow, small_inflow
+                    FROM sheep_money_flow
+                    WHERE sheep_code = :code
+                    ORDER BY trade_date DESC
+                    LIMIT {limit}
+                ) as subquery
+                ORDER BY trade_date ASC
             """)
             result = db.execute(query, {'code': sheep_code})
             
@@ -90,9 +95,6 @@ class MoneyFlowRepository:
                 }
                 for row in result
             ]
-            
-            # 按日期升序排列（从旧到新），便于图表显示
-            data_list.sort(key=lambda x: x['trade_date'])
             
             return data_list
     
@@ -129,7 +131,7 @@ class MoneyFlowRepository:
             
             result = db.execute(query, {'days': days})
             
-            # 按股票分组，存储每日数据
+            # 按肥羊分组，存储每日数据
             stocks_data = {}
             for row in result:
                 sheep_code = row[0]
@@ -191,6 +193,31 @@ class MoneyFlowRepository:
             filtered_stocks.sort(key=lambda x: x['total_inflow'], reverse=True)
             
             return filtered_stocks
+    
+    @staticmethod
+    def get_sheep_money_flow_count_for_date(trade_date: date) -> int:
+        """
+        获取指定日期的资金流数据数量
+        
+        Args:
+            trade_date: 交易日期
+            
+        Returns:
+            该日期的数据记录数
+        """
+        try:
+            with get_db() as db:
+                query = text("""
+                    SELECT COUNT(*) 
+                    FROM sheep_money_flow
+                    WHERE trade_date = :trade_date
+                """)
+                result = db.execute(query, {'trade_date': trade_date})
+                row = result.fetchone()
+                return row[0] if row and row[0] is not None else 0
+        except Exception as e:
+            logger.error(f"获取日期 {trade_date} 的资金流数据数量失败: {e}")
+            return 0
     
     @staticmethod
     def cleanup_old_data(retention_days: int = 1095):

@@ -24,7 +24,7 @@ class SheepAdapter:
         all_stocks = []
         
         try:
-            # 优先使用akshare的股票代码名称接口
+            # 优先使用akshare的肥羊代码名称接口
             stock_list = ak.stock_info_a_code_name()
             if stock_list is not None and not stock_list.empty:
                 if 'code' in stock_list.columns and 'name' in stock_list.columns:
@@ -112,6 +112,59 @@ class SheepAdapter:
             return None
     
     @staticmethod
+    def get_all_sheep_spot_data() -> Optional[pd.DataFrame]:
+        """
+        批量获取所有肥羊的实时行情数据（今日）
+        
+        Returns:
+            包含所有肥羊实时行情的DataFrame
+        """
+        try:
+            # 调用akshare接口获取所有A股实时行情
+            df = ak.stock_zh_a_spot_em()
+            
+            if df is None or df.empty:
+                return None
+            
+            # 尝试多种可能的列名映射
+            potential_mapping = {
+                'sheep_code': ['代码'],
+                'sheep_name': ['名称'],
+                'close': ['最新价'],
+                'open': ['今开', '开盘'],
+                'high': ['最高'],
+                'low': ['最低'],
+                'volume': ['成交量'],
+                'amount': ['成交额'],
+                'change_pct': ['涨跌幅'],
+                'turnover_rate': ['换手率']
+            }
+            
+            result_df = pd.DataFrame()
+            for target, sources in potential_mapping.items():
+                for source in sources:
+                    if source in df.columns:
+                        result_df[target] = df[source]
+                        break
+                else:
+                    # 如果找不到，填充默认值
+                    result_df[target] = 0.0 if target not in ['sheep_code', 'sheep_name'] else ''
+            
+            result_df = result_df.copy()
+            result_df['sheep_code'] = result_df['sheep_code'].astype(str).str.zfill(6)
+            
+            # 转换数值列
+            numeric_cols = ['close', 'open', 'high', 'low', 'volume', 'amount', 'change_pct', 'turnover_rate']
+            for col in numeric_cols:
+                result_df[col] = pd.to_numeric(result_df[col], errors='coerce').fillna(0)
+            
+            return result_df
+            
+        except Exception as e:
+            logger.error(f"批量获取实时行情数据失败: {e}", exc_info=True)
+            return None
+
+    @staticmethod
     def get_sheep_money_flow(sheep_code: str) -> Optional[Dict]:
         """
         获取肥羊资金流向数据（今日）
@@ -180,7 +233,12 @@ class SheepAdapter:
             for target_col, source_cols in money_flow_cols.items():
                 for src_col in source_cols:
                     if src_col in flow_data.columns:
-                        result_df[target_col] = flow_data[src_col].fillna(0).astype(float) / 10000
+                        # 替换字符串 '-' 和其他非数字值为 NaN，然后再填充为 0
+                        col_data = flow_data[src_col].replace(['-', '', 'null', 'None'], [pd.NA, pd.NA, pd.NA, pd.NA])
+                        # 转换为数值类型，无法转换的会变成 NaN
+                        col_data = pd.to_numeric(col_data, errors='coerce')
+                        # 填充 NaN 为 0
+                        result_df[target_col] = col_data.fillna(0).astype(float) / 10000
                         break
                 else:
                     result_df[target_col] = 0.0
@@ -194,10 +252,10 @@ class SheepAdapter:
     @staticmethod
     def get_sheep_money_flow_history(sheep_code: str) -> Optional[pd.DataFrame]:
         """
-        获取股票的历史资金流数据（近100个交易日）
+        获取肥羊的历史资金流数据（近100个交易日）
         
         Args:
-            sheep_code: 股票代码（6位数字）
+            sheep_code: 肥羊代码（6位数字）
             
         Returns:
             包含历史资金流数据的DataFrame，如果失败返回None
@@ -223,7 +281,7 @@ class SheepAdapter:
             if '日期' in flow_df.columns:
                 result_df['trade_date'] = pd.to_datetime(flow_df['日期']).dt.date
             else:
-                logger.warning(f"股票 {sheep_code} 无法找到日期列，列名: {list(flow_df.columns)}")
+                logger.warning(f"肥羊 {sheep_code} 无法找到日期列，列名: {list(flow_df.columns)}")
                 return None
             
             result_df['sheep_code'] = sheep_code
@@ -248,5 +306,5 @@ class SheepAdapter:
             return result_df
             
         except Exception as e:
-            logger.debug(f"获取股票 {sheep_code} 资金流历史数据失败: {e}")
+            logger.debug(f"获取肥羊 {sheep_code} 资金流历史数据失败: {e}")
             return None

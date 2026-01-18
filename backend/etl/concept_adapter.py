@@ -124,7 +124,7 @@ class ConceptAdapter:
                 
                 # 提取肥羊代码
                 sheep_codes = []
-                possible_code_columns = ['代码', '肥羊代码', 'code', '证券代码', 'symbol', '股票代码']
+                possible_code_columns = ['代码', '肥羊代码', 'code', '证券代码', 'symbol', '肥羊代码']
                 
                 for col_name in possible_code_columns:
                     if col_name in stocks_df.columns:
@@ -143,11 +143,11 @@ class ConceptAdapter:
                 
                 if clean_codes:
                     if retry:
-                        logger.debug(f"概念 {concept_name} 包含 {len(clean_codes)} 只股票")
+                        logger.debug(f"概念 {concept_name} 包含 {len(clean_codes)} 只肥羊")
                     return clean_codes
                 else:
                     if retry and attempt < max_attempts - 1:
-                        logger.warning(f"第{attempt + 1}次无法提取概念 {concept_name} 的有效股票代码，{cls.RETRY_DELAY * (attempt + 1)}秒后重试...")
+                        logger.warning(f"第{attempt + 1}次无法提取概念 {concept_name} 的有效肥羊代码，{cls.RETRY_DELAY * (attempt + 1)}秒后重试...")
                         time.sleep(cls.RETRY_DELAY * (attempt + 1))
                         continue
                     return None
@@ -177,12 +177,12 @@ class ConceptAdapter:
     @classmethod
     def fetch_concept_constituents(cls, concept_name: str) -> Optional[List[str]]:
         """
-        获取指定概念下的股票代码列表（带重试机制）
+        获取指定概念下的肥羊代码列表（带重试机制）
         
         Args:
             concept_name: 概念名称
             
         Returns:
-            股票代码列表（6位数字字符串）
+            肥羊代码列表（6位数字字符串）
         """
         return cls.get_concept_stocks(concept_name=concept_name, source='em', retry=True)

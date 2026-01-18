@@ -174,6 +174,56 @@ class TradeDateAdapter:
             return []
     
     @classmethod
+    def get_next_trading_day(cls, check_date: Optional[date] = None) -> date:
+        """
+        获取指定日期之后的下一个交易日
+        
+        Args:
+            check_date: 基准日期，默认为今天
+            
+        Returns:
+            下一个交易日
+        """
+        from datetime import timedelta
+        
+        if check_date is None:
+            check_date = date.today()
+        
+        try:
+            trade_cal = cls.get_trade_calendar()
+            if trade_cal.empty:
+                # 降级：向后查找最多7天
+                for i in range(1, 8):
+                    next_date = check_date + timedelta(days=i)
+                    if next_date.weekday() < 5:
+                        return next_date
+                return check_date + timedelta(days=1)
+            
+            # 筛选大于check_date的交易日，按升序排列
+            future_dates = trade_cal[trade_cal['trade_date'] > check_date]['trade_date'].sort_values(ascending=True)
+            
+            if len(future_dates) > 0:
+                result = future_dates.iloc[0]
+                return result.date() if hasattr(result, 'date') else result
+            else:
+                # 如果没找到，向后查找最多7天
+                for i in range(1, 8):
+                    next_date = check_date + timedelta(days=i)
+                    if next_date.weekday() < 5:
+                        return next_date
+                
+        except Exception as e:
+            logger.error(f"获取下一个交易日失败: {e}", exc_info=True)
+        
+        # 降级处理
+        for i in range(1, 8):
+            next_date = check_date + timedelta(days=i)
+            if next_date.weekday() < 5:
+                return next_date
+        
+        return check_date + timedelta(days=1)
+    
+    @classmethod
     def is_trading_hours(cls, check_time: Optional[datetime] = None) -> bool:
         """
         判断指定时间是否为交易时段

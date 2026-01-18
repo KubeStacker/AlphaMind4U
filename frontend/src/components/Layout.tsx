@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react'
-import { Layout as AntLayout, Menu, theme, Button, Dropdown, message } from 'antd'
+import { Layout as AntLayout, Menu, theme, Button, Dropdown, message, Drawer } from 'antd'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { BarChartOutlined, FireOutlined, LogoutOutlined, UserOutlined, SettingOutlined, RocketOutlined, FileTextOutlined } from '@ant-design/icons'
+import { BarChartOutlined, FireOutlined, LogoutOutlined, UserOutlined, SettingOutlined, RocketOutlined, FileTextOutlined, MenuOutlined } from '@ant-design/icons'
 import { useAuth } from '../contexts/AuthContext'
 
 const { Header, Content } = AntLayout
@@ -12,6 +12,7 @@ interface LayoutProps {
 
 const Layout: React.FC<LayoutProps> = ({ children }) => {
   const [isMobile, setIsMobile] = useState(false)
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const navigate = useNavigate()
   const location = useLocation()
   const { user, logout } = useAuth()
@@ -22,6 +23,9 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   useEffect(() => {
     const checkMobile = () => {
       setIsMobile(window.innerWidth < 768)
+      if (window.innerWidth >= 768) {
+        setMobileMenuOpen(false) // Close mobile menu when switching to desktop
+      }
     }
     checkMobile()
     window.addEventListener('resize', checkMobile)
@@ -105,20 +109,57 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
         >
           数据分析系统
         </div>
-        <Menu
-          theme="dark"
-          mode={isMobile ? 'vertical' : 'horizontal'}
-          selectedKeys={[location.pathname]}
-          items={menuItems}
-          onClick={({ key }) => navigate(key)}
-          style={{
-            flex: isMobile ? 'none' : 1,
-            background: 'transparent',
-            borderBottom: 'none',
-            width: isMobile ? '100%' : 'auto',
-            marginTop: isMobile ? '8px' : 0,
-          }}
-        />
+        {isMobile ? (
+          <>
+            <Button
+              type="text"
+              icon={<MenuOutlined style={{ color: '#fff', fontSize: '18px' }} />}
+              onClick={() => setMobileMenuOpen(true)}
+              style={{
+                color: '#fff',
+                marginLeft: 'auto',
+                flexShrink: 0,
+              }}
+            />
+            <Drawer
+              placement="left"
+              onClose={() => setMobileMenuOpen(false)}
+              open={mobileMenuOpen}
+              bodyStyle={{ padding: 0 }}
+              closable={true}
+              width={250}
+            >
+              <Menu
+                theme="dark"
+                mode="vertical"
+                selectedKeys={[location.pathname]}
+                items={menuItems}
+                onClick={({ key }) => {
+                  navigate(key)
+                  setMobileMenuOpen(false)
+                }}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  height: '100%',
+                }}
+              />
+            </Drawer>
+          </>
+        ) : (
+          <Menu
+            theme="dark"
+            mode="horizontal"
+            selectedKeys={[location.pathname]}
+            items={menuItems}
+            onClick={({ key }) => navigate(key)}
+            style={{
+              flex: 1,
+              background: 'transparent',
+              borderBottom: 'none',
+            }}
+          />
+        )}
         <Dropdown menu={{ items: userMenuItems }} placement="bottomRight">
           <Button
             type="text"
@@ -131,7 +172,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
               flexShrink: 0,
             }}
           >
-            {!isMobile && (user?.username || '用户')}
+            {user?.username || '用户'}
           </Button>
         </Dropdown>
       </Header>

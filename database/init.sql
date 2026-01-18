@@ -336,3 +336,17 @@ CREATE TABLE IF NOT EXISTS `market_index_daily` (
     INDEX `idx_trade_date` (`trade_date`),
     INDEX `idx_index_code_date` (`index_code`, `trade_date`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='全市场指数数据表（用于RSRS计算，保留3年）';
+
+-- ============================================
+-- 18. 下个交易日预测缓存表
+-- ============================================
+CREATE TABLE IF NOT EXISTS `next_day_prediction_cache` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `target_date` DATE NOT NULL COMMENT '预测目标日期（下个交易日）',
+    `prediction_data` JSON NOT NULL COMMENT '预测结果JSON数据',
+    `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_target_date` (`target_date`),
+    INDEX `idx_created_at` (`created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='下个交易日预测缓存表（每半小时更新，保留7天）';

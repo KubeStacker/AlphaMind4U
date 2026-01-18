@@ -16,7 +16,7 @@ class Config:
     MONEY_FLOW_RETENTION_DAYS = 1095  # 3年（约1095天），资金流数据保留天数
     SECTOR_DATA_RETENTION_DAYS = 10  # 10天
     SECTOR_MONEY_FLOW_RETENTION_DAYS = 90  # 3个月（约90天），板块资金流数据保留天数
-    SECTOR_MONEY_FLOW_RETENTION_DAYS = 90  # 3个月（约90天），板块资金流数据保留天数
+    HOT_RANK_RETENTION_DAYS = 30  # 30天，热度榜数据保留天数
     
     # 定时任务配置
     DATA_UPDATE_HOUR = 18  # 每天18点更新数据

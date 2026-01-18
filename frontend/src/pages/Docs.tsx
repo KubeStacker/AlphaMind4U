@@ -15,7 +15,7 @@ const Docs: React.FC = () => {
         
         // 优先从API加载文档
         try {
-          const response = await client.get('/docs/model-k-usage')
+          const response = await client.get('/api/docs/model-k-guide')
           if (response.data && response.data.content) {
             setContent(response.data.content)
             return
@@ -27,7 +27,7 @@ const Docs: React.FC = () => {
         
         // 如果API失败，尝试从静态文件加载
         try {
-          const response = await fetch('/docs/model-k-usage.md')
+          const response = await fetch('/docs/model-k-guide.md')
           if (response.ok) {
             const text = await response.text()
             setContent(text)

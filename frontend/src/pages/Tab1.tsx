@@ -1,44 +1,27 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { Input, Card, Spin, message, AutoComplete, Tag, Button, Modal, Space, Select, Radio } from 'antd'
-import { SearchOutlined, BulbOutlined, ReloadOutlined } from '@ant-design/icons'
+import { Input, Card, Spin, message, AutoComplete, Tag, Button, Modal, Space } from 'antd'
+const { TextArea } = Input
+import { SearchOutlined, BulbOutlined } from '@ant-design/icons'
 import ReactECharts from 'echarts-for-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { sheepApi, SheepDailyData, CapitalFlowData } from '../api/sheep'
+import { hotApi } from '../api/hot'
 import { aiApi } from '../api/ai'
-import { useAuth } from '../contexts/AuthContext'
+import DeepAnalysis from '../components/DeepAnalysis'
 
 const Tab1: React.FC = () => {
-  const { user } = useAuth()
-  const isAdmin = user?.is_admin || user?.username === 'admin'
-  
-  const [selectedModel, setSelectedModel] = useState<string>('')
-  const [availableModels, setAvailableModels] = useState<Array<{ id: number; model_name: string; model_display_name: string }>>([])
-  
-  // 加载可用模型
-  useEffect(() => {
-    const loadModels = async () => {
-      try {
-        const response = await aiApi.getActiveAIModels()
-        setAvailableModels(response.models)
-        if (response.models.length > 0 && !selectedModel) {
-          setSelectedModel(response.models[0].model_name)
-        }
-      } catch (error) {
-        console.error('加载模型列表失败:', error)
-      }
-    }
-    
-    loadModels()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  const [modelSelectModalVisible, setModelSelectModalVisible] = useState(false)
+  const [promptEditModalVisible, setPromptEditModalVisible] = useState(false)
+  const [pendingAction, setPendingAction] = useState<'analyze' | null>(null)
+  const [selectedModelName, setSelectedModelName] = useState<string>('')
+  const [promptText, setPromptText] = useState<string>('')
+  const [renderedPromptText, setRenderedPromptText] = useState<string>('')
   
   const [selectedSheep, setSelectedSheep] = useState<string>('')
   const [selectedSheepName, setSelectedSheepName] = useState<string>('')
   const [dailyData, setDailyData] = useState<SheepDailyData[]>([])
   const [capitalFlowData, setCapitalFlowData] = useState<CapitalFlowData[]>([])
-  const [capitalFlowDays, setCapitalFlowDays] = useState<number>(60) // 默认显示60天
-  const [capitalFlowRefreshing, setCapitalFlowRefreshing] = useState(false)
   const [loading, setLoading] = useState(false)
   const [isMobile, setIsMobile] = useState(false)
   const [searchOptions, setSearchOptions] = useState<Array<{ value: string; label: React.ReactNode; code: string; name: string }>>([])
@@ -47,6 +30,7 @@ const Tab1: React.FC = () => {
   const [aiAnalyzeModalVisible, setAiAnalyzeModalVisible] = useState(false)
   const [aiAnalyzeLoading, setAiAnalyzeLoading] = useState(false)
   const [aiAnalyzeResult, setAiAnalyzeResult] = useState<string>('')
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
 
   // 检测移动端
   useEffect(() => {
@@ -58,8 +42,7 @@ const Tab1: React.FC = () => {
     return () => window.removeEventListener('resize', checkMobile)
   }, [])
 
-  // 当selectedSheep变化时加载数据（仅在selectedSheep不为空时）
-  // 使用useRef来跟踪是否是首次渲染，避免初始化时加载数据
+  // 当selectedSheep变化时加载数据
   const isFirstRender = useRef(true)
   
   useEffect(() => {
@@ -82,6 +65,35 @@ const Tab1: React.FC = () => {
       setSelectedSheepName('')
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedSheep])
+
+  // 页面可见性变化时刷新数据
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && selectedSheep) {
+        loadSheepData(selectedSheep)
+      }
+    }
+    
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
+  }, [selectedSheep])
+
+  // 交易时段每分钟自动刷新
+  useEffect(() => {
+    let interval: ReturnType<typeof setInterval> | null = null
+    
+    if (selectedSheep && isTradingHours()) {
+      interval = setInterval(() => {
+        loadSheepData(selectedSheep)
+      }, 60000) // 1分钟
+    }
+    
+    return () => {
+      if (interval) clearInterval(interval)
+    }
   }, [selectedSheep])
 
   const normalizeSheepCode = (code: string): string => {
@@ -155,7 +167,7 @@ const Tab1: React.FC = () => {
       
       const [daily, capitalFlow] = await Promise.all([
         sheepApi.getSheepDaily(normalizedCode),
-        sheepApi.getCapitalFlow(normalizedCode, capitalFlowDays).catch((error) => {
+        sheepApi.getCapitalFlow(normalizedCode, 60).catch((error) => {
           // 资金流数据获取失败时，记录但不影响主流程
           console.warn('获取资金流数据失败:', error)
           return []
@@ -165,9 +177,9 @@ const Tab1: React.FC = () => {
       setDailyData(Array.isArray(daily) ? daily : [])
       setCapitalFlowData(Array.isArray(capitalFlow) ? capitalFlow : [])
       
-      
       // 加载肥羊名称
       await loadSheepName(normalizedCode)
+      setLastUpdated(new Date())
     } catch (error: any) {
       const errorMsg = error.response?.data?.detail || '加载标的数据失败'
       message.error(errorMsg)
@@ -250,29 +262,169 @@ const Tab1: React.FC = () => {
     // 但如果是交易时段，会自动刷新最新数据
   }
 
+  // 渲染分析提示词
+  const renderAnalyzePrompt = async (template: string, sheepName: string, sheepCode: string, klineData: SheepDailyData[], capitalFlowData: CapitalFlowData[]): Promise<string> => {
+    try {
+      // 获取当前日期
+      const date = new Date().toISOString().split('T')[0]
+      
+      // 获取板块信息（从热门肥羊API获取）
+      let sectors = 'N/A'
+      try {
+        const hotSheeps = await hotApi.getHotSheeps()
+        if (hotSheeps && hotSheeps.length > 0) {
+          const sheepInfo = hotSheeps.find(s => s.sheep_code === sheepCode)
+          if (sheepInfo && sheepInfo.sectors && sheepInfo.sectors.length > 0) {
+            sectors = sheepInfo.sectors.join(', ')
+          }
+        }
+      } catch (error) {
+        console.warn('获取板块信息失败:', error)
+      }
+      
+      // 格式化K线数据（最近10天）
+      const klineSummary = klineData.slice(-10).map(item => ({
+        日期: item.trade_date,
+        收盘价: item.close_price,
+        涨跌: item.close_price && item.open_price ? (item.close_price - item.open_price).toFixed(2) : 'N/A',
+        成交量: item.volume || 'N/A',
+        MA5: item.ma5 || 'N/A',
+        MA20: item.ma20 || 'N/A',
+      }))
+      
+      // 格式化资金流向数据（最近10天汇总）
+      const recentFlows = capitalFlowData.slice(-10)
+      const moneyFlowSummary = recentFlows.length > 0 ? {
+        最近10天主力净流入: recentFlows.reduce((sum, item) => sum + (item.main_net_inflow || 0), 0),
+        最近10天超大单流入: recentFlows.reduce((sum, item) => sum + (item.super_large_inflow || 0), 0),
+        最近10天大单流入: recentFlows.reduce((sum, item) => sum + (item.large_inflow || 0), 0),
+      } : {}
+      
+      const currentPrice = klineData.length > 0 ? klineData[klineData.length - 1].close_price : 'N/A'
+      const changePct = klineData.length > 0 && klineData[klineData.length - 1].change_pct !== null 
+        ? klineData[klineData.length - 1].change_pct 
+        : 'N/A'
+      const volume = klineData.length > 0 ? klineData[klineData.length - 1].volume : 'N/A'
+      
+      const dataStr = `
+当前价格：${currentPrice}
+涨跌幅：${changePct}%
+成交量：${volume}
+K线数据（最近10天）：${JSON.stringify(klineSummary, null, 2)}
+资金流向（最近10天汇总）：${JSON.stringify(moneyFlowSummary, null, 2)}
+`
+      
+      // 替换变量
+      return template
+        .replace(/{date}/g, date)
+        .replace(/{sheep_name}/g, sheepName || sheepCode || 'N/A')
+        .replace(/{sectors}/g, sectors)
+        .replace(/{data}/g, dataStr)
+    } catch (error) {
+      console.error('渲染提示词失败:', error)
+      return template // 如果渲染失败，返回原始模板
+    }
+  }
+
   // AI分析肥羊
-  const handleAIAnalyze = async () => {
+  const handleAIAnalyze = async (modelName?: string, customPrompt?: string) => {
     if (!selectedSheep) {
       message.warning('请先选择一只肥羊')
       return
     }
     
+    // 如果没有传入模型名称，需要先检查可用的模型
+    if (!modelName) {
+      try {
+        const response = await aiApi.getActiveAIModels()
+        // 过滤出有API Key的模型
+        const modelsWithApiKey = response.models.filter(model => model.api_key && model.api_key.trim() !== '')
+        
+        if (modelsWithApiKey.length === 0) {
+          message.error('未配置API Key，请前往设置-AI应用设置中配置模型API Key和提示词')
+          return
+        } else if (modelsWithApiKey.length === 1) {
+          // 只有一个模型，获取提示词并显示编辑对话框
+          modelName = modelsWithApiKey[0].model_name
+          setSelectedModelName(modelName)
+          try {
+            const response = await aiApi.getPrompts()
+            const prompt = response.prompts.analyze || ''
+            // 渲染提示词（替换变量）
+            // 简化：不加载K线数据用于AI分析提示词（优化性能）
+            const rendered = await renderAnalyzePrompt(prompt, selectedSheepName, selectedSheep, dailyData, capitalFlowData)
+            setPromptText(prompt)
+            setRenderedPromptText(rendered)
+            setPromptEditModalVisible(true)
+            setPendingAction('analyze')
+            return
+          } catch (error) {
+            console.error('获取提示词失败:', error)
+            message.error('获取提示词失败')
+            return
+          }
+        } else {
+          // 多个模型，弹出选择框
+          setPendingAction('analyze')
+          setModelSelectModalVisible(true)
+          return
+        }
+      } catch (error) {
+        console.error('加载模型列表失败:', error)
+        message.error('加载模型列表失败')
+        return
+      }
+    }
+    
+    // 执行AI分析
     setAiAnalyzeModalVisible(true)
     setAiAnalyzeLoading(true)
     setAiAnalyzeResult('')
     try {
-      const result = await aiApi.analyzeSheep(selectedSheep, selectedModel || undefined)
+      const result = await aiApi.analyzeSheep(selectedSheep, modelName, customPrompt)
       setAiAnalyzeResult(result.analysis)
     } catch (error: any) {
       const errorMsg = error?.response?.data?.detail || error?.message || '未知错误'
       if (errorMsg.includes('API Key未配置')) {
-        message.warning('API Key未配置，请前往AI管理设置中配置模型API Key')
+        message.warning('API Key未配置，请前往设置-AI应用设置中配置模型API Key和提示词')
       } else {
         message.error(`AI分析失败: ${errorMsg}`)
       }
       setAiAnalyzeResult(`错误: ${errorMsg}`)
     } finally {
       setAiAnalyzeLoading(false)
+    }
+  }
+  
+  // 处理模型选择
+  const handleModelSelect = async (modelName: string) => {
+    setModelSelectModalVisible(false)
+    setSelectedModelName(modelName)
+    
+    if (pendingAction === 'analyze') {
+      // 获取提示词模板
+      try {
+        const response = await aiApi.getPrompts()
+        const prompt = response.prompts.analyze || ''
+        // 渲染提示词（替换变量）
+        // 简化：不加载K线数据用于AI分析提示词（优化性能）
+        const rendered = await renderAnalyzePrompt(prompt, selectedSheepName, selectedSheep, [], [])
+        setPromptText(prompt)
+        setRenderedPromptText(rendered)
+        setPromptEditModalVisible(true)
+      } catch (error) {
+        console.error('获取提示词失败:', error)
+        message.error('获取提示词失败')
+      }
+    }
+  }
+  
+  // 处理提示词确认
+  const handlePromptConfirm = async () => {
+    setPromptEditModalVisible(false)
+    if (pendingAction === 'analyze') {
+      setPendingAction(null)
+      await handleAIAnalyze(selectedModelName, promptText)
     }
   }
 
@@ -283,7 +435,19 @@ const Tab1: React.FC = () => {
     
     const dates = dailyData.map(d => d.trade_date)
     const kData = dailyData.map(d => [d.open_price, d.close_price, d.low_price, d.high_price])
-    const volumes = dailyData.map(d => d.volume || 0)  // 确保volume不为undefined
+    const volumes = dailyData.map(d => d.volume || 0)
+    
+    // 合并资金流数据：按日期匹配
+    const mainFlowMap = new Map<string, number>()
+    if (capitalFlowData && capitalFlowData.length > 0) {
+      capitalFlowData.forEach((cf: CapitalFlowData) => {
+        if (cf.trade_date) {
+          mainFlowMap.set(cf.trade_date, (cf.main_net_inflow || 0) / 10000) // 转换为亿元
+        }
+      })
+    }
+    const mainFlowData = dates.map(date => mainFlowMap.get(date) || 0)
+    const hasCapitalFlow = capitalFlowData && capitalFlowData.length > 0
 
     return {
       title: {
@@ -298,6 +462,7 @@ const Tab1: React.FC = () => {
           if (!params || params.length === 0) return ''
           
           const date = params[0].axisValue
+          const dataIndex = params[0].dataIndex
           let result = `<div style="margin-bottom: 4px;"><strong>${date}</strong></div>`
           
           params.forEach((param: any) => {
@@ -305,13 +470,11 @@ const Tab1: React.FC = () => {
               const data = param.data as number[]
               if (data && data.length === 4) {
                 const [open, close, low, high] = data
-                const dataIndex = param.dataIndex
                 const stockData = dailyData[dataIndex]
                 
-                // 计算涨跌幅（如果有change_pct就用，否则计算）
+                // 计算涨跌幅
                 let changePct = stockData?.change_pct
                 if (changePct === undefined || changePct === null) {
-                  // 从前一天计算涨跌幅
                   if (dataIndex > 0 && dailyData[dataIndex - 1]) {
                     const prevClose = dailyData[dataIndex - 1].close_price
                     if (prevClose && prevClose > 0) {
@@ -343,6 +506,12 @@ const Tab1: React.FC = () => {
                   : volume.toLocaleString()
                 result += `<div style="margin: 4px 0;"><span style="color: #666;">成交量：</span><span style="color: #333; font-weight: bold;">${volumeText}</span></div>`
               }
+            } else if (param.seriesName === '主力净流入') {
+              const value = param.value
+              if (value !== undefined && value !== null) {
+                const color = value >= 0 ? '#ef5350' : '#26a69a'
+                result += `<div style="margin: 4px 0;"><span style="color: #666;">主力净流入：</span><span style="color: ${color}; font-weight: bold;">${value >= 0 ? '+' : ''}${value.toFixed(2)}亿元</span></div>`
+              }
             } else {
               // MA线
               const value = param.value
@@ -356,12 +525,15 @@ const Tab1: React.FC = () => {
         },
       },
       legend: {
-        data: ['K线', 'MA5', 'MA10', 'MA20', 'MA30', 'MA60', '成交量'],
+        data: hasCapitalFlow 
+          ? ['K线', 'MA5', 'MA10', 'MA20', 'MA30', 'MA60', '成交量', '主力净流入']
+          : ['K线', 'MA5', 'MA10', 'MA20', 'MA30', 'MA60', '成交量'],
         top: 30,
       },
       grid: [
-        { left: '10%', right: '8%', top: '15%', height: '50%' },
-        { left: '10%', right: '8%', top: '70%', height: '15%' },
+        { left: '10%', right: '8%', top: '10%', height: '45%' },
+        { left: '10%', right: '8%', top: '57%', height: '12%' },
+        ...(hasCapitalFlow ? [{ left: '10%', right: '8%', top: '72%', height: '15%' }] : []),
       ],
       xAxis: [
         {
@@ -385,6 +557,17 @@ const Tab1: React.FC = () => {
           min: 'dataMin',
           max: 'dataMax',
         },
+        ...(hasCapitalFlow ? [{
+          type: 'category',
+          gridIndex: 2,
+          data: dates,
+          scale: true,
+          boundaryGap: false,
+          axisLine: { onZero: false },
+          splitLine: { show: false },
+          min: 'dataMin',
+          max: 'dataMax',
+        }] : []),
       ],
       yAxis: [
         {
@@ -398,19 +581,29 @@ const Tab1: React.FC = () => {
           axisLabel: { show: false },
           splitLine: { show: false },
         },
+        ...(hasCapitalFlow ? [{
+          scale: true,
+          gridIndex: 2,
+          splitNumber: 2,
+          axisLabel: { 
+            formatter: (value: number) => `${value.toFixed(1)}亿`,
+            fontSize: 10
+          },
+          splitLine: { show: false },
+        }] : []),
       ],
       dataZoom: [
         {
           type: 'inside',
-          xAxisIndex: [0, 1],
+          xAxisIndex: hasCapitalFlow ? [0, 1, 2] : [0, 1],
           start: dailyData.length > 30 ? ((dailyData.length - 30) / dailyData.length * 100) : 0,
           end: 100,
         },
         {
           show: true,
-          xAxisIndex: [0, 1],
+          xAxisIndex: hasCapitalFlow ? [0, 1, 2] : [0, 1],
           type: 'slider',
-          top: '90%',
+          top: hasCapitalFlow ? '92%' : '90%',
           start: dailyData.length > 30 ? ((dailyData.length - 30) / dailyData.length * 100) : 0,
           end: 100,
         },
@@ -485,131 +678,22 @@ const Tab1: React.FC = () => {
             },
           },
         },
-      ],
-    }
-  }
-
-  // 刷新资金流数据（仅admin）
-  const handleRefreshCapitalFlow = async () => {
-    if (!selectedSheep) {
-      message.warning('请先选择一只股票')
-      return
-    }
-    
-    setCapitalFlowRefreshing(true)
-    try {
-      const normalizedCode = normalizeSheepCode(selectedSheep)
-      const result = await sheepApi.refreshCapitalFlow(normalizedCode)
-      
-      if (result.refreshed) {
-        message.success(result.message)
-        // 重新加载数据
-        const capitalFlow = await sheepApi.getCapitalFlow(normalizedCode, capitalFlowDays)
-        setCapitalFlowData(Array.isArray(capitalFlow) ? capitalFlow : [])
-      } else {
-        message.info(result.message)
-      }
-    } catch (error: any) {
-      const errorMsg = error?.response?.data?.detail || error?.message || '刷新失败'
-      message.error(`刷新资金流数据失败: ${errorMsg}`)
-    } finally {
-      setCapitalFlowRefreshing(false)
-    }
-  }
-
-  const getCapitalFlowOption = () => {
-    // 确保capitalFlowData是数组且不为空
-    if (!capitalFlowData || !Array.isArray(capitalFlowData) || capitalFlowData.length === 0) {
-      return null
-    }
-    
-    const dates = capitalFlowData.map(d => d.trade_date)
-    // 将万元转换为亿元（除以10000）
-    const mainInflow = capitalFlowData.map(d => (d.main_net_inflow || 0) / 10000)
-
-    return {
-      title: {
-        text: '主力资金流入情况',
-        left: 'center',
-        textStyle: { fontSize: 16, fontWeight: 'bold' },
-        subtext: '单位：亿元',
-        subtextStyle: { fontSize: 12, color: '#666' }
-      },
-      tooltip: {
-        trigger: 'axis',
-        axisPointer: { type: 'shadow' },
-        formatter: (params: any) => {
-          if (!params || params.length === 0) return ''
-          const date = params[0].axisValue
-          let result = `<div style="margin-bottom: 4px;"><strong>${date}</strong></div>`
-          params.forEach((param: any) => {
-            const value = param.value
-            const valueText = value >= 0 
-              ? `<span style="color: #ef5350; font-weight: bold;">+${value.toFixed(2)}</span>`
-              : `<span style="color: #26a69a; font-weight: bold;">${value.toFixed(2)}</span>`
-            result += `<div style="margin: 4px 0;">
-              <span style="color: #666;">${param.seriesName}：</span>
-              ${valueText} 亿元
-            </div>`
-          })
-          return result
-        }
-      },
-      xAxis: {
-        type: 'category',
-        data: dates,
-        axisLabel: {
-          rotate: 45,
-          fontSize: 11
-        }
-      },
-      yAxis: {
-        type: 'value',
-        name: '净流入（亿元）',
-        nameTextStyle: {
-          fontSize: 12,
-          fontWeight: 'bold'
-        },
-        axisLabel: {
-          formatter: (value: number) => {
-            return value.toFixed(2)
-          }
-        }
-      },
-      series: [
-        {
+        ...(hasCapitalFlow ? [{
           name: '主力净流入',
           type: 'bar',
-          data: mainInflow,
-          itemStyle: {
-            color: (params: any) => {
-              return params.value >= 0 ? '#ef5350' : '#26a69a'
-            },
-          },
-          label: {
-            show: false
-          },
-          emphasis: {
-            itemStyle: {
-              shadowBlur: 10,
-              shadowOffsetX: 0,
-              shadowColor: 'rgba(0, 0, 0, 0.5)'
-            }
-          }
-        },
+          xAxisIndex: 2,
+          yAxisIndex: 2,
+          data: mainFlowData.map(v => ({
+            value: v,
+            itemStyle: { color: v >= 0 ? '#ef5350' : '#26a69a' }
+          })),
+          barWidth: '60%',
+        }] : []),
       ],
-      grid: {
-        left: '10%',
-        right: '8%',
-        top: '20%',
-        bottom: '15%',
-        containLabel: true
-      }
     }
   }
 
-  // 计算资金流向图表配置
-  const capitalFlowOption = capitalFlowData.length > 0 ? getCapitalFlowOption() : null
+  // getCapitalFlowOption已移除，资金流向已整合到K线图中
 
   return (
     <div>
@@ -617,7 +701,7 @@ const Tab1: React.FC = () => {
         <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
           <span style={{ fontSize: 16, fontWeight: 'bold' }}>标的搜索：</span>
           <AutoComplete
-            style={{ flex: 1, minWidth: 300, maxWidth: 500 }}
+            style={{ flex: isMobile ? 1 : 'none', minWidth: isMobile ? 'auto' : 300, maxWidth: 500 }}
             options={searchOptions}
             onSearch={handleSearch}
             onSelect={handleSheepSelect}
@@ -648,11 +732,18 @@ const Tab1: React.FC = () => {
               }}
             />
           </AutoComplete>
-          {selectedSheepName && (
-            <div style={{ fontSize: 14, color: '#666' }}>
+        {selectedSheepName && (
+          <div style={{ fontSize: 14, color: '#666', display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+            <div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
               当前标的：<span style={{ fontWeight: 'bold', color: '#1890ff' }}>{selectedSheepName} ({selectedSheep})</span>
             </div>
-          )}
+            {lastUpdated && (
+              <div style={{ fontSize: 12, color: '#999', whiteSpace: 'nowrap' }}>
+                最后更新：{lastUpdated.toLocaleTimeString()}
+              </div>
+            )}
+          </div>
+        )}
         </div>
       </Card>
 
@@ -670,25 +761,10 @@ const Tab1: React.FC = () => {
                   {selectedSheepName ? `${selectedSheepName} (${selectedSheep})` : selectedSheep} - K线图
                 </span>
                 <Space>
-                  {availableModels.length > 0 && (
-                    <Select
-                      value={selectedModel}
-                      onChange={setSelectedModel}
-                      style={{ width: 150 }}
-                      placeholder="选择模型"
-                      size="small"
-                    >
-                      {availableModels.map(model => (
-                        <Select.Option key={model.id} value={model.model_name}>
-                          {model.model_display_name}
-                        </Select.Option>
-                      ))}
-                    </Select>
-                  )}
                   <Button
                     type="primary"
                     icon={<BulbOutlined />}
-                    onClick={handleAIAnalyze}
+                    onClick={() => handleAIAnalyze()}
                   >
                     AI分析
                   </Button>
@@ -699,83 +775,16 @@ const Tab1: React.FC = () => {
             <ReactECharts
               option={getKLineOption()}
               style={{ 
-                height: isMobile ? '400px' : '600px', 
+                height: isMobile ? '300px' : '600px', 
                 width: '100%' 
               }}
             />
           </Card>
-          <Card 
-            title={
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <span>主力资金流入</span>
-                  <span style={{ fontSize: '12px', color: '#999', fontWeight: 'normal' }}>
-                    （单位：亿元，红色=流入，绿色=流出）
-                  </span>
-                </div>
-                <Space>
-                  <Radio.Group 
-                    value={capitalFlowDays} 
-                    onChange={async (e) => {
-                      const newDays = e.target.value
-                      setCapitalFlowDays(newDays)
-                      // 重新加载资金流数据
-                      if (selectedSheep) {
-                        try {
-                          const normalizedCode = normalizeSheepCode(selectedSheep)
-                          const capitalFlow = await sheepApi.getCapitalFlow(normalizedCode, newDays)
-                          setCapitalFlowData(Array.isArray(capitalFlow) ? capitalFlow : [])
-                        } catch (error: any) {
-                          console.warn('获取资金流数据失败:', error)
-                          setCapitalFlowData([])
-                        }
-                      }
-                    }}
-                    size="small"
-                    buttonStyle="solid"
-                  >
-                    <Radio.Button value={30}>30天</Radio.Button>
-                    <Radio.Button value={60}>60天</Radio.Button>
-                  </Radio.Group>
-                  {isAdmin && (
-                    <Button
-                      type="default"
-                      icon={<ReloadOutlined />}
-                      size="small"
-                      loading={capitalFlowRefreshing}
-                      onClick={handleRefreshCapitalFlow}
-                      title="刷新资金流数据（如果数据不足会自动获取历史数据）"
-                    >
-                      刷新
-                    </Button>
-                  )}
-                </Space>
-              </div>
-            }
-            style={{ marginBottom: 24 }}
-          >
-            {capitalFlowOption ? (
-              <ReactECharts
-                option={capitalFlowOption}
-                style={{ 
-                  height: isMobile ? '300px' : '400px', 
-                  width: '100%' 
-                }}
-              />
-            ) : (
-              <div style={{ textAlign: 'center', padding: 40, color: '#999' }}>
-                <div style={{ fontSize: 16, marginBottom: 8 }}>暂无资金流数据</div>
-                <div style={{ fontSize: 14 }}>
-                  该标的可能没有资金流向数据，或数据尚未采集。
-                  {selectedSheep && (
-                    <div style={{ marginTop: 8 }}>
-                      标的代码：{selectedSheep}
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-          </Card>
+          {/* 深度分析：走势预判 + 形态识别 + 止盈止损 */}
+          <DeepAnalysis 
+            sheepCode={selectedSheep} 
+            sheepName={selectedSheepName}
+          />
         </>
       ) : (
         <Card
@@ -783,25 +792,10 @@ const Tab1: React.FC = () => {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
               <span>标的分析</span>
               <Space>
-                {availableModels.length > 0 && (
-                  <Select
-                    value={selectedModel}
-                    onChange={setSelectedModel}
-                    style={{ width: 150 }}
-                    placeholder="选择模型"
-                    size="small"
-                  >
-                    {availableModels.map(model => (
-                      <Select.Option key={model.id} value={model.model_name}>
-                        {model.model_display_name}
-                      </Select.Option>
-                    ))}
-                  </Select>
-                )}
                 <Button
                   type="primary"
                   icon={<BulbOutlined />}
-                  onClick={handleAIAnalyze}
+                  onClick={() => handleAIAnalyze()}
                   disabled={!selectedSheep}
                   title={!selectedSheep ? '请先选择一只肥羊' : ''}
                 >
@@ -874,6 +868,117 @@ const Tab1: React.FC = () => {
           </div>
         )}
       </Modal>
+
+      {/* 模型选择Modal */}
+      <Modal
+        title="选择AI模型"
+        open={modelSelectModalVisible}
+        onCancel={() => {
+          setModelSelectModalVisible(false)
+          setPendingAction(null)
+        }}
+        footer={null}
+      >
+        <ModelSelectModal
+          onSelect={handleModelSelect}
+          onCancel={() => {
+            setModelSelectModalVisible(false)
+            setPendingAction(null)
+          }}
+        />
+      </Modal>
+
+      {/* 提示词编辑Modal */}
+      <Modal
+        title="编辑提示词"
+        open={promptEditModalVisible}
+        onOk={handlePromptConfirm}
+        onCancel={() => {
+          setPromptEditModalVisible(false)
+          setPendingAction(null)
+          setPromptText('')
+        }}
+        okText="确认并分析"
+        cancelText="取消"
+        width={800}
+      >
+        <div>
+          <p style={{ marginBottom: 8, color: '#666' }}>以下是渲染后的提示词（变量已替换），您可以编辑：</p>
+          <TextArea
+            value={renderedPromptText || promptText}
+            onChange={(e) => {
+              setRenderedPromptText(e.target.value)
+              setPromptText(e.target.value) // 同时更新原始提示词，以便提交时使用
+            }}
+            rows={15}
+            placeholder="请输入提示词..."
+            style={{ fontFamily: 'monospace', fontSize: '12px' }}
+          />
+        </div>
+      </Modal>
+    </div>
+  )
+}
+
+// 模型选择组件
+const ModelSelectModal: React.FC<{
+  onSelect: (modelName: string) => void
+  onCancel: () => void
+}> = ({ onSelect, onCancel }) => {
+  const [models, setModels] = useState<Array<{ id: number; model_name: string; model_display_name: string; api_key: string }>>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    const loadModels = async () => {
+      try {
+        const response = await aiApi.getActiveAIModels()
+        // 过滤出有API Key的模型
+        const modelsWithApiKey = response.models.filter(model => model.api_key && model.api_key.trim() !== '')
+        setModels(modelsWithApiKey)
+      } catch (error) {
+        console.error('加载模型列表失败:', error)
+        message.error('加载模型列表失败')
+      } finally {
+        setLoading(false)
+      }
+    }
+    loadModels()
+  }, [])
+
+  if (loading) {
+    return <Spin />
+  }
+
+  if (models.length === 0) {
+    return (
+      <div style={{ textAlign: 'center', padding: 20 }}>
+        <p>未配置API Key，请前往设置-AI应用设置中配置模型API Key和提示词</p>
+        <Button type="primary" onClick={onCancel}>确定</Button>
+      </div>
+    )
+  }
+
+  return (
+    <div>
+      <p style={{ marginBottom: 16 }}>请选择要使用的AI模型：</p>
+      <Space direction="vertical" style={{ width: '100%' }}>
+        {models.map(model => (
+          <Button
+            key={model.id}
+            block
+            onClick={() => onSelect(model.model_name)}
+            style={{ textAlign: 'left', height: 'auto', padding: '12px' }}
+          >
+            <div>
+              <div style={{ fontWeight: 'bold' }}>{model.model_display_name}</div>
+              <div style={{ fontSize: '12px', color: '#999', marginTop: 4 }}>{model.model_name}</div>
+            </div>
+          </Button>
+        ))}
+      </Space>
+      <div style={{ marginTop: 16, textAlign: 'right' }}>
+        <Button onClick={onCancel}>取消</Button>
+      </div>
     </div>
   )
 }

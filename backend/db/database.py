@@ -13,6 +13,9 @@ engine = create_engine(
     DATABASE_URL,
     pool_pre_ping=True,
     pool_recycle=3600,
+    pool_size=20,  # 连接池大小：20个连接
+    max_overflow=30,  # 最大溢出：30个连接（总共最多50个连接）
+    pool_timeout=30,  # 获取连接超时时间：30秒
     connect_args={"charset": "utf8mb4"}
 )
 

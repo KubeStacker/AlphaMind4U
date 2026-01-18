@@ -109,7 +109,16 @@ class ConceptService:
                 concept_row = concept_result.fetchone()
                 
                 if not concept_row:
-                    logger.warning(f"概念板块不存在或未激活: {sector_name}")
+                    # 尝试查询所有相似的概念名称（用于调试）
+                    debug_query = text("""
+                        SELECT concept_name, is_active, source
+                        FROM concept_theme 
+                        WHERE concept_name LIKE :pattern
+                        LIMIT 10
+                    """)
+                    debug_result = db.execute(debug_query, {'pattern': f'%{sector_name}%'})
+                    similar_concepts = [row[0] for row in debug_result]
+                    logger.warning(f"概念板块不存在或未激活: {sector_name}，相似的概念名称: {similar_concepts}")
                     return []
                 
                 # 获取最新交易日（从sheep_daily表中）
@@ -173,7 +182,27 @@ class ConceptService:
                     logger.info(f"概念板块 {sector_name} 找到 {len(stocks)} 只概念股（无涨幅数据）")
                     return stocks
                 
-                # 有交易日期，查询带涨幅的数据（移除sd.change_pct IS NOT NULL限制，允许返回无涨幅数据的股票）
+                # 有交易日期，查询带涨幅的数据（移除sd.change_pct IS NOT NULL限制，允许返回无涨幅数据的肥羊）
+                # 先检查概念下是否有肥羊
+                stock_count_query = text("""
+                    SELECT COUNT(DISTINCT sb.sheep_code) as stock_count
+                    FROM sheep_basic sb
+                    INNER JOIN sheep_concept_mapping scm ON sb.sheep_code = scm.sheep_code
+                    INNER JOIN concept_theme ct ON scm.concept_id = ct.concept_id
+                    WHERE ct.concept_name = :sector_name
+                      AND ct.is_active = 1
+                      AND sb.is_active = 1
+                """)
+                count_result = db.execute(stock_count_query, {'sector_name': sector_name})
+                count_row = count_result.fetchone()
+                stock_count = count_row[0] if count_row else 0
+                
+                if stock_count == 0:
+                    logger.warning(f"概念板块 {sector_name} 下没有肥羊")
+                    return []
+                
+                logger.info(f"概念板块 {sector_name} 下有 {stock_count} 只肥羊，开始查询涨幅数据（最新交易日: {latest_trade_date}）")
+                
                 query = text("""
                     SELECT 
                         sb.sheep_code,
@@ -181,17 +210,15 @@ class ConceptService:
                         sd.change_pct,
                         sd.close_price as current_price,
                         MIN(hr.rank) as min_rank
-                    FROM sheep_basic sb USE INDEX (idx_is_active)
-                    INNER JOIN sheep_concept_mapping scm USE INDEX (idx_sheep_code, idx_concept_id) 
+                    FROM sheep_basic sb
+                    INNER JOIN sheep_concept_mapping scm 
                         ON sb.sheep_code = scm.sheep_code
-                    INNER JOIN concept_theme ct USE INDEX (idx_concept_name, idx_is_active) 
+                    INNER JOIN concept_theme ct 
                         ON scm.concept_id = ct.concept_id
-                    LEFT JOIN (
-                        SELECT sheep_code, change_pct, close_price
-                        FROM sheep_daily
-                        WHERE trade_date = :latest_date
-                    ) sd ON sb.sheep_code = sd.sheep_code
-                    LEFT JOIN market_hot_rank hr USE INDEX (idx_sheep_code, idx_trade_date) 
+                    LEFT JOIN sheep_daily sd
+                        ON sb.sheep_code = sd.sheep_code
+                        AND sd.trade_date = :latest_date
+                    LEFT JOIN market_hot_rank hr 
                         ON sb.sheep_code = hr.sheep_code
                         AND hr.trade_date >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
                     WHERE ct.concept_name = :sector_name
@@ -200,8 +227,8 @@ class ConceptService:
                     GROUP BY sb.sheep_code, sb.sheep_name, sd.change_pct, sd.close_price
                     ORDER BY 
                         CASE WHEN sd.change_pct IS NOT NULL THEN 0 ELSE 1 END,
-                        sd.change_pct DESC,
-                        min_rank ASC
+                        COALESCE(sd.change_pct, -999) DESC,
+                        COALESCE(MIN(hr.rank), 999) ASC
                     LIMIT :limit
                 """)
                 

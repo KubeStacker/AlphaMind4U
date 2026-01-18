@@ -273,3 +273,19 @@ class HotRankRepository:
                 stock['consecutive_days'] = consecutive_days_map.get(sheep_code, 0)
             
             return stocks_data
+    
+    @staticmethod
+    def cleanup_old_data(retention_days: int):
+        """清理热度榜旧数据（保留最近N天）"""
+        from datetime import date, timedelta
+        
+        cutoff_date = date.today() - timedelta(days=retention_days)
+        
+        with get_db() as db:
+            delete_query = text("""
+                DELETE FROM market_hot_rank 
+                WHERE trade_date < :cutoff_date
+            """)
+            result = db.execute(delete_query, {'cutoff_date': cutoff_date})
+            db.commit()
+            return result.rowcount

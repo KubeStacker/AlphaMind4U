@@ -1,10 +1,19 @@
 import client from './client'
 
+export interface DataCollectionStats {
+  table_name: string
+  schedule_time: string
+  retention_days: number | null
+  trading_days_in_period: number | null
+  actual_data_days: number | null
+}
+
 export interface DataCollectionType {
   value: string
   label: string
   description: string
   requires_trading_day: boolean
+  stats: DataCollectionStats
 }
 
 export interface DataCollectionResult {
@@ -12,19 +21,7 @@ export interface DataCollectionResult {
   message: string
   data_type?: string
   elapsed_time?: number
-}
-
-export interface CollectAllResult {
-  success: boolean
-  results: {
-    [key: string]: {
-      success: boolean
-      message: string
-    }
-  }
-  total_time: number
-  success_count: number
-  total_count: number
+  status?: string
 }
 
 export const dataCollectionApi = {
@@ -34,21 +31,12 @@ export const dataCollectionApi = {
     return response.data.types
   },
 
-  // 采集所有数据
-  async collectAll(forceTradingDay: boolean = false): Promise<CollectAllResult> {
-    const response = await client.post<CollectAllResult>('/admin/data-collection/collect-all', null, {
-      params: { force_trading_day: forceTradingDay }
-    })
-    return response.data
-  },
-
   // 采集特定数据
   async collectSpecific(
     dataType: string,
     options?: {
       days?: number
       targetDate?: string
-      force?: boolean
     }
   ): Promise<DataCollectionResult> {
     const response = await client.post<DataCollectionResult>('/admin/data-collection/collect-specific', null, {

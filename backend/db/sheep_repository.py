@@ -87,14 +87,14 @@ class SheepRepository:
             keyword_upper = keyword_clean.upper().replace("SZ", "").replace("SH", "")
             
             if keyword_upper.isdigit():
-                # 代码搜索：先从sheep_basic表搜索，如果没结果再从sheep_daily表搜索
+                # 代码搜索：优先从sheep_basic表搜索，因为有索引
                 query = text(f"""
-                    SELECT sheep_code, sheep_name, industry
-                    FROM sheep_basic
-                    WHERE sheep_code LIKE :kw AND is_active = 1
+                    SELECT sb.sheep_code, sb.sheep_name, sb.industry
+                    FROM sheep_basic sb
+                    WHERE sb.sheep_code LIKE :kw AND sb.is_active = 1
                     ORDER BY 
-                        CASE WHEN sheep_code = :full_kw THEN 0 ELSE 1 END,
-                        sheep_code ASC
+                        CASE WHEN sb.sheep_code = :full_kw THEN 0 ELSE 1 END,
+                        sb.sheep_code ASC
                     LIMIT {limit}
                 """)
                 result = db.execute(query, {
@@ -109,20 +109,19 @@ class SheepRepository:
                 
                 # 如果sheep_basic表中没有结果，从sheep_daily表中搜索代码
                 if not results_list:
+                    # 使用EXISTS优化性能 instead of DISTINCT
                     daily_query = text(f"""
-                        SELECT DISTINCT sd.sheep_code, 
+                        SELECT sd.sheep_code, 
                                COALESCE(sb.sheep_name, mhr.sheep_name, sd.sheep_code) AS sheep_name,
                                sb.industry
-                        FROM sheep_daily sd
+                        FROM (SELECT DISTINCT sheep_code FROM sheep_daily WHERE sheep_code LIKE :kw LIMIT {limit}) temp
+                        JOIN sheep_daily sd ON sd.sheep_code = temp.sheep_code
                         LEFT JOIN sheep_basic sb ON sd.sheep_code = sb.sheep_code
                         LEFT JOIN (
-                            SELECT sheep_code, sheep_name
+                            SELECT DISTINCT sheep_code, sheep_name
                             FROM market_hot_rank
                             WHERE sheep_code LIKE :kw
-                            ORDER BY trade_date DESC
-                            LIMIT 1
                         ) mhr ON sd.sheep_code = mhr.sheep_code
-                        WHERE sd.sheep_code LIKE :kw
                         ORDER BY 
                             CASE WHEN sd.sheep_code = :full_kw THEN 0 ELSE 1 END,
                             sd.sheep_code ASC
@@ -142,14 +141,14 @@ class SheepRepository:
                 # 名称搜索（支持中文和拼音首字母）
                 # 1. 先尝试中文名称匹配（从sheep_basic表）
                 query = text(f"""
-                    SELECT sheep_code, sheep_name, industry
-                    FROM sheep_basic
-                    WHERE sheep_name LIKE :kw AND is_active = 1
+                    SELECT sb.sheep_code, sb.sheep_name, sb.industry
+                    FROM sheep_basic sb
+                    WHERE sb.sheep_name LIKE :kw AND sb.is_active = 1
                     ORDER BY 
-                        CASE WHEN sheep_name = :full_kw THEN 0 
-                             WHEN sheep_name LIKE :prefix_kw THEN 1 
+                        CASE WHEN sb.sheep_name = :full_kw THEN 0 
+                             WHEN sb.sheep_name LIKE :prefix_kw THEN 1 
                              ELSE 2 END,
-                        sheep_code
+                        sb.sheep_code
                     LIMIT {limit}
                 """)
                 result = db.execute(query, {
@@ -166,11 +165,12 @@ class SheepRepository:
                 # 2. 如果sheep_basic表中没有结果，从market_hot_rank表中搜索（按名称）
                 if not results_list:
                     try:
+                        # Limit results to improve performance
                         hot_rank_query = text(f"""
-                            SELECT DISTINCT sheep_code, sheep_name, NULL AS industry
-                            FROM market_hot_rank
-                            WHERE sheep_name LIKE :kw
-                            ORDER BY trade_date DESC, sheep_code ASC
+                            SELECT DISTINCT mr.sheep_code, mr.sheep_name, NULL AS industry
+                            FROM market_hot_rank mr
+                            WHERE mr.sheep_name LIKE :kw
+                            ORDER BY mr.trade_date DESC, mr.sheep_code ASC
                             LIMIT {limit}
                         """)
                         hot_rank_result = db.execute(hot_rank_query, {
@@ -197,9 +197,9 @@ class SheepRepository:
                         if keyword_pinyin_upper:
                             # 获取所有肥羊名称，在内存中匹配拼音首字母
                             all_query = text("""
-                                SELECT sheep_code, sheep_name, industry
-                                FROM sheep_basic
-                                WHERE is_active = 1
+                                SELECT sb.sheep_code, sb.sheep_name, sb.industry
+                                FROM sheep_basic sb
+                                WHERE sb.is_active = 1
                                 LIMIT 10000
                             """)
                             all_result = db.execute(all_query, {})
@@ -231,7 +231,7 @@ class SheepRepository:
     
     @staticmethod
     def get_latest_trade_date(sheep_code: str) -> Optional[date]:
-        """获取股票在数据库中的最新交易日期"""
+        """获取肥羊在数据库中的最新交易日期"""
         with get_db() as db:
             query = text("""
                 SELECT MAX(trade_date) as max_date
@@ -246,7 +246,7 @@ class SheepRepository:
     
     @staticmethod
     def get_earliest_trade_date(sheep_code: str) -> Optional[date]:
-        """获取股票在数据库中的最早交易日期"""
+        """获取肥羊在数据库中的最早交易日期"""
         with get_db() as db:
             query = text("""
                 SELECT MIN(trade_date) as min_date
@@ -260,27 +260,49 @@ class SheepRepository:
             return None
     
     @staticmethod
+    def get_sheep_daily_count_for_date(trade_date: date) -> int:
+        """获取某个交易日的肥羊日K数据数量"""
+        try:
+            with get_db() as db:
+                query = text("""
+                    SELECT COUNT(*) as count
+                    FROM (SELECT DISTINCT sheep_code FROM sheep_daily WHERE trade_date = :trade_date) as subquery
+                """)
+                result = db.execute(query, {'trade_date': trade_date})
+                row = result.fetchone()
+                if row and row[0]:
+                    return int(row[0])
+                return 0
+        except Exception as e:
+            logger.error(f"获取交易日 {trade_date} 的肥羊日K数据数量失败: {e}")
+            return 0
+    
+    @staticmethod
     def get_sheep_daily(sheep_code: str, limit: int = 90) -> List[Dict]:
         """
         获取肥羊日K数据（默认返回最新的数据）
         
         Args:
-            sheep_code: 股票代码
+            sheep_code: 肥羊代码
             limit: 返回的记录数，默认90条（最新的90条）
             
         Returns:
             按日期升序排列的日K数据列表（从旧到新）
         """
         with get_db() as db:
-            # 先获取最新的N条数据（按日期降序），然后在应用层按日期升序排列
-            # 这样可以确保返回的是最新的数据，但顺序是从旧到新（便于K线图显示）
+            # 直接按日期升序查询，避免在应用层排序
             query = text(f"""
                 SELECT trade_date, open_price, close_price, high_price, low_price,
                        volume, amount, change_pct, ma5, ma10, ma20, ma30, ma60
-                FROM sheep_daily
-                WHERE sheep_code = :code
-                ORDER BY trade_date DESC
-                LIMIT {limit}
+                FROM (
+                    SELECT trade_date, open_price, close_price, high_price, low_price,
+                           volume, amount, change_pct, ma5, ma10, ma20, ma30, ma60
+                    FROM sheep_daily
+                    WHERE sheep_code = :code
+                    ORDER BY trade_date DESC
+                    LIMIT {limit}
+                ) as subquery
+                ORDER BY trade_date ASC
             """)
             result = db.execute(query, {'code': sheep_code})
             
@@ -317,9 +339,6 @@ class SheepRepository:
                 }
                 for row in result
             ]
-            
-            # 按日期升序排列（从旧到新），便于K线图显示
-            data_list.sort(key=lambda x: x['trade_date'])
             
             return data_list
     

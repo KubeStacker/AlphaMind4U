@@ -160,7 +160,8 @@ class FinancialAdapter:
                         year = date_str.split('年')[0]
                         return datetime.strptime(f"{year}-12-31", '%Y-%m-%d').date()
                 else:
-                    parsed = datetime.strptime(date_str[:len(fmt.replace('%', ''))], fmt)
+                    # 直接使用完整的日期字符串和格式字符串进行解析
+                    parsed = datetime.strptime(date_str, fmt)
                     return parsed.date()
             except (ValueError, IndexError):
                 continue

@@ -37,6 +37,38 @@ export interface SectorStockByChange {
   rank?: number
 }
 
+export interface TrendingSector {
+  sector_name: string
+  inflow_amount: number
+  super_large_inflow: number
+  large_inflow: number
+  avg_change_pct: number
+  stock_count: number
+  top_stocks: Array<{
+    sheep_code: string
+    sheep_name: string
+    change_pct?: number
+    current_price?: number
+    rank?: number
+  }>
+  score: number
+  trend_strength: string
+  recommendation_reason: string
+}
+
+export interface TrendingSectorResponse {
+  sectors: TrendingSector[]
+  timestamp: string
+  limit: number
+}
+
+export const trendingSectorApi = {
+  getTrendingSectors: async (limit: number = 10): Promise<TrendingSectorResponse> => {
+    const response = await client.get('/trending-sectors', { params: { limit } })
+    return response.data
+  },
+}
+
 export const hotApi = {
   getHotSheeps: async (source?: string): Promise<HotSheep[]> => {
     const response = await client.get('/hot-sheep', { params: { source } })
@@ -117,6 +149,75 @@ export const sectorMoneyFlowApi = {
     // 限制最大返回数量为30
     const actualLimit = limit > 30 ? 30 : limit
     const response = await client.get('/sector-money-flow/recommend', { params: { days, limit: actualLimit } })
+    return response.data
+  },
+}
+
+// ========== 下个交易日预测相关接口 ==========
+
+// 板块预测信息
+export interface SectorPrediction {
+  sector_name: string
+  score: number
+  prediction_level: 'high' | 'medium' | 'low'
+  reasons: string[]
+  details: {
+    money_score: number
+    hot_score: number
+    hot_count: number
+    inflow_total: number
+  }
+  top_stocks: Array<{
+    sheep_code: string
+    sheep_name: string
+    rank: number
+    hot_score: number
+  }>
+}
+
+// 个股推荐信息
+export interface StockRecommendation {
+  sheep_code: string
+  sheep_name: string
+  sector_name: string
+  score: number
+  hot_rank: number
+  reasons: string[]
+  details: {
+    change_pct: number | null
+    current_price: number | null
+    main_net_inflow: number | null
+    volume_ratio: number | null
+  }
+}
+
+// 下个交易日预测结果
+export interface NextDayPrediction {
+  success: boolean
+  target_date: string
+  data_date: string
+  generated_at: string
+  description: string
+  sector_predictions: SectorPrediction[]
+  stock_recommendations: StockRecommendation[]
+  analysis_summary: {
+    top_sectors_count: number
+    recommended_stocks_count: number
+    data_freshness: 'real-time' | 'post-market'
+  }
+  message?: string
+}
+
+export const nextDayPredictionApi = {
+  // 获取下个交易日预测
+  getPrediction: async (): Promise<NextDayPrediction> => {
+    const response = await client.get('/next-day-prediction')
+    return response.data
+  },
+  
+  // 手动刷新预测（管理员）
+  refreshPrediction: async (): Promise<{ message: string; status: string }> => {
+    const response = await client.post('/next-day-prediction/refresh')
     return response.data
   },
 }

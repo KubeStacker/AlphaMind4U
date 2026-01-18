@@ -214,7 +214,11 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
                 detail="用户不存在或已被禁用"
             )
         
+        # 判断是否为管理员（username为admin的是管理员）
+        is_admin = user[1] == "admin"
+        
         return {
             "id": user[0],
-            "username": user[1]
+            "username": user[1],
+            "is_admin": is_admin
         }

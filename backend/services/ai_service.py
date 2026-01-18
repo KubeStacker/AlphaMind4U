@@ -193,7 +193,7 @@ class AIService:
             raise
     
     @classmethod
-    def recommend_sheep(cls, user_id: int, hot_sheep: List[Dict], sectors: List[Dict], model_name: Optional[str] = None) -> str:
+    def recommend_sheep(cls, user_id: int, hot_sheep: List[Dict], sectors: List[Dict], model_name: Optional[str] = None, custom_prompt: Optional[str] = None) -> str:
         """AI推荐肥羊"""
         try:
             # 准备数据
@@ -226,7 +226,12 @@ class AIService:
             
             # 获取prompt并填充变量
             from datetime import datetime
-            prompt_template = cls.get_prompt("recommend")
+            
+            # 如果提供了自定义提示词，直接使用；否则从配置获取
+            if custom_prompt:
+                prompt_template = custom_prompt
+            else:
+                prompt_template = cls.get_prompt("recommend")
             
             # 格式化热门板块列表
             sectors_list = []
@@ -234,12 +239,16 @@ class AIService:
                 sectors_list.append(f"- {sector.get('sector_name')}（热门股数量：{sector.get('hot_count', 0)}，热度分数：{sector.get('hot_score', 0)}）")
             hot_sectors_str = '\n'.join(sectors_list) if sectors_list else '暂无热门板块'
             
-            # 填充变量
-            prompt = prompt_template.format(
-                date=datetime.now().strftime('%Y-%m-%d'),
-                hot_sectors=hot_sectors_str,
-                data=data_str
-            )
+            # 填充变量（如果自定义提示词中没有变量，format不会报错）
+            try:
+                prompt = prompt_template.format(
+                    date=datetime.now().strftime('%Y-%m-%d'),
+                    hot_sectors=hot_sectors_str,
+                    data=data_str
+                )
+            except KeyError:
+                # 如果自定义提示词中没有这些变量，直接使用
+                prompt = prompt_template
             
             messages = [
                 {"role": "system", "content": "你是老K，一位拥有20年实战经验的A股机构派游资。你既看重公募基金的安全垫（业绩、壁垒、无雷），又擅长捕捉顶级游资的技术买点（洗盘结束、强力反转）"},
@@ -254,7 +263,7 @@ class AIService:
             raise
     
     @classmethod
-    def analyze_sheep(cls, user_id: int, sheep_code: str, sheep_name: str, sheep_data: Dict, model_name: Optional[str] = None) -> str:
+    def analyze_sheep(cls, user_id: int, sheep_code: str, sheep_name: str, sheep_data: Dict, model_name: Optional[str] = None, custom_prompt: Optional[str] = None) -> str:
         """AI分析肥羊"""
         try:
             # 准备数据
@@ -295,18 +304,27 @@ K线数据（最近10天）：{json.dumps(kline_summary, ensure_ascii=False) if 
             
             # 获取prompt并填充变量
             from datetime import datetime
-            prompt_template = cls.get_prompt("analyze")
+            
+            # 如果提供了自定义提示词，直接使用；否则从配置获取
+            if custom_prompt:
+                prompt_template = custom_prompt
+            else:
+                prompt_template = cls.get_prompt("analyze")
             
             # 获取板块信息
             sectors_str = ', '.join(sheep_data.get('sectors', [])) if sheep_data.get('sectors') else 'N/A'
             
-            # 填充变量
-            prompt = prompt_template.format(
-                date=datetime.now().strftime('%Y-%m-%d'),
-                sheep_name=sheep_name,
-                sectors=sectors_str,
-                data=data_str
-            )
+            # 填充变量（如果自定义提示词中没有变量，format不会报错）
+            try:
+                prompt = prompt_template.format(
+                    date=datetime.now().strftime('%Y-%m-%d'),
+                    sheep_name=sheep_name,
+                    sectors=sectors_str,
+                    data=data_str
+                )
+            except KeyError:
+                # 如果自定义提示词中没有这些变量，直接使用
+                prompt = prompt_template
             
             messages = [
                 {"role": "system", "content": "你是一位资深的肥羊投资分析师，擅长技术分析和基本面分析。"},

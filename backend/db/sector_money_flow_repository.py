@@ -363,6 +363,31 @@ class SectorMoneyFlowRepository:
             return []
     
     @staticmethod
+    def get_concept_money_flow_count_for_date(trade_date: date) -> int:
+        """
+        获取指定日期的概念资金流数据数量
+        
+        Args:
+            trade_date: 交易日期
+            
+        Returns:
+            该日期的数据记录数（概念数量）
+        """
+        try:
+            with get_db() as db:
+                query = text("""
+                    SELECT COUNT(*) 
+                    FROM sector_money_flow
+                    WHERE trade_date = :trade_date
+                """)
+                result = db.execute(query, {'trade_date': trade_date})
+                row = result.fetchone()
+                return row[0] if row and row[0] is not None else 0
+        except Exception as e:
+            logger.error(f"获取日期 {trade_date} 的概念资金流数据数量失败: {e}")
+            return 0
+    
+    @staticmethod
     def cleanup_old_data(retention_days: int = 90):
         """
         清理旧数据（保留最近N天）

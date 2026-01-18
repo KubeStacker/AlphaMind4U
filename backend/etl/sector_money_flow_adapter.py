@@ -189,7 +189,7 @@ class SectorMoneyFlowAdapter:
     def get_concept_money_flow_hist(concept_name: str) -> List[Dict]:
         """
         获取单个概念的历史资金流数据
-        通过概念下的股票聚合计算
+        通过概念下的肥羊聚合计算
         
         Args:
             concept_name: 概念名称（如：人工智能、新能源车等）
@@ -216,7 +216,7 @@ class SectorMoneyFlowAdapter:
                     return []
                 concept_id = row[0]
             
-            # 获取该概念下的所有股票代码
+            # 获取该概念下的所有肥羊代码
             with get_db() as db:
                 sheep_query = text("""
                     SELECT DISTINCT sheep_code 
@@ -227,13 +227,13 @@ class SectorMoneyFlowAdapter:
                 sheep_codes = [row[0] for row in result]
                 
                 if not sheep_codes:
-                    logger.debug(f"概念 {concept_name} 下没有股票")
+                    logger.debug(f"概念 {concept_name} 下没有肥羊")
                     return []
             
             # 获取最近120天的数据
             cutoff_date = date.today() - timedelta(days=120)
             
-            # 查询这些股票的资金流数据并聚合
+            # 查询这些肥羊的资金流数据并聚合
             with get_db() as db:
                 # 构建IN子句
                 placeholders = ','.join([f':code{i}' for i in range(len(sheep_codes))])
@@ -269,7 +269,7 @@ class SectorMoneyFlowAdapter:
                         'small_inflow': float(row[5]) if row[5] is not None else 0.0,
                     })
                 
-                logger.debug(f"概念 {concept_name}: 从 {len(sheep_codes)} 只股票聚合得到 {len(data_list)} 天的数据")
+                logger.debug(f"概念 {concept_name}: 从 {len(sheep_codes)} 只肥羊聚合得到 {len(data_list)} 天的数据")
                 return data_list
                 
         except Exception as e:
