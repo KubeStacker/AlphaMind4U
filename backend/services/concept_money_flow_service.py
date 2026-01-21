@@ -56,7 +56,7 @@ class ConceptMoneyFlowService:
     @staticmethod
     def get_top_concepts_by_inflow(days: int = 1, limit: int = 30) -> Tuple[List[Dict], Dict]:
         """
-        获取资金净流入最多的概念（剔除黑名单中的板块）
+        获取资金净流入最多的概念（剔除黑名单中的板块，并进行动态Jaccard聚类）
         返回按净流入降序排列的前N条结果（最多30条）
         
         Args:
@@ -67,10 +67,16 @@ class ConceptMoneyFlowService:
             (概念列表, 元数据字典)
         """
         from typing import Tuple
+        from datetime import date
+        from services.dynamic_jaccard_clustering import DynamicJaccardClustering
         
         # 获取原始数据（需要多取一些，因为要过滤掉无意义的板块）
-        # 如果limit=30，我们取limit*3=90个，过滤后应该还有足够的数量
-        fetch_limit = limit * 3 if limit > 10 else limit + 40
+        # 优化：减少fetch_limit以减少Jaccard聚类的输入数据量
+        # 如果limit<=10，只取limit*2个，避免过多的两两比对
+        if limit <= 10:
+            fetch_limit = limit * 2  # 减少到2倍
+        else:
+            fetch_limit = limit * 2 if limit <= 20 else limit + 20  # 最多limit+20
         sectors, metadata = SectorMoneyFlowRepository.get_top_sectors_by_inflow(days, fetch_limit)
         
         # 使用完整的过滤逻辑过滤掉无意义的板块
@@ -79,10 +85,46 @@ class ConceptMoneyFlowService:
             if not should_filter_concept(sector.get('sector_name', ''))
         ]
         
+        # 动态Jaccard聚类：解决"概念同质化"问题（如"CPO"与"光通信"霸榜）
+        if filtered_sectors:
+            try:
+                # 获取交易日期
+                trade_date = metadata.get('latest_date') or date.today()
+                if isinstance(trade_date, str):
+                    from datetime import datetime
+                    trade_date = datetime.strptime(trade_date, '%Y-%m-%d').date()
+                
+                # 执行聚类
+                clustering = DynamicJaccardClustering()
+                
+                # 确定score_key：根据days选择不同的字段
+                if days == 1:
+                    score_key = 'main_net_inflow'
+                else:
+                    score_key = 'total_inflow'
+                
+                # 对板块进行聚类
+                clustered_sectors = clustering.cluster_sectors(
+                    filtered_sectors,
+                    trade_date,
+                    score_key=score_key
+                )
+                
+                logger.debug(
+                    f"Jaccard聚类: {len(filtered_sectors)} 个板块 -> {len(clustered_sectors)} 个聚类 "
+                    f"(折叠了 {len(filtered_sectors) - len(clustered_sectors)} 个同质板块)"
+                )
+                
+                filtered_sectors = clustered_sectors
+                
+            except Exception as e:
+                logger.warning(f"动态Jaccard聚类失败，使用原始结果: {e}", exc_info=True)
+                # 如果聚类失败，继续使用过滤后的原始结果
+        
         # 限制返回数量
         filtered_sectors = filtered_sectors[:limit]
         
-        logger.info(f"过滤前: {len(sectors)} 个板块，过滤后: {len(filtered_sectors)} 个板块（使用concept_filter过滤）")
+        logger.debug(f"过滤前: {len(sectors)} 个板块，过滤后: {len(filtered_sectors)} 个板块（使用concept_filter + Jaccard聚类）")
         
         return filtered_sectors, metadata
     

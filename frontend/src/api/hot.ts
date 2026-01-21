@@ -14,20 +14,6 @@ export interface HotSheep {
   avg_change_7d?: number
 }
 
-export interface SectorInfo {
-  sector_name: string
-  hot_count?: number
-  hot_score?: number  // 兼容字段
-  color?: string  // 颜色标识：red/orange/blue
-  hot_sheep?: SectorSheep[]  // 该板块下的热门肥羊列表
-}
-
-export interface SectorSheep {
-  sheep_code: string
-  sheep_name: string
-  rank?: number
-  consecutive_days: number
-}
 
 export interface SectorStockByChange {
   sheep_code: string
@@ -37,37 +23,6 @@ export interface SectorStockByChange {
   rank?: number
 }
 
-export interface TrendingSector {
-  sector_name: string
-  inflow_amount: number
-  super_large_inflow: number
-  large_inflow: number
-  avg_change_pct: number
-  stock_count: number
-  top_stocks: Array<{
-    sheep_code: string
-    sheep_name: string
-    change_pct?: number
-    current_price?: number
-    rank?: number
-  }>
-  score: number
-  trend_strength: string
-  recommendation_reason: string
-}
-
-export interface TrendingSectorResponse {
-  sectors: TrendingSector[]
-  timestamp: string
-  limit: number
-}
-
-export const trendingSectorApi = {
-  getTrendingSectors: async (limit: number = 10): Promise<TrendingSectorResponse> => {
-    const response = await client.get('/trending-sectors', { params: { limit } })
-    return response.data
-  },
-}
 
 export const hotApi = {
   getHotSheeps: async (source?: string): Promise<HotSheep[]> => {
@@ -75,43 +30,35 @@ export const hotApi = {
     return response.data.sheep || []
   },
 
-  getHotSectors: async (): Promise<SectorInfo[]> => {
-    const response = await client.get('/hot-sectors')
-    return response.data.sectors || []
-  },
-
-  getSectorDaily: async (sectorName: string) => {
-    const response = await client.get(`/sectors/${encodeURIComponent(sectorName)}/daily`)
-    return response.data.data || []
-  },
-
-  getSectorSheeps: async (sectorName: string): Promise<SectorSheep[]> => {
-    const response = await client.get(`/sectors/${encodeURIComponent(sectorName)}/sheep`)
-    return response.data.sheep || []
-  },
-
   getSectorStocksByChange: async (sectorName: string, limit: number = 10): Promise<SectorStockByChange[]> => {
     const response = await client.get(`/sectors/${encodeURIComponent(sectorName)}/stocks-by-change`, { params: { limit } })
     return response.data.stocks || []
-  },
-
-  refreshHotSheeps: async (): Promise<void> => {
-    await client.post('/refresh-hot-sheep')
   },
 }
 
 export interface CapitalInflowStock {
   sheep_code: string
   sheep_name: string
-  continuous_days: number
+  continuous_days?: number  // 连续流入天数（仅连续流入接口有）
   total_inflow: number  // 总流入（亿元）
-  max_single_day_inflow: number  // 单日最大流入（亿元）
+  max_single_day_inflow?: number  // 单日最大流入（亿元，仅连续流入接口有）
   avg_daily_inflow: number  // 日均流入（亿元）
+  latest_trade_date?: string  // 最新交易日期（仅Top接口有）
+  daily_data?: Array<{
+    trade_date: string
+    main_net_inflow: number  // 亿元
+  }>  // 每日数据（用于趋势图，仅多天视图时有）
 }
 
 export const capitalInflowApi = {
   getRecommendations: async (days: number = 5): Promise<{ stocks: CapitalInflowStock[], days: number }> => {
     const response = await client.get('/capital-inflow/recommend', { params: { days } })
+    return response.data
+  },
+  
+  // 获取最近N天净流入Top标的（按净流入合计降序）
+  getTop: async (days: number = 1, limit: number = 100): Promise<{ stocks: CapitalInflowStock[], days: number, limit: number }> => {
+    const response = await client.get('/capital-inflow/top', { params: { days, limit } })
     return response.data
   },
 }
@@ -151,73 +98,195 @@ export const sectorMoneyFlowApi = {
     const response = await client.get('/sector-money-flow/recommend', { params: { days, limit: actualLimit } })
     return response.data
   },
+  
+  // 获取板块资金流历史数据（用于K线图）
+  getMoneyFlowHistory: async (sectorName: string, days: number = 60): Promise<{ data: SectorMoneyFlowDailyData[], sector_name: string, days: number }> => {
+    const response = await client.get(`/sectors/${encodeURIComponent(sectorName)}/money-flow`, { params: { days } })
+    return response.data
+  },
 }
 
-// ========== 下个交易日预测相关接口 ==========
 
-// 板块预测信息
-export interface SectorPrediction {
+// ========== 信号雷达与实时看板相关接口 ==========
+
+// 热门板块摘要
+export interface HotSectorSummary {
   sector_name: string
-  score: number
-  prediction_level: 'high' | 'medium' | 'low'
-  reasons: string[]
-  details: {
-    money_score: number
-    hot_score: number
-    hot_count: number
-    inflow_total: number
-  }
-  top_stocks: Array<{
-    sheep_code: string
-    sheep_name: string
-    rank: number
-    hot_score: number
-  }>
+  sector_rps_20: number
+  sector_rps_50: number
+  limit_up_count: number
+  change_pct: number
+  main_net_inflow: number
+  signal: 'New Cycle' | 'Climax Risk' | null
 }
 
-// 个股推荐信息
-export interface StockRecommendation {
+// 推荐个股
+export interface RecommendedStock {
   sheep_code: string
   sheep_name: string
+  change_pct: number | null
+  current_price: number | null
+  rank?: number
+}
+
+// 信号雷达数据
+export interface SignalRadarData {
+  trade_date: string
+  new_cycle_signals: HotSectorSummary[]
+  climax_signals: HotSectorSummary[]
+  hot_sectors_summary: HotSectorSummary[]
+  hottest_sector: HotSectorSummary | null
+  recommended_stocks: RecommendedStock[]
+  error?: string  // 可选的错误信息
+}
+
+// RPS走势图数据
+export interface SectorRpsChartData {
   sector_name: string
-  score: number
-  hot_rank: number
-  reasons: string[]
-  details: {
-    change_pct: number | null
-    current_price: number | null
-    main_net_inflow: number | null
-    volume_ratio: number | null
-  }
+  dates: string[]
+  rps_20: number[]
+  rps_50: number[]
+  change_pct: number[]
 }
 
-// 下个交易日预测结果
-export interface NextDayPrediction {
-  success: boolean
-  target_date: string
-  data_date: string
-  generated_at: string
-  description: string
-  sector_predictions: SectorPrediction[]
-  stock_recommendations: StockRecommendation[]
-  analysis_summary: {
-    top_sectors_count: number
-    recommended_stocks_count: number
-    data_freshness: 'real-time' | 'post-market'
-  }
-  message?: string
-}
-
-export const nextDayPredictionApi = {
-  // 获取下个交易日预测
-  getPrediction: async (): Promise<NextDayPrediction> => {
-    const response = await client.get('/next-day-prediction')
+export const signalRadarApi = {
+  // 获取信号雷达数据
+  getSignalRadar: async (): Promise<SignalRadarData> => {
+    const response = await client.get('/signal-radar')
     return response.data
   },
   
-  // 手动刷新预测（管理员）
-  refreshPrediction: async (): Promise<{ message: string; status: string }> => {
-    const response = await client.post('/next-day-prediction/refresh')
+  // 获取板块RPS走势图
+  getSectorRpsChart: async (sectorName: string, days: number = 60): Promise<SectorRpsChartData> => {
+    const response = await client.get(`/sectors/${encodeURIComponent(sectorName)}/rps-chart`, { params: { days } })
+    return response.data
+  },
+}
+
+// ========== 猎鹰雷达相关接口 ==========
+
+// 当日最热板块
+export interface HottestSector {
+  sector_name: string
+  trade_date: string
+  main_net_inflow: number
+  super_large_inflow: number
+  large_inflow: number
+  change_pct: number
+  limit_up_count: number
+  sector_rps_20: number
+  sector_rps_50: number
+  avg_turnover: number
+  display_name?: string
+  aggregated_count?: number
+}
+
+// 猎鹰推荐个股
+export interface FalconRecommendation {
+  sheep_code: string
+  sheep_name: string
+  sector_name?: string
+  change_pct?: number
+  volume_ratio?: number
+  support_price?: number
+  platform_top?: number
+  volatility?: number
+  total_inflow?: number
+  amplitude?: number
+  flow_data?: Array<{
+    trade_date: string
+    main_net_inflow: number
+  }>
+  strategy: 'Leader Pullback' | 'Money Divergence' | 'Box Breakout'
+  reason: string
+}
+
+// 猎鹰推荐结果
+export interface FalconRecommendations {
+  leader_pullback: FalconRecommendation[]
+  money_divergence: FalconRecommendation[]
+  box_breakout: FalconRecommendation[]
+  trade_date: string
+  error?: string
+}
+
+// 市场情绪数据
+export interface MarketSentiment {
+  trade_date: string
+  profit_effect: {
+    value: number
+    up_count: number
+    down_count: number
+    total_count: number
+    level: 'extreme_cold' | 'cold' | 'neutral' | 'warm' | 'extreme_hot'
+    message: string
+  }
+  consecutive_limit_height: number
+  limit_up_failure_rate: {
+    value: number
+    limit_up_count: number
+    failure_count: number
+    total: number
+    level: 'low_risk' | 'medium_risk' | 'high_risk' | 'neutral'
+    message: string
+  }
+  sentiment_level: string
+}
+
+// 智能资金矩阵个股
+export interface SmartMoneyStock {
+  sheep_code: string
+  sheep_name: string
+  total_inflow: number
+  avg_daily_inflow: number
+  latest_trade_date?: string
+  change_pct_5d: number
+  turnover_rate: number
+  ma5_price: number
+  current_price: number
+  potential_score: number
+  is_high_potential: boolean
+  potential_reason: string
+  daily_data?: Array<{
+    trade_date: string
+    main_net_inflow: number
+  }>
+}
+
+// 智能资金矩阵数据
+export interface SmartMoneyMatrix {
+  stocks: SmartMoneyStock[]
+  sectors: SectorMoneyFlowInfo[]
+  days: number
+  trade_date: string
+}
+
+export const falconRadarApi = {
+  // 获取当日最热板块
+  getHottestSectors: async (limit: number = 10): Promise<{ sectors: HottestSector[], limit: number }> => {
+    const response = await client.get('/falcon-radar/hottest', { params: { limit } })
+    return response.data
+  },
+  
+  // 获取猎鹰推荐
+  getRecommendations: async (): Promise<FalconRecommendations> => {
+    const response = await client.get('/falcon-radar/recommendations')
+    return response.data
+  },
+}
+
+export const marketSentimentApi = {
+  // 获取市场情绪数据
+  getMarketSentiment: async (): Promise<MarketSentiment> => {
+    const response = await client.get('/market-sentiment')
+    return response.data
+  },
+}
+
+export const smartMoneyMatrixApi = {
+  // 获取智能资金矩阵
+  getSmartMoneyMatrix: async (days: number = 1, limit: number = 100): Promise<SmartMoneyMatrix> => {
+    const response = await client.get('/smart-money-matrix', { params: { days, limit } })
     return response.data
   },
 }

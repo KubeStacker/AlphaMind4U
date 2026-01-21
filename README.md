@@ -90,7 +90,7 @@
 │   │   ├── ai_model_config_repository.py
 │   │   ├── ai_cache_repository.py
 │   │   ├── strategy_recommendation_repository.py
-│   │   └── virtual_board_repository.py
+
 │   ├── etl/                    # ETL层：数据采集适配器
 │   │   ├── __init__.py
 │   │   ├── trade_date_adapter.py

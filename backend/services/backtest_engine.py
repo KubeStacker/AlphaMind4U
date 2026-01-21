@@ -219,7 +219,7 @@ class BacktestEngine:
             
             # 获取交易日列表
             trading_dates = self._get_trading_dates(start_date, end_date)
-            logger.info(f"获取到 {len(trading_dates)} 个交易日")
+            logger.debug(f"获取到 {len(trading_dates)} 个交易日")
             
             if not trading_dates:
                 logger.warning("没有找到交易日数据")

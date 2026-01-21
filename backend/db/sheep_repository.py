@@ -230,6 +230,20 @@ class SheepRepository:
                 return results_list
     
     @staticmethod
+    def get_max_trade_date() -> Optional[date]:
+        """获取数据库中所有肥羊的最大交易日期"""
+        with get_db() as db:
+            query = text("""
+                SELECT MAX(trade_date) as max_date
+                FROM sheep_daily
+            """)
+            result = db.execute(query)
+            row = result.fetchone()
+            if row and row[0]:
+                return row[0] if isinstance(row[0], date) else date.fromisoformat(str(row[0]))
+            return None
+    
+    @staticmethod
     def get_latest_trade_date(sheep_code: str) -> Optional[date]:
         """获取肥羊在数据库中的最新交易日期"""
         with get_db() as db:

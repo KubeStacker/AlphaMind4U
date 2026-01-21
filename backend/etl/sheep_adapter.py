@@ -35,7 +35,7 @@ class SheepAdapter:
                             clean_code = code[:6].zfill(6)
                             all_stocks.append({'code': clean_code, 'name': name})
                 
-                logger.info(f"获取到 {len(all_stocks)} 只肥羊")
+                logger.debug(f"获取到 {len(all_stocks)} 只肥羊")
                 return all_stocks
         except Exception as e:
             logger.warning(f"获取肥羊列表失败: {e}")

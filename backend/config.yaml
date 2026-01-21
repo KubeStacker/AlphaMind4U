@@ -1,0 +1,111 @@
+# Falcon Data Engine 配置文件
+# Falcon Data Engine Configuration File
+
+system:
+  # 日志级别: DEBUG, INFO, WARNING, ERROR, CRITICAL
+  # 生产环境建议使用 INFO，排错时改为 DEBUG
+  log_level: "INFO"
+  
+  # 并发控制
+  concurrency: 10
+  
+  # 冷启动回溯天数（用于首次数据采集）
+  cold_start_days: 365
+
+scheduler:
+  # 调度任务配置
+  tasks:
+    # 实时K线采集（交易时间每1分钟）
+    realtime_kline:
+      cron: "*/1 9-15 * * 1-5"  # 周一到周五，9:00-15:59，每分钟执行
+      enabled: true
+      description: "实时K线数据采集（1分钟）"
+    
+    # 市场热度雷达（交易时间每30分钟）
+    market_heat:
+      cron: "*/30 9-15 * * 1-5"  # 周一到周五，9:00-15:59，每30分钟执行
+      enabled: true
+      description: "市场热度雷达数据采集（30分钟）"
+    
+    # 每日盘后结算任务（16:00）
+    daily_settlement:
+      cron: "0 16 * * 1-5"  # 周一到周五，16:00执行
+      enabled: true
+      description: "每日盘后结算任务（增量采集、断点续传）"
+    
+    # 热度榜数据采集（每10分钟）
+    hot_rank:
+      cron: "*/10 * * * *"  # 每10分钟
+      enabled: true
+      description: "热度榜数据采集"
+    
+    # 概念资金流实时采集（交易时间每10分钟）
+    concept_money_flow_realtime:
+      cron: "*/10 9-15 * * 1-5"
+      enabled: true
+      description: "概念资金流实时采集（交易时间每10分钟）"
+    
+    # RPS指标计算（交易日15:30）
+    rps_calculation:
+      cron: "30 15 * * 1-5"
+      enabled: true
+      description: "RPS指标计算（250日相对强度）"
+    
+    # VCP和vol_ma_5指标计算（交易日15:35）
+    vcp_calculation:
+      cron: "35 15 * * 1-5"
+      enabled: true
+      description: "VCP和vol_ma_5指标计算"
+    
+    # Sector RPS指标计算（交易日15:45）
+    sector_rps_calculation:
+      cron: "45 15 * * 1-5"
+      enabled: true
+      description: "Sector RPS指标计算"
+    
+    # 财务数据采集（每天凌晨0点）
+    financial_data:
+      cron: "0 0 * * *"
+      enabled: true
+      description: "财务数据采集"
+    
+    # 概念板块数据采集（每天凌晨0点）
+    concept_data:
+      cron: "0 0 * * *"
+      enabled: true
+      description: "概念板块数据采集"
+    
+    # 概念元数据同步（每天00:00）
+    concept_metadata_sync:
+      cron: "0 0 * * *"
+      enabled: true
+      description: "概念元数据同步（EastMoney）"
+    
+    # 数据清理任务（每天凌晨4点）
+    cleanup_old_data:
+      cron: "0 1 * * *"
+      enabled: true
+      description: "数据清理任务"
+
+data_source:
+  # 冷启动回溯天数
+  cold_start_days: 365
+  
+  # 数据保留天数配置
+  retention:
+    sheep_data: 1095  # 3年
+    money_flow: 1095  # 3年
+    sector_money_flow: 1095 # 3年
+    sector_data: 1095  # 3年
+    hot_rank: 30  # 30天
+
+validation:
+  # 数据校验配置
+  enable_atomic_check: true  # 原子性校验（high >= low, volume >= 0）
+  enable_money_flow_check: true  # 资金流校验（主力净流入 <= 成交额）
+  enable_trading_calendar_check: true  # 交易日历检查
+
+logging:
+  # 日志输出配置
+  quiet_mode: true  # 静默模式：生产环境仅输出关键信息
+  progress_interval: 100  # 进度输出间隔（处理N条记录后输出一次）

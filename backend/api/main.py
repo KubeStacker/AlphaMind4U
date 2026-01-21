@@ -17,12 +17,14 @@ from services.data_collection_service import DataCollectionService
 from services.sheep_service import SheepService
 from services.hot_rank_service import HotRankService
 from services.concept_service import ConceptService
-from services.trending_sector_service import TrendingSectorService
 from services.concept_management_service import ConceptManagementService
 from services.ai_service import AIService
+from services.signal_radar_service import SignalRadarService
+from services.falcon_radar_service import FalconRadarService
+from services.market_sentiment_service import MarketSentimentService
+from services.smart_money_matrix_service import SmartMoneyMatrixService
 from db.ai_config_repository import AIConfigRepository
 from services.user_service import UserService
-from scheduler import start_scheduler
 
 logging.basicConfig(
     level=logging.INFO,
@@ -38,8 +40,15 @@ async def lifespan(app: FastAPI):
         from auth.init_admin import init_admin
         init_admin()
         
-        # 启动定时任务
-        start_scheduler()
+        # 启动定时任务（优先使用Falcon Data Engine调度器）
+        try:
+            from scheduler import FalconScheduler
+            falcon_scheduler = FalconScheduler()
+            falcon_scheduler.start()
+            logger.info("Falcon Data Engine调度器启动成功")
+        except Exception as e:
+            logger.warning(f"Falcon Data Engine调度器启动失败，回退到原有调度器: {e}")
+
         
         logger.info("系统初始化完成")
     except Exception as e:
@@ -340,16 +349,6 @@ async def get_hot_sheep(source: Optional[str] = None):
         logger.error(f"获取热度榜异常: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/hot-sectors")
-async def get_hot_sectors():
-    """获取热门板块（基于集聚效应算法）"""
-    try:
-        sectors = HotRankService.get_hot_sectors()
-        return {"sectors": sectors}
-    except Exception as e:
-        logger.error(f"获取热门板块失败: {e}", exc_info=True)
-        return {"sectors": []}
-
 @app.post("/api/refresh-hot-sheep")
 async def refresh_hot_sheep(
     background_tasks: BackgroundTasks = BackgroundTasks(),
@@ -402,6 +401,165 @@ async def get_sector_stocks_by_change(sector_name: str, limit: int = 10, current
         logger.error(f"获取板块涨幅前N概念股失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/sectors/{sector_name}/money-flow")
+async def get_sector_money_flow(sector_name: str, days: int = 60, current_user: dict = Depends(get_current_user)):
+    """获取板块资金流历史数据（用于K线图）"""
+    try:
+        if days <= 0 or days > 250:
+            days = 60
+        from db.sector_money_flow_repository import SectorMoneyFlowRepository
+        data = SectorMoneyFlowRepository.get_sector_money_flow(sector_name, limit=days)
+        # 按日期升序返回（从旧到新，便于前端绘制K线）
+        data.sort(key=lambda x: x.get('trade_date', ''))
+        return {"data": data, "sector_name": sector_name, "days": days}
+    except Exception as e:
+        logger.error(f"获取板块资金流历史失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ========== 信号雷达与实时看板API ==========
+@app.get("/api/signal-radar")
+async def get_signal_radar(current_user: dict = Depends(get_current_user)):
+    """获取信号雷达数据（主线确认、高潮预警、热门板块总结、最热板块推荐个股）"""
+    try:
+        import asyncio
+        # 使用异步执行避免阻塞，设置10秒超时（进一步减少超时时间）
+        data = await asyncio.wait_for(
+            asyncio.to_thread(SignalRadarService.get_signal_radar_data),
+            timeout=10.0
+        )
+        return data
+    except asyncio.TimeoutError:
+        logger.error("获取信号雷达数据超时（10秒）")
+        # 返回空数据而不是抛出异常，避免影响页面加载
+        return {
+            'trade_date': date.today().isoformat(),
+            'new_cycle_signals': [],
+            'climax_signals': [],
+            'hot_sectors_summary': [],
+            'hottest_sector': None,
+            'recommended_stocks': [],
+            'error': '请求超时，请稍后重试'
+        }
+    except Exception as e:
+        logger.error(f"获取信号雷达数据失败: {e}", exc_info=True)
+        # 返回空数据而不是抛出异常，避免影响页面加载
+        return {
+            'trade_date': date.today().isoformat(),
+            'new_cycle_signals': [],
+            'climax_signals': [],
+            'hot_sectors_summary': [],
+            'hottest_sector': None,
+            'recommended_stocks': [],
+            'error': str(e)
+        }
+
+@app.get("/api/sectors/{sector_name}/rps-chart")
+async def get_sector_rps_chart(sector_name: str, days: int = 60, current_user: dict = Depends(get_current_user)):
+    """获取板块RPS走势图数据"""
+    try:
+        if days > 90:
+            days = 90  # 限制最大90天
+        import asyncio
+        # 使用异步执行避免阻塞，设置10秒超时
+        data = await asyncio.wait_for(
+            asyncio.to_thread(SignalRadarService.get_sector_rps_chart, sector_name, days),
+            timeout=10.0
+        )
+        return data
+    except asyncio.TimeoutError:
+        logger.error(f"获取板块RPS走势图超时（板块: {sector_name}）")
+        raise HTTPException(status_code=504, detail="请求超时，请稍后重试")
+    except Exception as e:
+        logger.error(f"获取板块RPS走势图失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ========== 猎鹰雷达API ==========
+@app.get("/api/falcon-radar/hottest")
+async def get_falcon_radar_hottest(limit: int = 10, current_user: dict = Depends(get_current_user)):
+    """获取当日最热板块（基于客观数据）"""
+    try:
+        if limit > 50:
+            limit = 50
+        sectors = FalconRadarService.get_hottest_sectors(limit=limit)
+        return {"sectors": sectors, "limit": limit}
+    except Exception as e:
+        logger.error(f"获取当日最热板块失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/falcon-radar/recommendations")
+async def get_falcon_radar_recommendations(current_user: dict = Depends(get_current_user)):
+    """获取猎鹰推荐（基于三种策略：主线首阴、资金背离、平台突破）"""
+    try:
+        import asyncio
+        # 使用异步执行避免阻塞，设置30秒超时（策略计算可能需要较长时间）
+        data = await asyncio.wait_for(
+            asyncio.to_thread(FalconRadarService.get_falcon_recommendations),
+            timeout=30.0
+        )
+        return data
+    except asyncio.TimeoutError:
+        logger.error("获取猎鹰推荐超时（30秒）")
+        return {
+            'leader_pullback': [],
+            'money_divergence': [],
+            'box_breakout': [],
+            'trade_date': date.today().isoformat(),
+            'error': '请求超时，请稍后重试'
+        }
+    except Exception as e:
+        logger.error(f"获取猎鹰推荐失败: {e}", exc_info=True)
+        return {
+            'leader_pullback': [],
+            'money_divergence': [],
+            'box_breakout': [],
+            'trade_date': date.today().isoformat(),
+            'error': str(e)
+        }
+
+# ========== 市场情绪仪表盘API ==========
+@app.get("/api/market-sentiment")
+async def get_market_sentiment(current_user: dict = Depends(get_current_user)):
+    """获取市场情绪数据（赚钱效应、连板高度、炸板率）"""
+    try:
+        import asyncio
+        # 使用异步执行避免阻塞，设置15秒超时
+        data = await asyncio.wait_for(
+            asyncio.to_thread(MarketSentimentService.get_market_sentiment),
+            timeout=15.0
+        )
+        return data
+    except asyncio.TimeoutError:
+        logger.error("获取市场情绪数据超时（15秒）")
+        raise HTTPException(status_code=504, detail="请求超时，请稍后重试")
+    except Exception as e:
+        logger.error(f"获取市场情绪数据失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ========== 智能资金矩阵API ==========
+@app.get("/api/smart-money-matrix")
+async def get_smart_money_matrix(days: int = 1, limit: int = 100, current_user: dict = Depends(get_current_user)):
+    """获取智能资金矩阵数据（捕捉长线资金与短线资金动向）"""
+    try:
+        if days not in [1, 3, 5]:
+            raise HTTPException(status_code=400, detail="days参数必须是1、3或5")
+        if limit > 200:
+            limit = 200
+        import asyncio
+        # 使用异步执行避免阻塞，设置20秒超时
+        data = await asyncio.wait_for(
+            asyncio.to_thread(SmartMoneyMatrixService.get_smart_money_matrix, days, limit),
+            timeout=20.0
+        )
+        return data
+    except HTTPException:
+        raise
+    except asyncio.TimeoutError:
+        logger.error("获取智能资金矩阵超时（20秒）")
+        raise HTTPException(status_code=504, detail="请求超时，请稍后重试")
+    except Exception as e:
+        logger.error(f"获取智能资金矩阵失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/api/capital-inflow/recommend")
 async def get_capital_inflow_recommend(days: int = 5, current_user: dict = Depends(get_current_user)):
     """获取资金持续流入推荐（最近N天持续流入的标的）"""
@@ -414,6 +572,22 @@ async def get_capital_inflow_recommend(days: int = 5, current_user: dict = Depen
         raise
     except Exception as e:
         logger.error(f"获取资金持续流入推荐失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/capital-inflow/top")
+async def get_capital_inflow_top(days: int = 1, limit: int = 100, current_user: dict = Depends(get_current_user)):
+    """获取最近N个交易日净流入Top标的（按净流入合计降序）"""
+    try:
+        if days not in [1, 3, 5]:
+            raise HTTPException(status_code=400, detail="days参数必须是1、3或5")
+        if limit <= 0 or limit > 200:
+            limit = 100
+        stocks = SheepService.get_top_inflow_stocks(days=days, limit=limit)
+        return {"stocks": stocks, "days": days, "limit": limit}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取净流入Top标的失败: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/sector-money-flow/recommend")
@@ -456,36 +630,7 @@ async def get_sector_money_flow_recommend(days: int = 1, limit: int = 30, curren
         logger.error(f"异常详情:\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"获取板块资金净流入推荐失败: {str(e)}")
 
-@app.get("/api/trending-sectors")
-async def get_real_time_trending_sectors(limit: int = 10, current_user: dict = Depends(get_current_user)):
-    """
-    获取实时热门板块推荐（基于概念资金流、个股表现和综合指标的实时分析）
-    
-    Args:
-        limit: 返回板块数量限制，默认10
-    """
-    try:
-        sectors = TrendingSectorService.get_real_time_trending_sectors(limit=limit)
-        return {
-            "sectors": sectors,
-            "timestamp": datetime.now().isoformat(),
-            "limit": limit
-        }
-    except Exception as e:
-        logger.error(f"获取实时热门板块推荐失败: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"获取实时热门板块推荐失败: {str(e)}")
-
 # ========== 数据采集管理API ==========
-@app.post("/api/admin/trigger-missed-tasks")
-async def trigger_missed_tasks(current_user: dict = Depends(is_admin_user)):
-    """手动触发错过的任务（仅admin）"""
-    try:
-        from scheduler import check_and_trigger_missed_tasks
-        check_and_trigger_missed_tasks()
-        return {"message": "已检查并触发错过的任务"}
-    except Exception as e:
-        logger.error(f"触发错过任务失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/admin/data-collection/collect-specific")
 async def collect_specific_data(
@@ -823,332 +968,6 @@ async def collect_all_data(
         
     except Exception as e:
         logger.error(f"启动全量数据采集任务失败: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/api/admin/check-data-gaps")
-async def check_data_gaps(
-    days: int = 30,
-    data_type: str = 'all',
-    current_user: dict = Depends(get_current_user)
-):
-    """
-    检查数据缺失（仅admin）
-    
-    Args:
-        days: 检查最近N天的数据
-        data_type: 数据类型 ('sheep_daily', 'money_flow', 'hot_rank', 'index', 'all')
-    """
-    try:
-        from scripts.check_data_gaps import DataGapChecker
-        
-        checker = DataGapChecker()
-        results = {}
-        
-        if data_type in ('sheep_daily', 'all'):
-            results['sheep_daily'] = checker.check_sheep_daily_gaps(days=days)
-        
-        if data_type in ('money_flow', 'all'):
-            results['money_flow'] = checker.check_money_flow_gaps(days=days)
-        
-        if data_type in ('hot_rank', 'all'):
-            results['hot_rank'] = checker.check_hot_rank_gaps(days=min(days, 7))
-        
-        if data_type in ('index', 'all'):
-            results['index'] = checker.check_index_data_gaps(days=days)
-        
-        return {
-            "message": "数据缺失检查完成",
-            "days": days,
-            "data_type": data_type,
-            "results": results
-        }
-    except Exception as e:
-        logger.error(f"检查数据缺失失败: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/api/admin/refresh-missing-data")
-async def refresh_missing_data(
-    data_type: str = 'all',
-    days: int = 30,
-    current_user: dict = Depends(get_current_user)
-):
-    """
-    刷新缺失的数据（仅admin）
-    
-    Args:
-        data_type: 数据类型 ('sheep_daily', 'money_flow', 'hot_rank', 'index', 'all')
-        days: 刷新最近N天的数据
-    """
-    try:
-        from scripts.check_data_gaps import DataGapChecker
-        
-        checker = DataGapChecker()
-        checker.refresh_missing_data(data_type=data_type, days=days)
-        
-        return {
-            "message": "数据刷新任务已启动",
-            "data_type": data_type,
-            "days": days
-        }
-    except Exception as e:
-        logger.error(f"刷新缺失数据失败: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/api/admin/data-report")
-async def get_data_report(
-    days: int = 30,
-    current_user: dict = Depends(get_current_user)
-):
-    """
-    生成数据完整性报告（仅admin）
-    
-    Args:
-        days: 检查最近N天的数据
-    """
-    try:
-        from scripts.check_data_gaps import DataGapChecker
-        
-        checker = DataGapChecker()
-        report = checker.generate_report(days=days)
-        
-        return {
-            "message": "数据完整性报告",
-            "days": days,
-            "report": report
-        }
-    except Exception as e:
-        logger.error(f"生成数据报告失败: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
-# ========== 概念管理API ==========
-class ConceptCreate(BaseModel):
-    concept_name: str
-    concept_code: Optional[str] = None
-    source: str = 'ths'
-    description: Optional[str] = None
-
-class ConceptUpdate(BaseModel):
-    concept_name: Optional[str] = None
-    concept_code: Optional[str] = None
-    description: Optional[str] = None
-    is_active: Optional[bool] = None
-
-class VirtualBoardMappingCreate(BaseModel):
-    virtual_board_name: str
-    source_concept_name: str
-    weight: float = 1.0
-    description: Optional[str] = None
-
-@app.get("/api/concepts")
-async def get_concepts(limit: int = 100, offset: int = 0, current_user: dict = Depends(get_current_user)):
-    """获取概念列表"""
-    try:
-        result = ConceptManagementService.get_concepts(limit, offset)
-        return result
-    except Exception as e:
-        logger.error(f"获取概念列表失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/api/concepts")
-async def create_concept(concept: ConceptCreate, current_user: dict = Depends(get_current_user)):
-    """创建概念"""
-    try:
-        concept_id = ConceptManagementService.create_concept(
-            concept.concept_name,
-            concept.concept_code,
-            concept.source,
-            concept.description
-        )
-        return {"message": "概念创建成功", "concept_id": concept_id}
-    except Exception as e:
-        logger.error(f"创建概念失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.put("/api/concepts/{concept_id}")
-async def update_concept(concept_id: int, concept: ConceptUpdate, current_user: dict = Depends(get_current_user)):
-    """更新概念"""
-    try:
-        success = ConceptManagementService.update_concept(
-            concept_id,
-            concept.concept_name,
-            concept.concept_code,
-            concept.description,
-            concept.is_active
-        )
-        if success:
-            return {"message": "概念更新成功"}
-        else:
-            raise HTTPException(status_code=400, detail="没有需要更新的字段")
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"更新概念失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.delete("/api/concepts/{concept_id}")
-async def delete_concept(concept_id: int, current_user: dict = Depends(get_current_user)):
-    """删除概念（软删除）"""
-    try:
-        success = ConceptManagementService.delete_concept(concept_id)
-        if success:
-            return {"message": "概念删除成功"}
-        else:
-            raise HTTPException(status_code=404, detail="概念不存在")
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"删除概念失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/api/virtual-boards/import-sector-mapping")
-async def import_sector_mapping(current_user: dict = Depends(get_current_user)):
-    """从sector_mapping表导入到virtual_board_aggregation"""
-    try:
-        result = ConceptManagementService.import_sector_mapping()
-        return result
-    except Exception as e:
-        logger.error(f"导入sector_mapping失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/api/virtual-boards")
-async def get_virtual_boards(current_user: dict = Depends(get_current_user)):
-    """获取虚拟板块列表"""
-    try:
-        boards = ConceptManagementService.get_virtual_boards()
-        return {"boards": boards}
-    except Exception as e:
-        logger.error(f"获取虚拟板块列表失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/api/virtual-boards/mappings")
-async def create_virtual_board_mapping(mapping: VirtualBoardMappingCreate, current_user: dict = Depends(get_current_user)):
-    """创建虚拟板块映射"""
-    try:
-        success = ConceptManagementService.create_virtual_board_mapping(
-            mapping.virtual_board_name,
-            mapping.source_concept_name,
-            mapping.weight,
-            mapping.description
-        )
-        return {"message": "虚拟板块映射创建成功"}
-    except Exception as e:
-        logger.error(f"创建虚拟板块映射失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.delete("/api/virtual-boards/mappings")
-async def delete_virtual_board_mapping(
-    virtual_board_name: str,
-    source_concept_name: str,
-    current_user: dict = Depends(get_current_user)
-):
-    """删除虚拟板块映射"""
-    try:
-        success = ConceptManagementService.delete_virtual_board_mapping(
-            virtual_board_name,
-            source_concept_name
-        )
-        if success:
-            return {"message": "虚拟板块映射删除成功"}
-        else:
-            raise HTTPException(status_code=404, detail="映射不存在")
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"删除虚拟板块映射失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-# ========== 概念映射管理API（兼容前端调用）==========
-class SectorMappingCreate(BaseModel):
-    source_sector: str
-    target_sector: str
-    description: Optional[str] = None
-
-class SectorMappingUpdate(BaseModel):
-    target_sector: Optional[str] = None
-    description: Optional[str] = None
-    is_active: Optional[bool] = None
-
-@app.get("/api/sector-mappings")
-async def get_sector_mappings(current_user: dict = Depends(get_current_user)):
-    """获取板块映射列表（展示virtual_board_aggregation表数据）"""
-    try:
-        mappings = ConceptManagementService.get_all_virtual_board_mappings()
-        return {"mappings": mappings}
-    except Exception as e:
-        logger.error(f"获取板块映射列表失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/api/sector-mappings")
-async def create_sector_mapping(
-    mapping: SectorMappingCreate,
-    current_user: dict = Depends(get_current_user)
-):
-    """创建板块映射"""
-    try:
-        success = ConceptManagementService.create_virtual_board_mapping(
-            mapping.target_sector,  # virtual_board_name
-            mapping.source_sector,  # source_concept_name
-            1.0,  # weight
-            mapping.description
-        )
-        if success:
-            return {"message": "板块映射创建成功"}
-        else:
-            raise HTTPException(status_code=500, detail="创建失败")
-    except Exception as e:
-        logger.error(f"创建板块映射失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.put("/api/sector-mappings/{mapping_id}")
-async def update_sector_mapping(
-    mapping_id: int,
-    mapping: SectorMappingUpdate,
-    current_user: dict = Depends(get_current_user)
-):
-    """更新板块映射"""
-    try:
-        success = ConceptManagementService.update_virtual_board_mapping_by_id(
-            mapping_id,
-            mapping.target_sector,
-            mapping.description,
-            mapping.is_active
-        )
-        if success:
-            return {"message": "板块映射更新成功"}
-        else:
-            raise HTTPException(status_code=400, detail="没有需要更新的字段或映射不存在")
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"更新板块映射失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.delete("/api/sector-mappings/{mapping_id}")
-async def delete_sector_mapping(
-    mapping_id: int,
-    current_user: dict = Depends(get_current_user)
-):
-    """删除板块映射"""
-    try:
-        success = ConceptManagementService.delete_virtual_board_mapping_by_id(mapping_id)
-        if success:
-            return {"message": "板块映射删除成功"}
-        else:
-            raise HTTPException(status_code=404, detail="映射不存在")
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"删除板块映射失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/api/sector-mappings/refresh-cache")
-async def refresh_sector_mapping_cache(current_user: dict = Depends(get_current_user)):
-    """刷新板块映射缓存"""
-    try:
-        result = ConceptManagementService.refresh_virtual_board_cache()
-        return result
-    except Exception as e:
-        logger.error(f"刷新缓存失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # ========== 用户管理API（仅admin）==========
@@ -2143,50 +1962,5 @@ async def get_sheep_prediction(
         logger.error(f"获取预测失败: {sheep_code}, 错误: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
-# ========== 下个交易日预测API ==========
-from services.next_day_prediction_service import NextDayPredictionService
 
-@app.get("/api/next-day-prediction")
-async def get_next_day_prediction(current_user: dict = Depends(get_current_user)): 
-    """
-    获取下个交易日预测（板块热点+个股推荐）
-    
-    返回：
-    - success: 是否成功
-    - target_date: 预测目标日期
-    - description: 预测描述文本
-    - sector_predictions: 板块预测列表
-    - stock_recommendations: 个股推荐列表
-    """
-    try:
-        result = NextDayPredictionService.get_latest_prediction()
-        return result
-    except Exception as e:
-        logger.error(f"获取下个交易日预测失败: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/next-day-prediction/refresh")
-async def refresh_next_day_prediction(
-    background_tasks: BackgroundTasks,
-    current_user: dict = Depends(is_admin_user)
-):
-    """
-    手动刷新下个交易日预测（仅管理员，后台异步执行）
-    """
-    try:
-        def run_prediction():
-            try:
-                result = NextDayPredictionService.generate_prediction(force=True)
-                logger.info(f"手动刷新预测完成: success={result.get('success')}")
-            except Exception as e:
-                logger.error(f"手动刷新预测失败: {e}", exc_info=True)
-        
-        background_tasks.add_task(run_prediction)
-        return {"message": "预测刷新任务已启动，正在后台执行", "status": "running"}
-    except Exception as e:
-        logger.error(f"启动预测刷新任务失败: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)

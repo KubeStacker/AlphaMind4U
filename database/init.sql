@@ -89,24 +89,6 @@ CREATE TABLE IF NOT EXISTS `sheep_concept_mapping` (
     INDEX `idx_weight` (`weight`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='肥羊与概念关联关系表';
 
--- ============================================
--- 5. 虚拟板块聚合表
--- ============================================
-CREATE TABLE IF NOT EXISTS `virtual_board_aggregation` (
-    `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
-    `virtual_board_name` VARCHAR(100) NOT NULL COMMENT '虚拟板块名称',
-    `source_concept_name` VARCHAR(100) NOT NULL COMMENT '源概念名称',
-    `weight` DECIMAL(5,2) DEFAULT 1.0 COMMENT '聚合权重',
-    `is_active` TINYINT(1) DEFAULT 1 COMMENT '是否有效',
-    `description` TEXT DEFAULT NULL COMMENT '描述',
-    `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-    `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-    PRIMARY KEY (`id`),
-    UNIQUE KEY `uk_virtual_source` (`virtual_board_name`, `source_concept_name`),
-    INDEX `idx_virtual_board` (`virtual_board_name`),
-    INDEX `idx_source_concept` (`source_concept_name`),
-    INDEX `idx_is_active` (`is_active`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='虚拟板块聚合表';
 
 -- ============================================
 -- 6. 市场热度排名表
@@ -276,7 +258,7 @@ CREATE TABLE IF NOT EXISTS `strategy_recommendations` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='策略推荐记录表（按用户隔离，永久保留）';
 
 -- ============================================
--- 15. 肥羊财务数据表（保留5年）
+-- 14. 肥羊财务数据表（保留5年）
 -- ============================================
 CREATE TABLE IF NOT EXISTS `sheep_financials` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -301,21 +283,35 @@ CREATE TABLE IF NOT EXISTS `sector_money_flow` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     `sector_name` VARCHAR(100) NOT NULL COMMENT '板块名称',
     `trade_date` DATE NOT NULL COMMENT '交易日期',
+    -- Original money flow fields
     `main_net_inflow` DECIMAL(20,2) DEFAULT 0 COMMENT '主力净流入（万元）',
     `super_large_inflow` DECIMAL(20,2) DEFAULT 0 COMMENT '超大单净流入（万元）',
     `large_inflow` DECIMAL(20,2) DEFAULT 0 COMMENT '大单净流入（万元）',
     `medium_inflow` DECIMAL(20,2) DEFAULT 0 COMMENT '中单净流入（万元）',
     `small_inflow` DECIMAL(20,2) DEFAULT 0 COMMENT '小单净流入（万元）',
+    -- New core factors
+    `change_pct` DECIMAL(10,4) DEFAULT NULL COMMENT '板块指数加权涨跌幅',
+    `avg_turnover` DECIMAL(10,4) DEFAULT NULL COMMENT '平均换手率',
+    `limit_up_count` INT DEFAULT 0 COMMENT '涨停家数',
+    `top_weight_stocks` JSON DEFAULT NULL COMMENT '前5大权重股代码',
+    -- New derived trend indicators
+    `sector_rps_20` DECIMAL(5,2) DEFAULT NULL COMMENT '20日相对强度',
+    `sector_rps_50` DECIMAL(5,2) DEFAULT NULL COMMENT '50日相对强度',
+    `ma_status` TINYINT DEFAULT 0 COMMENT '均线状态(1=多头,0=震荡,-1=空头)',
     `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
     PRIMARY KEY (`id`),
     UNIQUE KEY `uk_sector_date` (`sector_name`, `trade_date`),
     INDEX `idx_trade_date` (`trade_date`),
     INDEX `idx_sector_date` (`sector_name`, `trade_date`),
-    INDEX `idx_main_inflow` (`main_net_inflow`)
+    INDEX `idx_main_inflow` (`main_net_inflow`),
+    INDEX `idx_sector_rps_20` (`sector_rps_20`),
+    INDEX `idx_sector_rps_50` (`sector_rps_50`),
+    INDEX `idx_limit_up_count` (`limit_up_count`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='板块资金流向表（保留3个月）';
 
--- 17. 全市场指数数据表（用于RSRS牛熊市判断）
+-- ============================================
+-- 15. 全市场指数数据表（用于RSRS牛熊市判断）
 -- ============================================
 CREATE TABLE IF NOT EXISTS `market_index_daily` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -338,15 +334,21 @@ CREATE TABLE IF NOT EXISTS `market_index_daily` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='全市场指数数据表（用于RSRS计算，保留3年）';
 
 -- ============================================
--- 18. 下个交易日预测缓存表
+-- 16. 板块信号快照表
 -- ============================================
-CREATE TABLE IF NOT EXISTS `next_day_prediction_cache` (
+CREATE TABLE IF NOT EXISTS `sector_signal_snapshot` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-    `target_date` DATE NOT NULL COMMENT '预测目标日期（下个交易日）',
-    `prediction_data` JSON NOT NULL COMMENT '预测结果JSON数据',
+    `trade_date` DATE NOT NULL COMMENT '交易日期',
+    `sector_name` VARCHAR(100) NOT NULL COMMENT '板块名称',
+    `signal_type` VARCHAR(20) NOT NULL COMMENT '信号类型(OPPORTUNITY/RISK)',
+    `strategy_code` VARCHAR(50) NOT NULL COMMENT '策略代码',
+    `technical_context` JSON DEFAULT NULL COMMENT '技术背景快照',
+    `confidence_score` DECIMAL(5,2) DEFAULT NULL COMMENT '信号置信度',
     `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-    `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
     PRIMARY KEY (`id`),
-    UNIQUE KEY `uk_target_date` (`target_date`),
-    INDEX `idx_created_at` (`created_at`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='下个交易日预测缓存表（每半小时更新，保留7天）';
+    INDEX `idx_trade_date` (`trade_date`),
+    INDEX `idx_sector_name` (`sector_name`),
+    INDEX `idx_signal_type` (`signal_type`),
+    INDEX `idx_strategy_code` (`strategy_code`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='板块信号快照表（记录系统发出的每一次机会或风险提示）';
+

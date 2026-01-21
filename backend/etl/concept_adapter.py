@@ -40,7 +40,7 @@ class ConceptAdapter:
                         try:
                             concept_list = ak.stock_board_concept_name_ths()
                             if concept_list is not None and not concept_list.empty:
-                                logger.info(f"使用同花顺接口获取到 {len(concept_list)} 个概念")
+                                logger.debug(f"使用同花顺接口获取到 {len(concept_list)} 个概念")
                                 return concept_list
                         except Exception as e:
                             logger.warning(f"同花顺接口获取失败: {e}")
@@ -51,7 +51,7 @@ class ConceptAdapter:
                         try:
                             concept_list = ak.stock_board_concept_name_em()
                             if concept_list is not None and not concept_list.empty:
-                                logger.info(f"使用东财接口获取到 {len(concept_list)} 个概念")
+                                logger.debug(f"使用东财接口获取到 {len(concept_list)} 个概念")
                                 return concept_list
                         except Exception as e:
                             logger.warning(f"东财接口获取失败: {e}")

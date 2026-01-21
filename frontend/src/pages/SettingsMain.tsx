@@ -1,9 +1,8 @@
 import React, { useState, useEffect } from 'react'
 import { Menu, Layout } from 'antd'
-import { SettingOutlined, UserOutlined, AppstoreOutlined, RobotOutlined, DatabaseOutlined } from '@ant-design/icons'
+import { SettingOutlined, UserOutlined, RobotOutlined, DatabaseOutlined } from '@ant-design/icons'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
-import SectorMappingManagement from './Settings'
 import AIManagement from './AIManagement'
 import UserManagement from './UserManagement'
 import DataManagement from './DataManagement'
@@ -18,11 +17,12 @@ const SettingsMain: React.FC = () => {
   const isAdmin = user?.is_admin || user?.username === 'admin'
 
   const menuItems = [
-    {
-      key: '/settings/sector-mapping',
-      icon: <AppstoreOutlined />,
-      label: '概念管理',
-    },
+    // 已移除：概念管理（已使用Jaccard聚类算法自动处理）
+    // {
+    //   key: '/settings/sector-mapping',
+    //   icon: <AppstoreOutlined />,
+    //   label: '概念管理',
+    // },
     {
       key: '/settings/ai',
       icon: <RobotOutlined />,
@@ -49,9 +49,10 @@ const SettingsMain: React.FC = () => {
   // 根据当前路径确定选中的菜单项
   const getSelectedKey = () => {
     const path = location.pathname
-    if (path.includes('/sector-mapping') || path === '/settings' || path === '/settings/') {
-      return '/settings/sector-mapping'
-    }
+    // 已移除：概念管理
+    // if (path.includes('/sector-mapping') || path === '/settings' || path === '/settings/') {
+    //   return '/settings/sector-mapping'
+    // }
     if (path.includes('/ai')) {
       return '/settings/ai'
     }
@@ -61,15 +62,16 @@ const SettingsMain: React.FC = () => {
     if (path.includes('/users')) {
       return '/settings/users'
     }
-    return '/settings/sector-mapping'
+    // 默认跳转到AI管理
+    return '/settings/ai'
   }
   
   const selectedKey = getSelectedKey()
 
-  // 默认跳转到概念管理
+  // 默认跳转到AI管理（已移除概念管理）
   useEffect(() => {
     if (location.pathname === '/settings' || location.pathname === '/settings/') {
-      navigate('/settings/sector-mapping', { replace: true })
+      navigate('/settings/ai', { replace: true })
     }
   }, [location.pathname, navigate])
 
@@ -85,7 +87,12 @@ const SettingsMain: React.FC = () => {
     if (path.includes('/users')) {
       return <UserManagement />
     }
-    return <SectorMappingManagement />
+    // 已移除：概念管理（已使用Jaccard聚类算法自动处理）
+    // if (path.includes('/sector-mapping')) {
+    //   return <SectorMappingManagement />
+    // }
+    // 默认显示AI管理
+    return <AIManagement />
   }
 
   return (

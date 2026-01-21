@@ -1,14 +1,13 @@
 import React, { useState, useEffect } from 'react'
-import { Card, Button, Table, Tag, Collapse, message, Popover, Spin, Modal, Space, Radio, Pagination, Input } from 'antd'
+import { Card, Button, Table, Tag, Collapse, message, Spin, Modal, Space, Radio, Input } from 'antd'
 const { TextArea } = Input
-import { FireOutlined, RobotOutlined, BulbOutlined, DollarOutlined } from '@ant-design/icons'
+import { FireOutlined, RobotOutlined, BulbOutlined, DollarOutlined, DownOutlined, RightOutlined } from '@ant-design/icons'
 import ReactECharts from 'echarts-for-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { hotApi, HotSheep, SectorInfo, SectorSheep, SectorStockByChange } from '../api/hot'
-import { capitalInflowApi, CapitalInflowStock, sectorMoneyFlowApi, SectorMoneyFlowInfo } from '../api/hot'
-import { nextDayPredictionApi, NextDayPrediction, StockRecommendation } from '../api/hot'
-import { trendingSectorApi, TrendingSector } from '../api/hot'
+import { hotApi, HotSheep, SectorStockByChange } from '../api/hot'
+import { capitalInflowApi, CapitalInflowStock, sectorMoneyFlowApi, SectorMoneyFlowInfo, SectorMoneyFlowDailyData } from '../api/hot'
+import { falconRadarApi, marketSentimentApi, smartMoneyMatrixApi, HottestSector, FalconRecommendations, MarketSentiment, SmartMoneyMatrix } from '../api/hot'
 import { sheepApi, SheepDailyData, CapitalFlowData } from '../api/sheep'
 import { aiApi } from '../api/ai'
 
@@ -52,6 +51,32 @@ const getDisplayName = (name: string | undefined, code: string): string => {
   return nameTrimmed
 }
 
+// 判断是否为交易时段（需要在组件外部定义，以便在组件初始化时使用）
+const isTradingHours = (): boolean => {
+  const now = new Date()
+  const hour = now.getHours()
+  const minute = now.getMinutes()
+  const timeMinutes = hour * 60 + minute
+  
+  // 上午交易时段：9:30-11:30
+  const morningStart = 9 * 60 + 30  // 9:30
+  const morningEnd = 11 * 60 + 30   // 11:30
+  
+  // 下午交易时段：13:00-15:00
+  const afternoonStart = 13 * 60   // 13:00
+  const afternoonEnd = 15 * 60      // 15:00
+  
+  // 判断是否在交易时段内
+  const isMorning = timeMinutes >= morningStart && timeMinutes <= morningEnd
+  const isAfternoon = timeMinutes >= afternoonStart && timeMinutes <= afternoonEnd
+  
+  // 判断是否为工作日（周一到周五）
+  const dayOfWeek = now.getDay()
+  const isWeekday = dayOfWeek >= 1 && dayOfWeek <= 5
+  
+  return isWeekday && (isMorning || isAfternoon)
+}
+
 const Tab2: React.FC = () => {
   const [modelSelectModalVisible, setModelSelectModalVisible] = useState(false)
   const [promptEditModalVisible, setPromptEditModalVisible] = useState(false)
@@ -61,18 +86,13 @@ const Tab2: React.FC = () => {
   const [renderedPromptText, setRenderedPromptText] = useState<string>('')
   const [promptType, setPromptType] = useState<'recommend' | 'analyze'>('analyze')
   const [hotSheeps, setHotSheeps] = useState<HotSheep[]>([])
-  const [hotSectors, setHotSectors] = useState<SectorInfo[]>([])
   const [loading, setLoading] = useState(false)
-  const [sectorChartData, setSectorChartData] = useState<Record<string, any>>({})
-  const [sectorSheeps, setSectorSheeps] = useState<Record<string, SectorSheep[]>>({})
   const [isMobile, setIsMobile] = useState(false)
   const [klineModalVisible, setKlineModalVisible] = useState(false)
   const [selectedSheepForKline, setSelectedSheepForKline] = useState<{ code: string; name: string } | null>(null)
   const [klineData, setKlineData] = useState<SheepDailyData[]>([])
   const [klineCapitalFlowData, setKlineCapitalFlowData] = useState<CapitalFlowData[]>([])
   const [klineLoading, setKlineLoading] = useState(false)
-  const [sectorSheepsModalVisible, setSectorSheepsModalVisible] = useState(false)
-  const [selectedSectorForSheeps, setSelectedSectorForSheeps] = useState<{ name: string; sheep: SectorSheep[] } | null>(null)
   const [aiRecommendModalVisible, setAiRecommendModalVisible] = useState(false)
   const [aiRecommendLoading, setAiRecommendLoading] = useState(false)
   const [aiRecommendResult, setAiRecommendResult] = useState<string>('')
@@ -90,85 +110,58 @@ const Tab2: React.FC = () => {
   const [capitalInflowLoaded, setCapitalInflowLoaded] = useState<boolean>(false)  // 资金流入是否已加载数据
   const [sectorInflowLoaded, setSectorInflowLoaded] = useState<boolean>(false)  // 板块流入是否已加载数据
   const [sectorInflowMetadata, setSectorInflowMetadata] = useState<{ total_days_in_db: number, actual_days_used: number, requested_days: number, has_sufficient_data: boolean, warning?: string } | null>(null)
-  const [trendingSectors, setTrendingSectors] = useState<TrendingSector[]>([])
-  const [trendingSectorsLoading, setTrendingSectorsLoading] = useState<boolean>(false)
-  const [hotSectorsPage, setHotSectorsPage] = useState<number>(1)  // 热门板块分页
-  const [hotSectorsLoaded, setHotSectorsLoaded] = useState<boolean>(false)  // 热门板块是否已加载数据
   const [sectorStocksModalVisible, setSectorStocksModalVisible] = useState<boolean>(false)
   const [selectedSectorForStocks, setSelectedSectorForStocks] = useState<{ name: string; stocks: SectorStockByChange[] } | null>(null)
   const [sectorStocksLoading, setSectorStocksLoading] = useState<boolean>(false)
-  
-  // 下个交易日预测相关状态
-  const [nextDayPrediction, setNextDayPrediction] = useState<NextDayPrediction | null>(null)
-  const [predictionLoading, setPredictionLoading] = useState<boolean>(false)
-  const [predictionLoaded, setPredictionLoaded] = useState<boolean>(false)
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
+  
+  
 
-  // 判断是否为交易时段
-  const isTradingHours = (): boolean => {
-    const now = new Date()
-    const hour = now.getHours()
-    const minute = now.getMinutes()
-    const timeMinutes = hour * 60 + minute
-    
-    // 上午交易时段：9:30-11:30
-    const morningStart = 9 * 60 + 30  // 9:30
-    const morningEnd = 11 * 60 + 30   // 11:30
-    
-    // 下午交易时段：13:00-15:00
-    const afternoonStart = 13 * 60   // 13:00
-    const afternoonEnd = 15 * 60      // 15:00
-    
-    // 判断是否在交易时段内
-    const isMorning = timeMinutes >= morningStart && timeMinutes <= morningEnd
-    const isAfternoon = timeMinutes >= afternoonStart && timeMinutes <= afternoonEnd
-    
-    // 判断是否为工作日（周一到周五）
-    const dayOfWeek = now.getDay()
-    const isWeekday = dayOfWeek >= 1 && dayOfWeek <= 5
-    
-    return isWeekday && (isMorning || isAfternoon)
-  }
+  // 1/3/5天榜单相关状态
+  const [rankingDays, setRankingDays] = useState<number>(1)
+  const [topInflowStocks, setTopInflowStocks] = useState<CapitalInflowStock[]>([])
+  const [topInflowStocksLoading, setTopInflowStocksLoading] = useState<boolean>(false)
+  const [topInflowStocksPage, setTopInflowStocksPage] = useState<number>(1)
+  const [topInflowSectors, setTopInflowSectors] = useState<SectorMoneyFlowInfo[]>([])
+  const [topInflowSectorsLoading, setTopInflowSectorsLoading] = useState<boolean>(false)
+  const [topInflowSectorsPage, setTopInflowSectorsPage] = useState<number>(1)
+  
+  // 板块K线相关状态
+  const [selectedSectorForKline, setSelectedSectorForKline] = useState<{ name: string } | null>(null)
+  const [sectorKlineData, setSectorKlineData] = useState<SectorMoneyFlowDailyData[]>([])
+  const [sectorKlineLoading, setSectorKlineLoading] = useState<boolean>(false)
+  
+  // 猎鹰雷达新功能相关状态
+  const [hottestSectors, setHottestSectors] = useState<HottestSector[]>([])
+  const [hottestSectorsLoading, setHottestSectorsLoading] = useState<boolean>(false)
+  const [falconRecommendations, setFalconRecommendations] = useState<FalconRecommendations | null>(null)
+  const [falconRecommendationsLoading, setFalconRecommendationsLoading] = useState<boolean>(false)
+  const [marketSentiment, setMarketSentiment] = useState<MarketSentiment | null>(null)
+  const [marketSentimentLoading, setMarketSentimentLoading] = useState<boolean>(false)
+  const [smartMoneyMatrix, setSmartMoneyMatrix] = useState<SmartMoneyMatrix | null>(null)
+  const [smartMoneyMatrixLoading, setSmartMoneyMatrixLoading] = useState<boolean>(false)
+  const [smartMoneyMatrixDays, setSmartMoneyMatrixDays] = useState<number>(1)
+  const [eagleRadarExpanded, setEagleRadarExpanded] = useState<boolean>(false)
+  
+  // 雪球热度榜 - 板块聚合状态
+  const [xueqiuExpandedSectors, setXueqiuExpandedSectors] = useState<Set<string>>(new Set())
 
   const loadData = async () => {
     setLoading(true)
     try {
-      const [sheep, sectors] = await Promise.all([
-        hotApi.getHotSheeps(),
-        hotApi.getHotSectors(),
-      ])
+      const sheep = await hotApi.getHotSheeps()
       setHotSheeps(sheep || [])
-      setHotSectors(sectors || [])
-      
-      // 调试信息：检查数据格式
-      if (import.meta.env.DEV) {
-      }
       setLastUpdated(new Date())
     } catch (error: any) {
       console.error('加载数据失败:', error)
       const errorMsg = error?.response?.data?.detail || error?.message || '未知错误'
       message.error(`加载数据失败: ${errorMsg}`)
       setHotSheeps([])
-      setHotSectors([])
     } finally {
       setLoading(false)
     }
   }
 
-  const loadTrendingSectorsData = async (limit: number = 10) => {
-    setTrendingSectorsLoading(true)
-    try {
-      const result = await trendingSectorApi.getTrendingSectors(limit)
-      setTrendingSectors(result.sectors || [])
-    } catch (error: any) {
-      console.error('加载实时热门板块失败:', error)
-      const errorMsg = error?.response?.data?.detail || error?.message || '未知错误'
-      message.error(`加载实时热门板块失败: ${errorMsg}`)
-      setTrendingSectors([])
-    } finally {
-      setTrendingSectorsLoading(false)
-    }
-  }
 
   const loadCapitalInflowData = async (days: number) => {
     setCapitalInflowLoading(true)
@@ -216,20 +209,120 @@ const Tab2: React.FC = () => {
     }
   }
 
-  // 加载下个交易日预测
-  const loadNextDayPrediction = async () => {
-    setPredictionLoading(true)
+
+
+  // 加载1/3/5天净流入Top100肥羊
+  const loadTopInflowStocks = async (days: number) => {
+    setTopInflowStocksLoading(true)
     try {
-      const result = await nextDayPredictionApi.getPrediction()
-      setNextDayPrediction(result)
-      if (!result.success) {
-        console.warn('预测数据加载失败:', result.message)
+      const result = await capitalInflowApi.getTop(days, 100)
+      setTopInflowStocks(result.stocks || [])
+    } catch (error: any) {
+      console.error('加载净流入Top肥羊失败:', error)
+      const errorMsg = error?.response?.data?.detail || error?.message || '未知错误'
+      message.error(`加载净流入Top肥羊失败: ${errorMsg}`)
+      setTopInflowStocks([])
+    } finally {
+      setTopInflowStocksLoading(false)
+    }
+  }
+
+  // 加载1/3/5天净流入Top10板块（已聚类）
+  const loadTopInflowSectors = async (days: number) => {
+    setTopInflowSectorsLoading(true)
+    try {
+      const result = await sectorMoneyFlowApi.getRecommendations(days, 10)
+      setTopInflowSectors(result.sectors || [])
+    } catch (error: any) {
+      console.error('加载净流入Top板块失败:', error)
+      const errorMsg = error?.response?.data?.detail || error?.message || '未知错误'
+      message.error(`加载净流入Top板块失败: ${errorMsg}`)
+      setTopInflowSectors([])
+    } finally {
+      setTopInflowSectorsLoading(false)
+    }
+  }
+
+
+  // 加载板块K线数据（涨跌幅+主力流入）
+  const handleSectorClick = async (sectorName: string) => {
+    setSelectedSectorForKline({ name: sectorName })
+    setKlineModalVisible(true)
+    setSectorKlineLoading(true)
+    try {
+      const result = await sectorMoneyFlowApi.getMoneyFlowHistory(sectorName, 60)
+      setSectorKlineData(result.data || [])
+      // 板块K线使用不同的数据结构，需要特殊处理
+      // 这里先设置数据，后续在getKLineOption中判断是否为板块
+    } catch (error: any) {
+      console.error('加载板块K线数据失败:', error)
+      message.error('加载板块K线数据失败')
+      setSectorKlineData([])
+    } finally {
+      setSectorKlineLoading(false)
+    }
+  }
+
+  // 加载当日最热板块
+  const loadHottestSectors = async () => {
+    setHottestSectorsLoading(true)
+    try {
+      const result = await falconRadarApi.getHottestSectors(10)
+      setHottestSectors(result.sectors || [])
+    } catch (error: any) {
+      console.error('加载当日最热板块失败:', error)
+      message.error('加载当日最热板块失败')
+      setHottestSectors([])
+    } finally {
+      setHottestSectorsLoading(false)
+    }
+  }
+
+  // 加载猎鹰推荐
+  const loadFalconRecommendations = async () => {
+    setFalconRecommendationsLoading(true)
+    try {
+      const result = await falconRadarApi.getRecommendations()
+      setFalconRecommendations(result)
+      if (result.error) {
+        message.warning(`猎鹰推荐加载失败: ${result.error}`)
       }
     } catch (error: any) {
-      console.error('加载下个交易日预测失败:', error)
-      setNextDayPrediction(null)
+      console.error('加载猎鹰推荐失败:', error)
+      message.error('加载猎鹰推荐失败')
+      setFalconRecommendations(null)
     } finally {
-      setPredictionLoading(false)
+      setFalconRecommendationsLoading(false)
+    }
+  }
+
+  // 加载市场情绪数据
+  const loadMarketSentiment = async () => {
+    setMarketSentimentLoading(true)
+    try {
+      const result = await marketSentimentApi.getMarketSentiment()
+      setMarketSentiment(result)
+    } catch (error: any) {
+      console.error('加载市场情绪数据失败:', error)
+      message.error('加载市场情绪数据失败')
+      setMarketSentiment(null)
+    } finally {
+      setMarketSentimentLoading(false)
+    }
+  }
+
+  // 加载智能资金矩阵
+  const loadSmartMoneyMatrix = async (days: number = 1) => {
+    setSmartMoneyMatrixLoading(true)
+    try {
+      const result = await smartMoneyMatrixApi.getSmartMoneyMatrix(days, 100)
+      setSmartMoneyMatrix(result)
+    } catch (error: any) {
+      console.error('加载智能资金矩阵失败:', error)
+      message.error('加载智能资金矩阵失败')
+      setSmartMoneyMatrix(null)
+    } finally {
+      setSmartMoneyMatrixLoading(false)
     }
   }
 
@@ -270,23 +363,33 @@ const Tab2: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // 交易时段每分钟自动刷新
+  // 交易时段每分钟自动刷新，非交易时段每小时刷新
   useEffect(() => {
     let interval: ReturnType<typeof setInterval> | null = null
     
-    if (isTradingHours()) {
-      interval = setInterval(() => {
-        loadData()
-        // 同时刷新其他已展开的数据
-        if (capitalInflowLoaded) loadCapitalInflowData(capitalInflowDays)
-        if (sectorInflowLoaded) loadSectorInflowData(sectorInflowDays)
-      }, 60000) // 1分钟
-    }
+    const refreshInterval = isTradingHours() ? 60000 : 3600000  // 交易时段1分钟，非交易时段1小时
+    
+    interval = setInterval(() => {
+      loadData()
+      // 同时刷新其他已展开的数据
+      if (capitalInflowLoaded) loadCapitalInflowData(capitalInflowDays)
+      if (sectorInflowLoaded) loadSectorInflowData(sectorInflowDays)
+      loadTopInflowStocks(rankingDays)  // 刷新榜单数据
+      loadTopInflowSectors(rankingDays)
+    }, refreshInterval)
     
     return () => {
       if (interval) clearInterval(interval)
     }
-  }, [capitalInflowLoaded, capitalInflowDays, sectorInflowLoaded, sectorInflowDays])
+  }, [capitalInflowLoaded, capitalInflowDays, sectorInflowLoaded, sectorInflowDays, rankingDays])
+
+  // 当rankingDays变化时，重新加载榜单数据
+  useEffect(() => {
+    loadTopInflowStocks(rankingDays)
+    loadTopInflowSectors(rankingDays)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rankingDays])
+
 
   // 检测移动端
   useEffect(() => {
@@ -318,7 +421,7 @@ const Tab2: React.FC = () => {
             const response = await aiApi.getPrompts()
             const prompt = response.prompts.recommend || ''
             // 渲染提示词（替换变量）
-            const rendered = await renderRecommendPrompt(prompt, hotSectors, hotSheeps)
+            const rendered = await renderRecommendPrompt(prompt, hotSheeps)
             setPromptText(prompt)
             setRenderedPromptText(rendered)
             setPromptType('recommend')
@@ -434,13 +537,13 @@ const Tab2: React.FC = () => {
     setModelSelectModalVisible(false)
     setSelectedModelName(modelName)
     
-      // 获取提示词模板
-      try {
+    // 获取提示词模板
+    try {
         const response = await aiApi.getPrompts()
         if (pendingAction === 'recommend') {
           const prompt = response.prompts.recommend || ''
           // 渲染提示词（替换变量）
-          const rendered = await renderRecommendPrompt(prompt, hotSectors, hotSheeps)
+          const rendered = await renderRecommendPrompt(prompt, hotSheeps)
           setPromptText(prompt)
           setRenderedPromptText(rendered)
           setPromptType('recommend')
@@ -461,16 +564,10 @@ const Tab2: React.FC = () => {
   }
   
   // 渲染推荐提示词
-  const renderRecommendPrompt = async (template: string, sectors: SectorInfo[], sheeps: HotSheep[]): Promise<string> => {
+  const renderRecommendPrompt = async (template: string, sheeps: HotSheep[]): Promise<string> => {
     try {
       // 获取当前日期
       const date = new Date().toISOString().split('T')[0]
-      
-      // 格式化热门板块列表
-      const sectorsList = sectors.slice(0, 10).map(sector => 
-        `- ${sector.sector_name}（热门股数量：${sector.hot_count || 0}，热度分数：${sector.hot_score || 0}）`
-      )
-      const hotSectorsStr = sectorsList.length > 0 ? sectorsList.join('\n') : '暂无热门板块'
       
       // 格式化热门肥羊数据
       const sheepData = sheeps.slice(0, 20).map(sheep => ({
@@ -482,24 +579,15 @@ const Tab2: React.FC = () => {
         来源: sheep.source
       }))
       
-      const sectorsData = sectors.slice(0, 10).map(sector => ({
-        板块: sector.sector_name,
-        热门股数量: sector.hot_count || 0,
-        热度分数: sector.hot_score || 0
-      }))
-      
       const dataStr = `
 热门肥羊列表：
 ${JSON.stringify(sheepData, null, 2)}
-
-热门板块列表：
-${JSON.stringify(sectorsData, null, 2)}
 `
       
       // 替换变量
       return template
         .replace(/{date}/g, date)
-        .replace(/{hot_sectors}/g, hotSectorsStr)
+        .replace(/{hot_sectors}/g, '暂无热门板块')
         .replace(/{data}/g, dataStr)
     } catch (error) {
       console.error('渲染推荐提示词失败:', error)
@@ -584,36 +672,6 @@ K线数据（最近10天）：${JSON.stringify(klineSummary, null, 2)}
     }
   }
 
-  const handleSectorClick = async (sectorName: string) => {
-    if (sectorChartData[sectorName]) return // 已加载
-
-    try {
-      const [dailyData, sheep] = await Promise.all([
-        hotApi.getSectorDaily(sectorName),
-        hotApi.getSectorSheeps(sectorName),
-      ])
-      
-      setSectorChartData({ ...sectorChartData, [sectorName]: dailyData })
-      setSectorSheeps({ ...sectorSheeps, [sectorName]: sheep })
-    } catch (error) {
-      message.error('加载板块数据失败')
-    }
-  }
-
-  const handleSectorSheepsClick = async (sectorName: string) => {
-    try {
-      let sheep = sectorSheeps[sectorName]
-      if (!sheep || sheep.length === 0) {
-        sheep = await hotApi.getSectorSheeps(sectorName)
-        setSectorSheeps({ ...sectorSheeps, [sectorName]: sheep })
-      }
-      setSelectedSectorForSheeps({ name: sectorName, sheep })
-      setSectorSheepsModalVisible(true)
-    } catch (error) {
-      message.error('加载板块肥羊列表失败')
-    }
-  }
-
   const handleSectorStocksClick = async (sectorName: string) => {
     setSectorStocksModalVisible(true)
     setSectorStocksLoading(true)
@@ -631,47 +689,6 @@ K线数据（最近10天）：${JSON.stringify(klineSummary, null, 2)}
     }
   }
 
-  const getSectorChartOption = (sectorName: string) => {
-    const data = sectorChartData[sectorName] || []
-    if (data.length === 0) return null
-
-    const dates = data.map((d: any) => d.trade_date)
-    const kData = data.map((d: any) => [d.open_price, d.close_price, d.low_price, d.high_price])
-
-    return {
-      title: {
-        text: `${sectorName} - 板块K线`,
-        left: 'center',
-        textStyle: { fontSize: 14 },
-      },
-      tooltip: {
-        trigger: 'axis',
-        axisPointer: { type: 'cross' },
-      },
-      xAxis: {
-        type: 'category',
-        data: dates,
-        boundaryGap: false,
-      },
-      yAxis: {
-        type: 'value',
-        scale: true,
-      },
-      series: [
-        {
-          name: 'K线',
-          type: 'candlestick',
-          data: kData,
-          itemStyle: {
-            color: '#ef5350',
-            color0: '#26a69a',
-            borderColor: '#ef5350',
-            borderColor0: '#26a69a',
-          },
-        },
-      ],
-    }
-  }
 
   const hotSheepsColumns = [
     {
@@ -800,39 +817,6 @@ K线数据（最近10天）：${JSON.stringify(klineSummary, null, 2)}
     col => col.key !== 'source' && col.key !== 'volume' && col.key !== 'consecutive_days'
   )
 
-  const sectorSheepsColumns = [
-    {
-      title: '标的代码',
-      dataIndex: 'sheep_code',
-      key: 'sheep_code',
-    },
-    {
-      title: '标的名称',
-      dataIndex: 'sheep_name',
-      key: 'sheep_name',
-      render: (name: string, record: SectorSheep) => {
-        const displayName = getDisplayName(name, record.sheep_code)
-        return (
-          <span style={{ cursor: 'pointer', color: '#1890ff' }}>
-            {displayName}
-          </span>
-        )
-      },
-    },
-    {
-      title: '热度排名',
-      dataIndex: 'rank',
-      key: 'rank',
-      render: (rank: number) => rank ? <Tag color="red">#{rank}</Tag> : '-',
-    },
-    {
-      title: '连续上榜',
-      dataIndex: 'consecutive_days',
-      key: 'consecutive_days',
-      render: (days: number) => <Tag>{days} 天</Tag>,
-    },
-  ]
-
   const capitalInflowColumns = [
     {
       title: '标的代码',
@@ -899,8 +883,10 @@ K线数据（最近10天）：${JSON.stringify(klineSummary, null, 2)}
 
   const handleSheepClick = async (stockCode: string, stockName: string) => {
     setSelectedSheepForKline({ code: stockCode, name: stockName })
+    setSelectedSectorForKline(null)  // 清除板块选择
     setKlineModalVisible(true)
     setKlineLoading(true)
+    setSectorKlineLoading(false)
     try {
       const normalizedCode = normalizeCode(stockCode)
       const [data, capitalFlow] = await Promise.all([
@@ -909,6 +895,7 @@ K线数据（最近10天）：${JSON.stringify(klineSummary, null, 2)}
       ])
       setKlineData(data || [])
       setKlineCapitalFlowData(Array.isArray(capitalFlow) ? capitalFlow : [])
+      setSectorKlineData([])  // 清除板块数据
     } catch (error) {
       console.error('加载K线数据失败:', error)
       message.error('加载K线数据失败')
@@ -1185,6 +1172,61 @@ K线数据（最近10天）：${JSON.stringify(klineSummary, null, 2)}
 
   const xueqiuSheeps = hotSheeps.filter(s => s.source === 'xueqiu').slice(0, 100)
 
+  // 雪球热度榜 - 聚合最热门板块（最多5个）
+  const aggregatedHotSectors = React.useMemo(() => {
+    const sectorMap = new Map<string, { stocks: HotSheep[], totalRank: number }>()
+    
+    // 统计每个板块的热门股
+    xueqiuSheeps.forEach(sheep => {
+      if (sheep.sectors && sheep.sectors.length > 0) {
+        sheep.sectors.forEach(sector => {
+          if (!sectorMap.has(sector)) {
+            sectorMap.set(sector, { stocks: [], totalRank: 0 })
+          }
+          const sectorData = sectorMap.get(sector)!
+          sectorData.stocks.push(sheep)
+          sectorData.totalRank += sheep.rank // 使用排名总和作为热度指标（越小越热）
+        })
+      }
+    })
+    
+    // 转换为数组并排序（按股票数量降序，同样数量按总排名升序）
+    const sectors = Array.from(sectorMap.entries()).map(([name, data]) => ({
+      name,
+      stocks: data.stocks.sort((a, b) => a.rank - b.rank), // 按排名升序
+      count: data.stocks.length,
+      avgRank: data.totalRank / data.stocks.length
+    }))
+    
+    // 排序：优先按股票数量降序，同样数量按平均排名升序
+    sectors.sort((a, b) => {
+      if (b.count !== a.count) return b.count - a.count
+      return a.avgRank - b.avgRank
+    })
+    
+    return sectors.slice(0, 5) // 最多5个板块
+  }, [xueqiuSheeps])
+
+  // 获取板块颜色
+  const getSectorColor = (index: number): string => {
+    if (index === 0) return '#ff4d4f' // 红色 - 最热
+    if (index === 1) return '#fa8c16' // 橙色 - 第二
+    return '#1890ff' // 浅蓝色 - 其他
+  }
+
+  // 切换板块展开状态
+  const toggleSectorExpanded = (sectorName: string) => {
+    setXueqiuExpandedSectors(prev => {
+      const newSet = new Set(prev)
+      if (newSet.has(sectorName)) {
+        newSet.delete(sectorName)
+      } else {
+        newSet.add(sectorName)
+      }
+      return newSet
+    })
+  }
+
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
@@ -1211,22 +1253,407 @@ K线数据（最近10天）：${JSON.stringify(klineSummary, null, 2)}
         </Space>
       </div>
 
-      {/* 热门板块推荐 */}
+
+      {/* 猎鹰雷达核心看板 */}
       <Collapse 
-        defaultActiveKey={[]} 
+        defaultActiveKey={eagleRadarExpanded ? ['falconRadar'] : []}
         style={{ marginBottom: 24 }}
         onChange={(keys: string | string[]) => {
           const activeKeys = Array.isArray(keys) ? keys : [keys]
-          if (activeKeys.includes('hotSectors') && !hotSectorsLoaded) {
-            setHotSectorsLoaded(true)
-            loadData()
-            // 同时加载预测数据
-            if (!predictionLoaded) {
-              setPredictionLoaded(true)
-              loadNextDayPrediction()
-            }
+          const isExpanded = activeKeys.includes('falconRadar')
+          setEagleRadarExpanded(isExpanded)
+          if (isExpanded) {
+            loadHottestSectors()
+            loadFalconRecommendations()
+            loadMarketSentiment()
+            loadSmartMoneyMatrix(smartMoneyMatrixDays)
           }
         }}
+      >
+        <Panel
+          header={
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+              <span>
+                <FireOutlined style={{ marginRight: 8, color: '#ff4d4f' }} />
+                猎鹰雷达（Falcon Radar）
+              </span>
+              <Tag color={eagleRadarExpanded ? 'green' : 'default'}>
+                {eagleRadarExpanded ? '已展开' : '点击展开'}
+              </Tag>
+            </div>
+          }
+          key="falconRadar"
+        >
+          <Spin spinning={hottestSectorsLoading || falconRecommendationsLoading || marketSentimentLoading || smartMoneyMatrixLoading}>
+            {/* Module 1: 当日最热 + 猎鹰推荐 */}
+            <Card 
+              title="Module 1: 猎鹰雷达核心看板" 
+              style={{ marginBottom: 16 }}
+              extra={
+                <Space>
+                  <Button size="small" onClick={() => { loadHottestSectors(); loadFalconRecommendations(); }}>
+                    刷新
+                  </Button>
+                </Space>
+              }
+            >
+              <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 16 }}>
+                {/* 当日最热 */}
+                <Card size="small" title="当日最热（市场焦点）">
+                  {hottestSectors.length === 0 ? (
+                    <div style={{ textAlign: 'center', padding: 20, color: '#999' }}>暂无数据</div>
+                  ) : (
+                    <Table
+                      size="small"
+                      dataSource={hottestSectors}
+                      columns={[
+                        { 
+                          title: '板块', 
+                          dataIndex: 'sector_name', 
+                          key: 'sector_name',
+                          render: (name: string, record: HottestSector) => (
+                            <span 
+                              style={{ cursor: 'pointer', color: '#1890ff' }} 
+                              onClick={() => handleSectorClick(name)}
+                              title="点击查看K线图"
+                            >
+                              {record.display_name || name}
+                              {record.aggregated_count && record.aggregated_count > 0 ? (
+                                <span style={{ color: '#999', fontSize: 10, marginLeft: 4 }}>
+                                  (+{record.aggregated_count})
+                                </span>
+                              ) : null}
+                            </span>
+                          )
+                        },
+                        { 
+                          title: '净流入(万)', 
+                          dataIndex: 'main_net_inflow', 
+                          key: 'main_net_inflow',
+                          render: (val: number) => (val / 10000).toFixed(2),
+                          sorter: (a, b) => a.main_net_inflow - b.main_net_inflow
+                        },
+                        { 
+                          title: '涨幅%', 
+                          dataIndex: 'change_pct', 
+                          key: 'change_pct',
+                          render: (val: number) => <span style={{ color: val >= 0 ? '#ef5350' : '#26a69a' }}>{val.toFixed(2)}</span>
+                        },
+                        { title: '涨停数', dataIndex: 'limit_up_count', key: 'limit_up_count' },
+                        { title: 'RPS20', dataIndex: 'sector_rps_20', key: 'sector_rps_20', render: (val: number) => val.toFixed(1) }
+                      ]}
+                      rowKey="sector_name"
+                      pagination={false}
+                      scroll={{ y: 300 }}
+                    />
+                  )}
+                </Card>
+                
+                {/* 猎鹰推荐 */}
+                <Card size="small" title="猎鹰推荐（量化挖掘）">
+                  {falconRecommendations ? (
+                    <div>
+                      <div style={{ marginBottom: 12 }}>
+                        <Tag color="red">主线首阴</Tag>
+                        {falconRecommendations.leader_pullback.length > 0 ? (
+                          <Table
+                            size="small"
+                            dataSource={falconRecommendations.leader_pullback}
+                            columns={[
+                              { 
+                                title: '名称', 
+                                dataIndex: 'sheep_name', 
+                                key: 'sheep_name',
+                                render: (name: string, record: any) => (
+                                  <span 
+                                    style={{ cursor: 'pointer', color: '#1890ff' }} 
+                                    onClick={() => handleSheepClick(record.sheep_code, name)}
+                                    title="点击查看K线图"
+                                  >
+                                    {name}
+                                  </span>
+                                )
+                              },
+                              { 
+                                title: '跌幅%', 
+                                dataIndex: 'change_pct', 
+                                key: 'change_pct',
+                                render: (val: number) => <span style={{ color: '#26a69a' }}>{val.toFixed(2)}</span>
+                              },
+                              { title: '量比', dataIndex: 'volume_ratio', key: 'volume_ratio', render: (val: number) => val.toFixed(2) },
+                              { title: '推荐理由', dataIndex: 'reason', key: 'reason', ellipsis: true }
+                            ]}
+                            rowKey="sheep_code"
+                            pagination={false}
+                            scroll={{ y: 200 }}
+                          />
+                        ) : (
+                          <div style={{ padding: 10, color: '#999' }}>暂无推荐</div>
+                        )}
+                      </div>
+                      <div style={{ marginBottom: 12 }}>
+                        <Tag color="orange">资金背离</Tag>
+                        {falconRecommendations.money_divergence.length > 0 ? (
+                          <Table
+                            size="small"
+                            dataSource={falconRecommendations.money_divergence}
+                            columns={[
+                              { 
+                                title: '名称', 
+                                dataIndex: 'sheep_name', 
+                                key: 'sheep_name',
+                                render: (name: string, record: any) => (
+                                  <span 
+                                    style={{ cursor: 'pointer', color: '#1890ff' }} 
+                                    onClick={() => handleSheepClick(record.sheep_code, name)}
+                                    title="点击查看K线图"
+                                  >
+                                    {name}
+                                  </span>
+                                )
+                              },
+                              { title: '净流入(亿)', dataIndex: 'total_inflow', key: 'total_inflow', render: (val: number) => val.toFixed(2) },
+                              { title: '振幅%', dataIndex: 'amplitude', key: 'amplitude', render: (val: number) => val.toFixed(2) },
+                              { title: '推荐理由', dataIndex: 'reason', key: 'reason', ellipsis: true }
+                            ]}
+                            rowKey="sheep_code"
+                            pagination={false}
+                            scroll={{ y: 200 }}
+                          />
+                        ) : (
+                          <div style={{ padding: 10, color: '#999' }}>暂无推荐</div>
+                        )}
+                      </div>
+                      <div>
+                        <Tag color="blue">平台突破</Tag>
+                        {falconRecommendations.box_breakout.length > 0 ? (
+                          <Table
+                            size="small"
+                            dataSource={falconRecommendations.box_breakout}
+                            columns={[
+                              { 
+                                title: '名称', 
+                                dataIndex: 'sheep_name', 
+                                key: 'sheep_name',
+                                render: (name: string, record: any) => (
+                                  <span 
+                                    style={{ cursor: 'pointer', color: '#1890ff' }} 
+                                    onClick={() => handleSheepClick(record.sheep_code, name)}
+                                    title="点击查看K线图"
+                                  >
+                                    {name}
+                                  </span>
+                                )
+                              },
+                              { title: '量比', dataIndex: 'volume_ratio', key: 'volume_ratio', render: (val: number) => val.toFixed(2) },
+                              { title: '波动率%', dataIndex: 'volatility', key: 'volatility', render: (val: number) => val.toFixed(2) },
+                              { title: '推荐理由', dataIndex: 'reason', key: 'reason', ellipsis: true }
+                            ]}
+                            rowKey="sheep_code"
+                            pagination={false}
+                            scroll={{ y: 200 }}
+                          />
+                        ) : (
+                          <div style={{ padding: 10, color: '#999' }}>暂无推荐</div>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <div style={{ textAlign: 'center', padding: 20, color: '#999' }}>加载中...</div>
+                  )}
+                </Card>
+              </div>
+            </Card>
+
+            {/* Module 2: 市场情绪仪表盘 */}
+            <Card 
+              title="Module 2: 市场情绪仪表盘" 
+              style={{ marginBottom: 16 }}
+              extra={
+                <Button size="small" onClick={loadMarketSentiment}>刷新</Button>
+              }
+            >
+              {marketSentiment ? (
+                <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr 1fr', gap: 16 }}>
+                  <Card size="small" title="赚钱效应">
+                    <div style={{ textAlign: 'center' }}>
+                      <div style={{ fontSize: 24, fontWeight: 'bold', color: marketSentiment.profit_effect.value >= 0 ? '#ef5350' : '#26a69a' }}>
+                        {(marketSentiment.profit_effect.value * 100).toFixed(2)}%
+                      </div>
+                      <div style={{ marginTop: 8 }}>
+                        <Tag color={marketSentiment.profit_effect.level === 'extreme_hot' ? 'red' : marketSentiment.profit_effect.level === 'extreme_cold' ? 'blue' : 'default'}>
+                          {marketSentiment.profit_effect.message}
+                        </Tag>
+                      </div>
+                      <div style={{ marginTop: 8, fontSize: 12, color: '#999' }}>
+                        上涨: {marketSentiment.profit_effect.up_count} | 下跌: {marketSentiment.profit_effect.down_count}
+                      </div>
+                    </div>
+                  </Card>
+                  <Card size="small" title="连板高度">
+                    <div style={{ textAlign: 'center' }}>
+                      <div style={{ fontSize: 24, fontWeight: 'bold', color: '#ff9800' }}>
+                        {marketSentiment.consecutive_limit_height}连板
+                      </div>
+                      <div style={{ marginTop: 8, fontSize: 12, color: '#999' }}>
+                        市场最高连板高度
+                      </div>
+                    </div>
+                  </Card>
+                  <Card size="small" title="炸板率">
+                    <div style={{ textAlign: 'center' }}>
+                      <div style={{ fontSize: 24, fontWeight: 'bold', color: marketSentiment.limit_up_failure_rate.value > 0.4 ? '#ef5350' : '#26a69a' }}>
+                        {(marketSentiment.limit_up_failure_rate.value * 100).toFixed(2)}%
+                      </div>
+                      <div style={{ marginTop: 8 }}>
+                        <Tag color={marketSentiment.limit_up_failure_rate.level === 'high_risk' ? 'red' : marketSentiment.limit_up_failure_rate.level === 'medium_risk' ? 'orange' : 'green'}>
+                          {marketSentiment.limit_up_failure_rate.message}
+                        </Tag>
+                      </div>
+                      <div style={{ marginTop: 8, fontSize: 12, color: '#999' }}>
+                        涨停: {marketSentiment.limit_up_failure_rate.limit_up_count} | 炸板: {marketSentiment.limit_up_failure_rate.failure_count}
+                      </div>
+                    </div>
+                  </Card>
+                </div>
+              ) : (
+                <div style={{ textAlign: 'center', padding: 20, color: '#999' }}>加载中...</div>
+              )}
+            </Card>
+
+            {/* Module 3: 智能资金矩阵 */}
+            <Card 
+              title="Module 3: 智能资金矩阵" 
+              extra={
+                <Space>
+                  <Radio.Group 
+                    value={smartMoneyMatrixDays} 
+                    onChange={(e) => {
+                      setSmartMoneyMatrixDays(e.target.value)
+                      loadSmartMoneyMatrix(e.target.value)
+                    }}
+                    buttonStyle="solid"
+                    size="small"
+                  >
+                    <Radio.Button value={1}>当日</Radio.Button>
+                    <Radio.Button value={3}>3日</Radio.Button>
+                    <Radio.Button value={5}>5日</Radio.Button>
+                  </Radio.Group>
+                  <Button size="small" onClick={() => loadSmartMoneyMatrix(smartMoneyMatrixDays)}>刷新</Button>
+                </Space>
+              }
+            >
+              {smartMoneyMatrix ? (
+                (() => {
+                  // 计算全局最大值（统一坐标系）
+                  const globalMaxInflow = smartMoneyMatrixDays > 1 
+                    ? Math.max(...smartMoneyMatrix.stocks.flatMap((s: any) => 
+                        (s.daily_data || []).map((d: any) => Math.abs(d.main_net_inflow))
+                      ).filter((v: number) => !isNaN(v)), 0.01)
+                    : 1;
+                  
+                  return (
+                    <Table
+                      size="small"
+                      dataSource={smartMoneyMatrix.stocks}
+                      columns={[
+                        { 
+                          title: '名称', 
+                          dataIndex: 'sheep_name', 
+                          key: 'sheep_name',
+                          render: (text: string, record: any) => (
+                            <span 
+                              style={{ 
+                                cursor: 'pointer', 
+                                color: record.is_high_potential ? '#ff4d4f' : '#1890ff', 
+                                fontWeight: record.is_high_potential ? 'bold' : 'normal' 
+                              }}
+                              onClick={() => handleSheepClick(record.sheep_code, text)}
+                              title="点击查看K线图"
+                            >
+                              {getDisplayName(text, record.sheep_code)}
+                              {record.current_price > 0 && (
+                                <span style={{ color: '#999', fontSize: 11, marginLeft: 4 }}>
+                                  ¥{record.current_price.toFixed(2)}
+                                </span>
+                              )}
+                            </span>
+                          )
+                        },
+                        { 
+                          title: '净流入(亿)', 
+                          dataIndex: 'total_inflow', 
+                          key: 'total_inflow',
+                          render: (val: number) => val.toFixed(2),
+                          sorter: (a: any, b: any) => a.total_inflow - b.total_inflow
+                        },
+                        ...(smartMoneyMatrixDays > 1 ? [{
+                          title: '趋势',
+                          key: 'trend',
+                          width: 80,
+                          render: (_: any, record: any) => {
+                            const dailyData = record.daily_data || []
+                            if (dailyData.length === 0) return '-'
+                            return (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 1, height: 20 }}>
+                                {dailyData.map((d: any, idx: number) => {
+                                  const height = globalMaxInflow > 0 ? Math.max(4, Math.abs(d.main_net_inflow) / globalMaxInflow * 16) : 4
+                                  return (
+                                    <div 
+                                      key={idx}
+                                      style={{
+                                        width: 10,
+                                        height: height,
+                                        backgroundColor: d.main_net_inflow >= 0 ? '#ef5350' : '#26a69a',
+                                        borderRadius: 1
+                                      }}
+                                      title={`${d.trade_date}: ${d.main_net_inflow >= 0 ? '+' : ''}${d.main_net_inflow.toFixed(2)}亿`}
+                                    />
+                                  )
+                                })}
+                              </div>
+                            )
+                          }
+                        }] : []),
+                        { 
+                          title: '5日涨幅%', 
+                          dataIndex: 'change_pct_5d', 
+                          key: 'change_pct_5d',
+                          render: (val: number) => <span style={{ color: val >= 0 ? '#ef5350' : '#26a69a' }}>{val.toFixed(2)}</span>
+                        },
+                        { title: '换手率%', dataIndex: 'turnover_rate', key: 'turnover_rate', render: (val: number) => val.toFixed(2) },
+                        { title: '主力成本(MA5)', dataIndex: 'ma5_price', key: 'ma5_price', render: (val: number) => val.toFixed(2) },
+                        { 
+                          title: '潜力评分', 
+                          dataIndex: 'potential_score', 
+                          key: 'potential_score',
+                          sorter: (a: any, b: any) => a.potential_score - b.potential_score
+                        },
+                        { 
+                          title: '潜力原因', 
+                          dataIndex: 'potential_reason', 
+                          key: 'potential_reason',
+                          ellipsis: true
+                        }
+                      ]}
+                      rowClassName={(record) => record.is_high_potential ? 'high-potential-row' : ''}
+                      pagination={{ pageSize: 20 }}
+                      scroll={{ y: 400 }}
+                    />
+                  );
+                })()
+              ) : (
+                <div style={{ textAlign: 'center', padding: 20, color: '#999' }}>加载中...</div>
+              )}
+            </Card>
+          </Spin>
+        </Panel>
+      </Collapse>
+
+      {/* 第二块：1/3/5天榜单 */}
+      <Collapse 
+        defaultActiveKey={['ranking']}
+        style={{ marginBottom: 24 }}
       >
         <Panel
           header={
@@ -1235,284 +1662,264 @@ K线数据（最近10天）：${JSON.stringify(klineSummary, null, 2)}
               onClick={(e) => e.stopPropagation()}
             >
               <span>
-                <FireOutlined style={{ marginRight: 8 }} />
-                热门板块推荐
+                <DollarOutlined style={{ marginRight: 8, color: '#1890ff' }} />
+                净流入榜单
               </span>
-              <Space>
-                <Button
-                  type="default"
-                  icon={<RobotOutlined />}
-                  onClick={() => handleAIRecommend()}
-                  title="AI推荐"
-                  size="small"
-                >
-                  AI推荐
-                </Button>
-              </Space>
+              <Radio.Group 
+                value={rankingDays} 
+                onChange={(e) => setRankingDays(e.target.value)}
+                buttonStyle="solid"
+                size="small"
+              >
+                <Radio.Button value={1}>最近1天</Radio.Button>
+                <Radio.Button value={3}>最近3天</Radio.Button>
+                <Radio.Button value={5}>最近5天</Radio.Button>
+              </Radio.Group>
             </div>
           }
-          key="hotSectors"
+          key="ranking"
         >
-          <div>
-        {/* 明日热点预判模块 */}
-        {predictionLoading ? (
-          <Card style={{ marginBottom: 16 }}>
-            <div style={{ textAlign: 'center', padding: 20 }}>
-              <Spin />
-              <div style={{ marginTop: 8, color: '#999' }}>正在加载明日预测...</div>
-            </div>
-          </Card>
-        ) : nextDayPrediction && nextDayPrediction.success ? (
-          <Card 
-            style={{ 
-              marginBottom: 16, 
-              background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-              border: 'none',
-              borderRadius: 12,
-            }}
-          >
-            <div style={{ color: '#fff' }}>
-              {/* 标题行 */}
-              <div style={{ 
-                display: 'flex', 
-                justifyContent: 'space-between', 
-                alignItems: 'center',
-                marginBottom: 16,
-                borderBottom: '1px solid rgba(255,255,255,0.2)',
-                paddingBottom: 12,
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ fontSize: 20 }}>🔮</span>
-                  <span style={{ fontSize: 18, fontWeight: 'bold' }}>明日热点预判</span>
+          <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 16 }}>
+            {/* 肥羊净流入Top100 */}
+            <Card 
+              title={
+                <span>
+                  <DollarOutlined style={{ marginRight: 8, color: '#52c41a' }} />
+                  肥羊净流入Top100
+                </span>
+              }
+              size="small"
+            >
+              {topInflowStocksLoading ? (
+                <div style={{ textAlign: 'center', padding: 20 }}>
+                  <Spin />
                 </div>
-                <div style={{ fontSize: 12, opacity: 0.8 }}>
-                  预测日期: {nextDayPrediction.target_date} | 数据更新: {nextDayPrediction.generated_at?.split('T')[1]?.substring(0, 5) || ''}
+              ) : topInflowStocks.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: 40, color: '#999' }}>
+                  <div style={{ fontSize: 14 }}>暂无数据</div>
                 </div>
-              </div>
-              
-              {/* 预测板块 */}
-              {nextDayPrediction.sector_predictions && nextDayPrediction.sector_predictions.length > 0 && (
-                <div style={{ marginBottom: 16 }}>
-                  <div style={{ fontSize: 14, marginBottom: 8, opacity: 0.9 }}>
-                    📈 重点关注板块（{nextDayPrediction.sector_predictions.length}个）：
-                  </div>
-                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                    {nextDayPrediction.sector_predictions.slice(0, 5).map((sector, idx) => (
-                      <Tag 
-                        key={idx} 
-                        color={sector.prediction_level === 'high' ? 'red' : (sector.prediction_level === 'medium' ? 'orange' : 'blue')}
-                        style={{ fontSize: 13, padding: '4px 12px', borderRadius: 16 }}
-                      >
-                        {sector.prediction_level === 'high' ? '🔥' : (sector.prediction_level === 'medium' ? '⭐' : '💡')}
-                        {' '}{sector.sector_name}（{sector.score.toFixed(0)}分）
-                      </Tag>
-                    ))}
-                  </div>
-                  {/* 预测理由 */}
-                  {nextDayPrediction.sector_predictions[0] && (
-                    <div style={{ marginTop: 12, fontSize: 13, opacity: 0.9 }}>
-                      <div style={{ fontWeight: 'bold', marginBottom: 4 }}>
-                        {nextDayPrediction.sector_predictions[0].sector_name} 预测理由：
-                      </div>
-                      <div style={{ paddingLeft: 16 }}>
-                        {nextDayPrediction.sector_predictions[0].reasons.map((reason, idx) => (
-                          <div key={idx}>• {reason}</div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-              
-              {/* 推荐个股 */}
-              {nextDayPrediction.stock_recommendations && nextDayPrediction.stock_recommendations.length > 0 && (
-                <div style={{ marginBottom: 12 }}>
-                  <div style={{ fontSize: 14, marginBottom: 8, opacity: 0.9 }}>
-                    📊 精选个股（{nextDayPrediction.stock_recommendations.length}只）：
-                  </div>
-                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                    {nextDayPrediction.stock_recommendations.slice(0, 10).map((stock: StockRecommendation, idx: number) => (
-                      <Tag 
-                        key={idx} 
-                        style={{ 
-                          background: 'rgba(255,255,255,0.15)', 
-                          color: '#fff', 
-                          border: '1px solid rgba(255,255,255,0.3)',
-                          padding: '4px 10px',
-                          borderRadius: 8,
-                          cursor: 'pointer',
-                        }}
-                        onClick={() => handleSheepClick(stock.sheep_code, stock.sheep_name)}
-                      >
-                        {idx + 1}. {stock.sheep_name}
-                        <span style={{ opacity: 0.7, fontSize: 11, marginLeft: 4 }}>
-                          ({stock.score.toFixed(0)}分)
-                        </span>
-                      </Tag>
-                    ))}
-                  </div>
-                </div>
-              )}
-              
-              {/* 风险提示 */}
-              <div style={{ 
-                fontSize: 11, 
-                opacity: 0.7, 
-                marginTop: 12,
-                paddingTop: 12,
-                borderTop: '1px solid rgba(255,255,255,0.2)',
-              }}>
-                ⚠️ 以上分析基于资金流向和热度数据的量化模型，仅供参考，不构成投资建议。
-              </div>
-            </div>
-          </Card>
-        ) : predictionLoaded && (
-          <Card style={{ marginBottom: 16, background: '#fafafa' }}>
-            <div style={{ textAlign: 'center', padding: 20, color: '#999' }}>
-              暂无预测数据，{nextDayPrediction?.message || '请稍后重试'}
-            </div>
-          </Card>
-        )}
-        
-        {loading ? (
-          <div style={{ textAlign: 'center', padding: 20 }}>
-            <Spin />
-          </div>
-        ) : hotSectors.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: 40, color: '#999' }}>
-            <div style={{ fontSize: 16, marginBottom: 8 }}>暂无热门板块数据</div>
-            <div style={{ fontSize: 14 }}>请确保已采集热门肥羊数据，或点击刷新按钮更新数据</div>
-          </div>
-        ) : (
-          <div>
-            {/* 热门板块列表（倒序排序，分页显示） */}
-            <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 16 }}>
-              {hotSectors
-                .sort((a, b) => (b.hot_count || b.hot_score || 0) - (a.hot_count || a.hot_score || 0))  // 倒序排序
-                .slice((hotSectorsPage - 1) * 5, hotSectorsPage * 5)  // 分页，每页5个
-                .map((sector) => {
-              const chartOption = getSectorChartOption(sector.sector_name)
-              const sheep = sectorSheeps[sector.sector_name] || []
-
-              return (
-                <Popover
-                  key={sector.sector_name}
-                  title={sector.sector_name}
-                  content={
-                    <div style={{ width: isMobile ? '90vw' : 600, maxWidth: '100%' }}>
-                      {chartOption ? (
-                        <>
-                          <ReactECharts
-                            option={chartOption}
-                            style={{ height: isMobile ? '250px' : '300px', width: '100%' }}
-                          />
-                          {sheep.length > 0 && (
-                            <Table
-                              dataSource={sheep}
-                              columns={sectorSheepsColumns}
-                              pagination={false}
-                              size="small"
-                              style={{ marginTop: 16 }}
-                              onRow={(record) => ({
-                                onClick: () => handleSheepClick(record.sheep_code, getDisplayName(record.sheep_name, record.sheep_code)),
-                                style: { cursor: 'pointer' }
-                              })}
-                            />
-                          )}
-                        </>
-                      ) : (
-                        <div style={{ textAlign: 'center', padding: 20 }}>
-                          <Spin />
-                          <div style={{ marginTop: 10, color: '#999' }}>正在加载板块数据...</div>
-                        </div>
-                      )}
-                    </div>
-                  }
-                  trigger="click"
-                  placement="bottom"
-                  onOpenChange={(open) => {
-                    if (open && !chartOption) {
-                      handleSectorClick(sector.sector_name)
-                    }
-                  }}
-                >
-                  <Card
-                    hoverable
-                    onClick={() => handleSectorClick(sector.sector_name)}
-                    style={{
-                      width: isMobile ? '100%' : 280,
-                      cursor: 'pointer',
-                      background: sector.color === 'red' 
-                        ? 'linear-gradient(135deg, #ff6b6b 0%, #ee5a6f 100%)'
-                        : sector.color === 'orange'
-                        ? 'linear-gradient(135deg, #ffa726 0%, #fb8c00 100%)'
-                        : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-                      color: '#fff',
-                    }}
-                    bodyStyle={{ padding: isMobile ? 12 : 16 }}
-                  >
-                    <div style={{ fontSize: 16, fontWeight: 'bold', marginBottom: 8 }}>
-                      {sector.sector_name}
-                    </div>
-                    <div style={{ fontSize: 24, fontWeight: 'bold', marginBottom: 12 }}>
-                      {sector.hot_count || sector.hot_score || 0} 只热门股
-                    </div>
-                    {sector.hot_sheep && sector.hot_sheep.length > 0 && (
-                      <div style={{ marginTop: 12, borderTop: '1px solid rgba(255,255,255,0.3)', paddingTop: 12 }}>
-                        <div style={{ fontSize: 12, marginBottom: 8, opacity: 0.9 }}>热门标的：</div>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                          {sector.hot_sheep.slice(0, 5).map((stock: any, idx: number) => {
-                            const displayName = getDisplayName(stock.sheep_name, stock.sheep_code)
-                            const normalizedCode = normalizeCode(stock.sheep_code)
+              ) : (
+                (() => {
+                  // 计算全局最大值（统一坐标系）
+                  const globalMaxInflow = rankingDays > 1 
+                    ? Math.max(...topInflowStocks.flatMap((s: CapitalInflowStock) => 
+                        (s.daily_data || []).map((d) => Math.abs(d.main_net_inflow))
+                      ).filter((v: number) => !isNaN(v)), 0.01)
+                    : 1;
+                                
+                  return (
+                    <Table
+                      dataSource={topInflowStocks.slice((topInflowStocksPage - 1) * 5, topInflowStocksPage * 5)}
+                      columns={[
+                        {
+                          title: '排名',
+                          key: 'index',
+                          width: 50,
+                          render: (_: any, __: any, index: number) => (topInflowStocksPage - 1) * 5 + index + 1,
+                        },
+                        {
+                          title: '标的名称',
+                          dataIndex: 'sheep_name',
+                          key: 'sheep_name',
+                          width: 100,
+                          render: (name: string, record: CapitalInflowStock) => {
+                            const displayName = getDisplayName(name, record.sheep_code)
                             return (
-                            <div 
-                              key={stock.sheep_code} 
-                              style={{ fontSize: 12, opacity: 0.9, cursor: 'pointer' }}
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                handleSheepClick(normalizedCode, displayName)
-                              }}
-                            >
-                              {idx + 1}. {displayName}（{normalizedCode}）{stock.rank && ` #${stock.rank}`}
-                            </div>
+                              <span 
+                                style={{ cursor: 'pointer', color: '#1890ff' }} 
+                                onClick={() => handleSheepClick(record.sheep_code, displayName)}
+                              >
+                                {displayName}
+                              </span>
                             )
-                          })}
-                          {sector.hot_sheep.length > 5 && (
-                            <div 
-                              style={{ fontSize: 11, opacity: 0.9, marginTop: 4, cursor: 'pointer', textDecoration: 'underline' }}
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                handleSectorSheepsClick(sector.sector_name)
-                              }}
+                          },
+                        },
+                        {
+                          title: '净流入（亿元）',
+                          dataIndex: 'total_inflow',
+                          key: 'total_inflow',
+                          width: 100,
+                          render: (inflow: number) => (
+                            <span style={{ fontWeight: 'bold', color: '#ef5350' }}>
+                              +{inflow.toFixed(2)}
+                            </span>
+                          ),
+                        },
+                        ...(rankingDays > 1 ? [{
+                          title: '趋势',
+                          key: 'trend',
+                          width: 70,
+                          render: (_: any, record: CapitalInflowStock) => {
+                            const dailyData = record.daily_data || []
+                            if (dailyData.length === 0) return '-'
+                            return (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 1, height: 20 }}>
+                                {dailyData.map((d, idx: number) => {
+                                  const height = globalMaxInflow > 0 ? Math.max(4, Math.abs(d.main_net_inflow) / globalMaxInflow * 16) : 4
+                                  return (
+                                    <div 
+                                      key={idx}
+                                      style={{
+                                        width: 10,
+                                        height: height,
+                                        backgroundColor: d.main_net_inflow >= 0 ? '#ef5350' : '#26a69a',
+                                        borderRadius: 1
+                                      }}
+                                      title={`${d.trade_date}: ${d.main_net_inflow >= 0 ? '+' : ''}${d.main_net_inflow.toFixed(2)}亿`}
+                                    />
+                                  )
+                                })}
+                              </div>
+                            )
+                          }
+                        }] : []),
+                        {
+                          title: '日均流入（亿元）',
+                          dataIndex: 'avg_daily_inflow',
+                          key: 'avg_daily_inflow',
+                          width: 100,
+                          render: (inflow: number) => (
+                            <span style={{ color: '#666' }}>
+                              {inflow.toFixed(2)}
+                            </span>
+                          ),
+                        },
+                      ]}
+                      rowKey="sheep_code"
+                      pagination={{ 
+                        current: topInflowStocksPage,
+                        pageSize: 5,
+                        total: topInflowStocks.length,
+                        showTotal: (total) => `共 ${total} 只，每顥5只`,
+                        onChange: (page) => setTopInflowStocksPage(page)
+                      }}
+                      size="small"
+                    />
+                  );
+                })()
+              )}
+            </Card>
+
+            {/* 板块净流入Top10（已聚类） */}
+            <Card 
+              title={
+                <span>
+                  <DollarOutlined style={{ marginRight: 8, color: '#1890ff' }} />
+                  板块净流入Top10（已聚类）
+                </span>
+              }
+              size="small"
+            >
+              {topInflowSectorsLoading ? (
+                <div style={{ textAlign: 'center', padding: 20 }}>
+                  <Spin />
+                </div>
+              ) : topInflowSectors.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: 40, color: '#999' }}>
+                  <div style={{ fontSize: 14 }}>暂无数据</div>
+                </div>
+              ) : (
+                (() => {
+                  // 计算全局最大值（统一坐标系）
+                  const globalMaxInflow = rankingDays > 1 
+                    ? Math.max(...topInflowSectors.flatMap((s: SectorMoneyFlowInfo) => 
+                        (s.daily_data || []).map((d) => Math.abs(d.main_net_inflow))
+                      ).filter((v: number) => !isNaN(v)), 0.01)
+                    : 1;
+                  
+                  return (
+                    <Table
+                      dataSource={topInflowSectors.slice((topInflowSectorsPage - 1) * 5, topInflowSectorsPage * 5)}
+                      columns={[
+                        {
+                          title: '排名',
+                          key: 'index',
+                          width: 50,
+                          render: (_: any, __: any, index: number) => (topInflowSectorsPage - 1) * 5 + index + 1,
+                        },
+                        {
+                          title: '板块名称',
+                          dataIndex: 'sector_name',
+                          key: 'sector_name',
+                          width: 120,
+                          render: (name: string) => (
+                            <span 
+                              style={{ cursor: 'pointer', color: '#1890ff' }} 
+                              onClick={() => handleSectorClick(name)}
                             >
-                              查看全部 {sector.hot_sheep?.length || 0} 只肥羊...
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    )}
-                  </Card>
-                </Popover>
-              )
-            })}
-            </div>
-            {/* 分页器 */}
-            <div style={{ display: 'flex', justifyContent: 'center', marginTop: 16 }}>
-              <Pagination
-                current={hotSectorsPage}
-                total={hotSectors.length}
-                pageSize={5}
-                showTotal={(total) => `共 ${total} 个板块`}
-                onChange={(page) => setHotSectorsPage(page)}
-                showSizeChanger={false}
-              />
-            </div>
-          </div>
-        )}
+                              {name}
+                            </span>
+                          )
+                        },
+                        {
+                          title: rankingDays === 1 ? '当日净流入' : '累计净流入',
+                          dataIndex: rankingDays === 1 ? 'main_net_inflow' : 'total_inflow',
+                          key: 'inflow',
+                          width: 100,
+                          align: 'right' as const,
+                          render: (value: number, record: SectorMoneyFlowInfo) => {
+                            const inflow = rankingDays === 1 ? (value || 0) : ((record.total_inflow || 0) / 10000)
+                            const displayValue = rankingDays === 1 ? (inflow / 10000).toFixed(2) : inflow.toFixed(2)
+                            const color = inflow >= 0 ? '#ff4d4f' : '#52c41a'
+                            return (
+                              <span style={{ color, fontWeight: 500 }}>
+                                {inflow >= 0 ? '+' : ''}{displayValue} 亿
+                              </span>
+                            )
+                          },
+                        },
+                        ...(rankingDays > 1 ? [{
+                          title: '趋势',
+                          key: 'trend',
+                          width: 70,
+                          render: (_: any, record: SectorMoneyFlowInfo) => {
+                            const dailyData = record.daily_data || []
+                            if (dailyData.length === 0) return '-'
+                            return (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 1, height: 20 }}>
+                                {dailyData.map((d, idx: number) => {
+                                  // daily_data 的 main_net_inflow 是万元，转换为亿元
+                                  const inflowValue = d.main_net_inflow / 10000
+                                  const height = globalMaxInflow > 0 ? Math.max(4, Math.abs(inflowValue) / (globalMaxInflow / 10000) * 16) : 4
+                                  return (
+                                    <div 
+                                      key={idx}
+                                      style={{
+                                        width: 10,
+                                        height: height,
+                                        backgroundColor: d.main_net_inflow >= 0 ? '#ef5350' : '#26a69a',
+                                        borderRadius: 1
+                                      }}
+                                      title={`${d.trade_date}: ${inflowValue >= 0 ? '+' : ''}${inflowValue.toFixed(2)}亿`}
+                                    />
+                                  )
+                                })}
+                              </div>
+                            )
+                          }
+                        }] : []),
+                      ]}
+                      rowKey="sector_name"
+                      pagination={{ 
+                        current: topInflowSectorsPage,
+                        pageSize: 5,
+                        total: topInflowSectors.length,
+                        showTotal: (total) => `共 ${total} 个，每页5个`,
+                        onChange: (page) => setTopInflowSectorsPage(page)
+                      }}
+                      size="small"
+                    />
+                  );
+                })()
+              )}
+            </Card>
           </div>
         </Panel>
       </Collapse>
 
+      {/* 保留原有的净流入肥羊推荐和净流入板块推荐（已隐藏，备用） */}
+      {false && (
+        <>
       {/* 净流入肥羊推荐 */}
       <Collapse 
         defaultActiveKey={[]} 
@@ -1635,11 +2042,11 @@ K线数据（最近10天）：${JSON.stringify(klineSummary, null, 2)}
                 </span>
                 {sectorInflowMetadata && (
                   <div style={{ marginTop: 8, fontSize: '12px' }}>
-                    <span style={{ color: sectorInflowMetadata.has_sufficient_data ? '#52c41a' : '#ff9800' }}>
-                      数据库中有 {sectorInflowMetadata.total_days_in_db} 天的数据，
-                      实际使用 {sectorInflowMetadata.actual_days_used} 天
-                      {!sectorInflowMetadata.has_sufficient_data && sectorInflowMetadata.warning && (
-                        <span style={{ color: '#ff4d4f', marginLeft: 8 }}>⚠️ {sectorInflowMetadata.warning}</span>
+                    <span style={{ color: sectorInflowMetadata?.has_sufficient_data ? '#52c41a' : '#ff9800' }}>
+                      数据库中有 {sectorInflowMetadata?.total_days_in_db ?? 0} 天的数据，
+                      实际使用 {sectorInflowMetadata?.actual_days_used ?? 0} 天
+                      {!sectorInflowMetadata?.has_sufficient_data && sectorInflowMetadata?.warning && (
+                        <span style={{ color: '#ff4d4f', marginLeft: 8 }}>⚠️ {sectorInflowMetadata?.warning}</span>
                       )}
                     </span>
                   </div>
@@ -1788,385 +2195,198 @@ K线数据（最近10天）：${JSON.stringify(klineSummary, null, 2)}
           )}
         </Panel>
       </Collapse>
-      
-      {/* 实时热门板块推荐 */}
-      <Collapse 
-        defaultActiveKey={[]} 
-        style={{ marginBottom: 24 }}
-        onChange={(keys: string | string[]) => {
-          const activeKeys = Array.isArray(keys) ? keys : [keys]
-          if (activeKeys.includes('trendingSectors')) {
-            loadTrendingSectorsData(10)
-          }
-        }}
-      >
-        <Panel
-          header={
-            <div 
-              style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', paddingRight: 16 }}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <span>
-                <FireOutlined style={{ marginRight: 8 }} />
-                实时热门板块推荐
-              </span>
-            </div>
-          }
-          key="trendingSectors"
-        >
-          {trendingSectorsLoading ? (
-            <div style={{ textAlign: 'center', padding: 20 }}>
-              <Spin />
-            </div>
-          ) : trendingSectors.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: 40, color: '#999' }}>
-              <div style={{ fontSize: 16, marginBottom: 8 }}>暂无实时热门板块数据</div>
-              <div style={{ fontSize: 14 }}>请稍后重试或联系管理员</div>
-            </div>
-          ) : (
-            <div>
-              <div style={{ marginBottom: 16, color: '#666', fontSize: '14px' }}>
-                找到 <strong style={{ color: '#ff6b6b' }}>{trendingSectors.length}</strong> 个实时热门板块
-                <span style={{ marginLeft: 16, fontSize: '12px', color: '#999' }}>
-                  （基于资金流、个股表现和综合指标的实时分析）
-                </span>
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(auto-fill, minmax(300px, 1fr))', gap: 16 }}>
-                {trendingSectors.map((sector, index) => (
-                  <Card
-                    key={index}
-                    hoverable
-                    style={{
-                      border: '1px solid #e8e8e8',
-                      borderRadius: 8,
-                      boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
-                      transition: 'box-shadow 0.3s ease',
-                      cursor: 'pointer',
-                    }}
-                    bodyStyle={{ padding: 16 }}
-                    onClick={() => handleSectorStocksClick(sector.sector_name)}
-                  >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                      <div style={{ fontSize: 16, fontWeight: 'bold', color: '#1890ff' }}>
-                        {sector.sector_name}
-                      </div>
-                      <Tag color={
-                        sector.trend_strength === '强势' ? 'red' :
-                        sector.trend_strength === '中等' ? 'orange' :
-                        sector.trend_strength === '温和' ? 'blue' :
-                        sector.trend_strength === '弱势' ? 'gray' : 'default'
-                      }>
-                        {sector.trend_strength}
-                      </Tag>
-                    </div>
-                    <div style={{ marginBottom: 8 }}>
-                      <div style={{ fontSize: 14, color: '#52c41a', fontWeight: 'bold' }}>
-                        资金净流入: {(sector.inflow_amount / 10000).toFixed(2)} 亿元
-                      </div>
-                      <div style={{ fontSize: 13, color: '#666' }}>
-                        综合评分: <span style={{ color: '#fa8c16', fontWeight: 'bold' }}>{sector.score.toFixed(2)}</span>
-                      </div>
-                    </div>
-                    <div style={{ marginBottom: 12 }}>
-                      <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>
-                        推荐理由: {sector.recommendation_reason}
-                      </div>
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 12, fontWeight: 'bold', color: '#666', marginBottom: 4 }}>
-                        关联个股（前{Math.min(3, sector.top_stocks.length)}）:
-                      </div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                        {sector.top_stocks.slice(0, 3).map((stock, idx) => {
-                          const displayName = getDisplayName(stock.sheep_name, stock.sheep_code)
-                          return (
-                            <div 
-                              key={idx}
-                              style={{ 
-                                fontSize: 12, 
-                                padding: '4px 8px',
-                                backgroundColor: '#f9f9f9',
-                                borderRadius: 4,
-                                cursor: 'pointer'
-                              }}
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                handleSheepClick(normalizeCode(stock.sheep_code), displayName)
-                              }}
-                            >
-                              <span style={{ fontWeight: 'bold' }}>{idx + 1}. {displayName}</span>
-                              {typeof stock.change_pct === 'number' && (
-                                <span style={{ 
-                                  color: stock.change_pct >= 0 ? '#ff4d4f' : '#52c41a', 
-                                  marginLeft: 8 
-                                }}>
-                                  {stock.change_pct >= 0 ? '+' : ''}{stock.change_pct.toFixed(2)}%
-                                </span>
-                              )}
-                            </div>
-                          )
-                        })}
-                      </div>
-                    </div>
-                  </Card>
-                ))}
-              </div>
-            </div>
-          )}
-        </Panel>
-      </Collapse>
-      
-      {/* 净流入板块推荐 */}
-      <Collapse 
-        defaultActiveKey={[]} 
-        style={{ marginBottom: 24 }}
-        onChange={(keys: string | string[]) => {
-          const activeKeys = Array.isArray(keys) ? keys : [keys]
-          if (activeKeys.includes('sectorInflow') && !sectorInflowLoaded) {
-            setSectorInflowLoaded(true)
-            loadSectorInflowData(sectorInflowDays)
-          }
-        }}
-      >
-        <Panel
-          header={
-            <div 
-              style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', paddingRight: 16 }}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <span>
-                <DollarOutlined style={{ marginRight: 8, color: '#1890ff' }} />
-                净流入板块推荐
-              </span>
-              <Radio.Group 
-                value={sectorInflowDays} 
-                onChange={(e) => setSectorInflowDays(e.target.value)}
-                buttonStyle="solid"
-                size="small"
-              >
-                <Radio.Button value={1}>当日</Radio.Button>
-                <Radio.Button value={3}>最近3天</Radio.Button>
-                <Radio.Button value={5}>最近5天</Radio.Button>
-              </Radio.Group>
-            </div>
-          }
-          key="sectorInflow"
-        >
-          {sectorInflowLoading ? (
-            <div style={{ textAlign: 'center', padding: 20 }}>
-              <Spin />
-            </div>
-          ) : sectorInflowSectors.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: 40, color: '#999' }}>
-              <div style={{ fontSize: 16, marginBottom: 8 }}>暂无板块资金流入数据</div>
-              <div style={{ fontSize: 14 }}>请稍后重试或联系管理员</div>
-            </div>
-          ) : (
-            <div>
-              <div style={{ marginBottom: 16, color: '#666', fontSize: '14px' }}>
-                找到 <strong style={{ color: '#1890ff' }}>{sectorInflowSectors.length}</strong> 个资金净流入板块
-                <span style={{ marginLeft: 16, fontSize: '12px', color: '#999' }}>
-                  （单位：亿元）
-                  {sectorInflowDays === 1 && ' - 当日为最近交易日的资金流入'}
-                  {sectorInflowDays === 3 && ' - 最近3天为最近3个交易日的资金总量'}
-                  {sectorInflowDays === 5 && ' - 最近5天为最近5个交易日的资金总量'}
-                </span>
-                {sectorInflowMetadata && (
-                  <div style={{ marginTop: 8, fontSize: '12px' }}>
-                    <span style={{ color: sectorInflowMetadata.has_sufficient_data ? '#52c41a' : '#ff9800' }}>
-                      数据库中有 {sectorInflowMetadata.total_days_in_db} 天的数据，
-                      实际使用 {sectorInflowMetadata.actual_days_used} 天
-                      {!sectorInflowMetadata.has_sufficient_data && sectorInflowMetadata.warning && (
-                        <span style={{ color: '#ff4d4f', marginLeft: 8 }}>⚠️ {sectorInflowMetadata.warning}</span>
-                      )}
-                    </span>
-                  </div>
-                )}
-              </div>
-              <Table
-                dataSource={sectorInflowSectors}
-                columns={[  {
-                    title: '板块名称',
-                    dataIndex: 'sector_name',
-                    key: 'sector_name',
-                    width: 200,
-                    render: (name: string) => (
-                      <span 
-                        style={{ fontWeight: 500, cursor: 'pointer', color: '#1890ff' }}
-                        onClick={() => handleSectorStocksClick(name)}
-                        title="点击查看涨幅前10关联概念股"
-                      >
-                        {name}
-                      </span>
-                    )
-                  },
-                  {
-                    title: sectorInflowDays === 1 ? '当日净流入' : '累计净流入',
-                    dataIndex: sectorInflowDays === 1 ? 'main_net_inflow' : 'total_inflow',
-                    key: 'inflow',
-                    width: 150,
-                    align: 'right',
-                    render: (value: number, record: any) => {
-                      const inflow = sectorInflowDays === 1 ? value : (record.total_inflow || 0)
-                      const color = inflow >= 0 ? '#ff4d4f' : '#52c41a'
-                      const displayValue = (inflow / 10000).toFixed(2) // 转换为亿元
-                      return (
-                        <span style={{ color, fontWeight: 500 }}>
-                          {inflow >= 0 ? '+' : ''}{displayValue} 亿元
-                        </span>
-                      )
-                    },
-                    sorter: (a: any, b: any) => {
-                      const aVal = sectorInflowDays === 1 ? (a.main_net_inflow || 0) : (a.total_inflow || 0)
-                      const bVal = sectorInflowDays === 1 ? (b.main_net_inflow || 0) : (b.total_inflow || 0)
-                      // bVal - aVal 表示降序（大的在前）
-                      return bVal - aVal
-                    }
-                  },
-                  ...(sectorInflowDays > 1 ? [{
-                    title: '每日净流入趋势',
-                    key: 'daily_chart',
-                    width: sectorInflowDays === 3 ? 120 : 180,
-                    render: (_: any, record: any) => {
-                      const dailyData = record.daily_data || []
-                      if (dailyData.length === 0) return '-'
-                      
-                      // 后端已按日期正序返回（从旧到新），取最后N天（最近的N个交易日）
-                      const recentData = dailyData.slice(-sectorInflowDays)
-                      
-                      // 计算最大值用于归一化
-                      const maxInflow = Math.max(...recentData.map((d: any) => Math.abs(d.main_net_inflow)), 1)
-                      
-                      // 小巧的正方形柱状图
-                      const barSize = sectorInflowDays === 3 ? 20 : 24  // 3天用20px，5天用24px
-                      const gap = 3  // 柱子之间的间距
-                      
-                      return (
-                        <div style={{ 
-                          display: 'flex', 
-                          alignItems: 'flex-end', 
-                          justifyContent: 'center',
-                          gap: gap,
-                          height: barSize + 20,
-                          paddingTop: 2
-                        }}>
-                          {recentData.map((day: any, idx: number) => {
-                            const height = Math.abs(day.main_net_inflow) / maxInflow * barSize
-                            const color = day.main_net_inflow >= 0 ? '#ff4d4f' : '#52c41a'
-                            return (
-                              <div 
-                                key={idx} 
-                                style={{ 
-                                  display: 'flex', 
-                                  flexDirection: 'column', 
-                                  alignItems: 'center',
-                                  position: 'relative'
-                                }}
-                                title={`${day.trade_date}: ${(day.main_net_inflow / 10000).toFixed(2)} 亿元`}
-                              >
-                                <div
-                                  style={{
-                                    width: `${barSize}px`,
-                                    height: `${Math.max(height, day.main_net_inflow === 0 ? 1 : 2)}px`,
-                                    backgroundColor: color,
-                                    borderRadius: '2px',
-                                    minHeight: day.main_net_inflow === 0 ? 1 : 2,
-                                  }}
-                                />
-                                <div style={{ 
-                                  fontSize: 9, 
-                                  color: '#999', 
-                                  marginTop: 2,
-                                  transform: 'scale(0.85)',
-                                  whiteSpace: 'nowrap'
-                                }}>
-                                  {day.trade_date.split('-').slice(1).join('/')}
-                                </div>
-                              </div>
-                            )
-                          })}
-                        </div>
-                      )
-                    }
-                  }] : []),
-                  {
-                    title: '超大单',
-                    dataIndex: sectorInflowDays === 1 ? 'super_large_inflow' : 'total_super_large',
-                    key: 'super_large',
-                    width: 120,
-                    align: 'right',
-                    render: (value: number, record: any) => {
-                      const val = sectorInflowDays === 1 ? (value || 0) : (record.total_super_large || 0)
-                      return (val / 10000).toFixed(2) + ' 亿元'
-                    }
-                  },
-                  {
-                    title: '大单',
-                    dataIndex: sectorInflowDays === 1 ? 'large_inflow' : 'total_large',
-                    key: 'large',
-                    width: 120,
-                    align: 'right',
-                    render: (value: number, record: any) => {
-                      const val = sectorInflowDays === 1 ? (value || 0) : (record.total_large || 0)
-                      return (val / 10000).toFixed(2) + ' 亿元'
-                    }
-                  }
-                ]}
-                rowKey="sector_name"
-                pagination={{ 
-                  current: sectorInflowPage,
-                  pageSize: 5,
-                  showTotal: (total) => `共 ${total} 个板块`,
-                  onChange: (page) => setSectorInflowPage(page)
-                }}
-                size="small"
-              />
-            </div>
-          )}
-        </Panel>
-      </Collapse>
+        </>
+      )}
 
+      
       <Collapse defaultActiveKey={[]} style={{ marginBottom: 24 }}>
         <Panel
           header={
             <span>
               <FireOutlined style={{ marginRight: 8 }} />
-              雪球热度榜 (前100)
+              雪球热度榜 (Top {xueqiuSheeps.length})
             </span>
           }
           key="xueqiu"
         >
-          <Table
-            dataSource={xueqiuSheeps}
-            columns={xueqiuSheepsColumns}
-            rowKey={(record) => `${record.source}-${record.sheep_code}-${record.rank}`}
-            pagination={{ pageSize: 20 }}
-            size="small"
-            onRow={(record) => ({
-              onClick: () => handleSheepClick(record.sheep_code, getDisplayName(record.sheep_name, record.sheep_code)),
-              style: { cursor: 'pointer' }
-            })}
-          />
+          {/* 热门板块聚合视图 */}
+          {aggregatedHotSectors.length > 0 && (
+            <div style={{ marginBottom: 24 }}>
+              <div style={{ marginBottom: 12, fontWeight: 'bold', color: '#333' }}>
+                <FireOutlined style={{ marginRight: 8, color: '#ff4d4f' }} />
+                热门板块
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16 }}>
+                {aggregatedHotSectors.map((sector, idx) => {
+                  const color = getSectorColor(idx)
+                  const isExpanded = xueqiuExpandedSectors.has(sector.name)
+                  const displayStocks = isExpanded ? sector.stocks : sector.stocks.slice(0, 5)
+                  
+                  return (
+                    <Card
+                      key={sector.name}
+                      size="small"
+                      style={{ 
+                        width: isMobile ? '100%' : 280,
+                        borderTop: `3px solid ${color}`,
+                        boxShadow: idx === 0 ? '0 2px 8px rgba(255, 77, 79, 0.3)' : undefined
+                      }}
+                      title={
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                          <span 
+                            style={{ 
+                              color, 
+                              fontWeight: 'bold', 
+                              cursor: 'pointer',
+                              display: 'flex',
+                              alignItems: 'center'
+                            }}
+                            onClick={() => handleSectorClick(sector.name)}
+                            title="点击查看K线图"
+                          >
+                            {idx === 0 && <FireOutlined style={{ marginRight: 4 }} />}
+                            {sector.name}
+                          </span>
+                          <Tag color={idx === 0 ? 'red' : idx === 1 ? 'orange' : 'blue'}>
+                            {sector.count}只
+                          </Tag>
+                        </div>
+                      }
+                    >
+                      <div style={{ maxHeight: isExpanded ? 300 : 150, overflowY: 'auto' }}>
+                        {displayStocks.map((stock, stockIdx) => (
+                          <div 
+                            key={stock.sheep_code}
+                            style={{ 
+                              padding: '4px 0',
+                              borderBottom: stockIdx < displayStocks.length - 1 ? '1px solid #f0f0f0' : 'none',
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              alignItems: 'center'
+                            }}
+                          >
+                            <span 
+                              style={{ 
+                                cursor: 'pointer', 
+                                color: '#1890ff',
+                                flex: 1,
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap'
+                              }}
+                              onClick={() => handleSheepClick(stock.sheep_code, getDisplayName(stock.sheep_name, stock.sheep_code))}
+                              title="点击查看K线图"
+                            >
+                              {getDisplayName(stock.sheep_name, stock.sheep_code)}
+                            </span>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 8 }}>
+                              {stock.change_pct !== undefined && (
+                                <span style={{ 
+                                  color: stock.change_pct >= 0 ? '#ef5350' : '#26a69a',
+                                  fontSize: 12,
+                                  fontWeight: 'bold'
+                                }}>
+                                  {stock.change_pct >= 0 ? '+' : ''}{stock.change_pct.toFixed(2)}%
+                                </span>
+                              )}
+                              <Tag color="geekblue" style={{ margin: 0, fontSize: 10 }}>#{stock.rank}</Tag>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      {sector.stocks.length > 5 && (
+                        <div 
+                          style={{ 
+                            marginTop: 8, 
+                            textAlign: 'center', 
+                            cursor: 'pointer',
+                            color: '#1890ff',
+                            fontSize: 12
+                          }}
+                          onClick={() => toggleSectorExpanded(sector.name)}
+                        >
+                          {isExpanded ? (
+                            <><DownOutlined style={{ marginRight: 4 }} />收起</>
+                          ) : (
+                            <><RightOutlined style={{ marginRight: 4 }} />查看更多 ({sector.stocks.length - 5})</>
+                          )}
+                        </div>
+                      )}
+                    </Card>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+          
+          {/* 原始榜单表格 */}
+          <div style={{ marginTop: aggregatedHotSectors.length > 0 ? 16 : 0 }}>
+            <div style={{ marginBottom: 12, fontWeight: 'bold', color: '#333' }}>
+              完整榜单
+            </div>
+            <Table
+              dataSource={xueqiuSheeps}
+              columns={xueqiuSheepsColumns}
+              rowKey={(record) => `${record.source}-${record.sheep_code}-${record.rank}`}
+              pagination={{ pageSize: 20 }}
+              size="small"
+              onRow={(record) => ({
+                onClick: () => handleSheepClick(record.sheep_code, getDisplayName(record.sheep_name, record.sheep_code)),
+                style: { cursor: 'pointer' }
+              })}
+            />
+          </div>
         </Panel>
       </Collapse>
 
-      {/* K线图弹窗（参考Tab1的实现） */}
+      {/* K线图弹窗（支持肥羊和板块） */}
       <Modal
         title={
           <Space>
-            <span>{selectedSheepForKline?.name || selectedSheepForKline?.code} - K线图</span>
+            <span>
+              {selectedSheepForKline ? `${selectedSheepForKline.name || selectedSheepForKline.code} - K线图` : 
+               selectedSectorForKline ? `${selectedSectorForKline.name} - 资金流走势图` : 'K线图'}
+            </span>
           </Space>
         }
         open={klineModalVisible}
-        onCancel={() => setKlineModalVisible(false)}
+        onCancel={() => {
+          setKlineModalVisible(false)
+          setSelectedSheepForKline(null)
+          setSelectedSectorForKline(null)
+        }}
         footer={null}
         width={isMobile ? '95%' : 1200}
         style={{ top: 20 }}
       >
-        {klineLoading ? (
+        {(klineLoading || sectorKlineLoading) ? (
           <div style={{ textAlign: 'center', padding: 50 }}>
             <Spin size="large" />
           </div>
+        ) : selectedSectorForKline && sectorKlineData.length > 0 ? (
+          // 板块K线：主力流入
+          <ReactECharts
+            option={{
+              title: { text: `${selectedSectorForKline.name} - 资金流走势图`, left: 'center' },
+              tooltip: { trigger: 'axis', axisPointer: { type: 'cross' } },
+              legend: { data: ['主力净流入'], top: 30 },
+              xAxis: { type: 'category', data: sectorKlineData.map(d => d.trade_date), boundaryGap: false },
+              yAxis: [
+                { type: 'value', name: '主力净流入(亿元)', position: 'left' }
+              ],
+              series: [
+                {
+                  name: '主力净流入',
+                  type: 'bar',
+                  data: sectorKlineData.map(d => ({
+                    value: (d.main_net_inflow || 0) / 10000,
+                    itemStyle: { color: (d.main_net_inflow || 0) >= 0 ? '#ef5350' : '#26a69a' }
+                  }))
+                }
+              ]
+            }}
+            style={{ height: isMobile ? '400px' : '600px', width: '100%' }}
+          />
         ) : klineData.length > 0 ? (
           <ReactECharts
             option={getKLineOption()}
@@ -2178,36 +2398,6 @@ K线数据（最近10天）：${JSON.stringify(klineSummary, null, 2)}
         ) : (
           <div style={{ textAlign: 'center', padding: 50, color: '#999' }}>
             暂无K线数据
-          </div>
-        )}
-      </Modal>
-
-      <Modal
-        title={`${selectedSectorForSheeps?.name} - 全部肥羊列表`}
-        open={sectorSheepsModalVisible}
-        onCancel={() => setSectorSheepsModalVisible(false)}
-        footer={null}
-        width={isMobile ? '95%' : 1000}
-        style={{ top: 20 }}
-      >
-        {selectedSectorForSheeps && selectedSectorForSheeps.sheep.length > 0 ? (
-          <Table
-            dataSource={selectedSectorForSheeps.sheep}
-            columns={sectorSheepsColumns}
-            rowKey={(record) => record.sheep_code}
-            pagination={{ pageSize: 20 }}
-            size="small"
-            onRow={(record) => ({
-              onClick: () => {
-                setSectorSheepsModalVisible(false)
-                handleSheepClick(record.sheep_code, getDisplayName(record.sheep_name, record.sheep_code))
-              },
-              style: { cursor: 'pointer' }
-            })}
-          />
-        ) : (
-          <div style={{ textAlign: 'center', padding: 50, color: '#999' }}>
-            暂无肥羊数据
           </div>
         )}
       </Modal>
@@ -2327,6 +2517,8 @@ K线数据（最近10天）：${JSON.stringify(klineSummary, null, 2)}
           </div>
         )}
       </Modal>
+
+
 
       {/* 板块涨幅前10概念股Modal */}
       <Modal
@@ -2536,6 +2728,20 @@ const ModelSelectModal: React.FC<{
       </div>
     </div>
   )
+}
+
+// 添加全局样式用于高亮潜力标的
+if (typeof document !== 'undefined') {
+  const style = document.createElement('style')
+  style.textContent = `
+    .high-potential-row {
+      background-color: #fff1f0 !important;
+    }
+    .high-potential-row:hover {
+      background-color: #ffe7e5 !important;
+    }
+  `
+  document.head.appendChild(style)
 }
 
 export default Tab2

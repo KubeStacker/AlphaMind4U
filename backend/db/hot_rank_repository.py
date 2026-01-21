@@ -231,9 +231,11 @@ class HotRankRepository:
                 for row in consecutive_result:
                     consecutive_days_map[row[0]] = row[1]
             
-            # 批量查询所属板块（通过概念映射到虚拟板块）
+            # 批量查询所属板块（使用聚类后的板块映射）
             sectors_map = {}
             if sheep_codes:
+                from services.clustered_sector_mapping_service import ClusteredSectorMappingService
+                
                 params = {}
                 placeholders = []
                 for i, code in enumerate(sheep_codes):
@@ -241,29 +243,37 @@ class HotRankRepository:
                     placeholders.append(f':{param_name}')
                     params[param_name] = code
                 
+                # 查询原始概念名
                 sectors_query = text(f"""
                     SELECT 
                         scm.sheep_code,
-                        vba.virtual_board_name,
+                        ct.concept_name,
                         MAX(scm.weight) as max_weight
                     FROM sheep_concept_mapping scm
                     INNER JOIN concept_theme ct ON scm.concept_id = ct.concept_id
-                    INNER JOIN virtual_board_aggregation vba ON ct.concept_name = vba.source_concept_name
                     WHERE scm.sheep_code IN ({','.join(placeholders)})
                       AND ct.is_active = 1
-                      AND vba.is_active = 1
-                    GROUP BY scm.sheep_code, vba.virtual_board_name
+                    GROUP BY scm.sheep_code, ct.concept_name
                     ORDER BY scm.sheep_code, max_weight DESC
                 """)
                 
                 sectors_result = db.execute(sectors_query, params)
+                
+                # 将原始概念名映射到聚类后的板块名
                 for row in sectors_result:
                     sheep_code_sector = row[0]
-                    sector_name = row[1]
+                    original_concept_name = row[1]
+                    
+                    # 映射到聚类后的板块名
+                    clustered_sector = ClusteredSectorMappingService.map_concept_to_clustered_sector(original_concept_name)
+                    
                     if sheep_code_sector not in sectors_map:
                         sectors_map[sheep_code_sector] = []
-                    if len(sectors_map[sheep_code_sector]) < 3:  # 最多3个板块
-                        sectors_map[sheep_code_sector].append(sector_name)
+                    
+                    # 去重并限制最多3个板块
+                    if clustered_sector not in sectors_map[sheep_code_sector]:
+                        if len(sectors_map[sheep_code_sector]) < 3:
+                            sectors_map[sheep_code_sector].append(clustered_sector)
             
             # 合并数据
             for stock in stocks_data:

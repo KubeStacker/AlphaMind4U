@@ -10,42 +10,6 @@ v6.0核心重构目标：
 4. 消除硬编码：移除散落各处的魔数，改用配置驱动
 5. 消除重复逻辑：Level 2不再做Level 0/Level 1的"二次确认"
 
-架构设计：
-================
-┌─────────────────────────────────────────────────────────────┐
-│                    Pipeline Flow                             │
-├─────────────────────────────────────────────────────────────┤
-│  Input: trade_date                                           │
-│    │                                                         │
-│    ▼                                                         │
-│  [Market Regime] 市场状态识别 (Attack/Defense/Balance)        │
-│    │                                                         │
-│    ▼                                                         │
-│  [Filter Layer] 硬性过滤层 ─────────────────────────┐        │
-│    ├─ SQL过滤: ST/新股/涨停/基础市值/基础RPS         │        │
-│    └─ 数据验证: 历史数据充足性检查                   │        │
-│    │                                                 ▼        │
-│    ▼                                              (剔除)      │
-│  [Feature Layer] 特征提取层                                  │
-│    ├─ 技术因子: RPS, VCP, 量比, 均线位置                     │
-│    ├─ 资金因子: 资金流占比, 超大单, II%                      │
-│    └─ 概念因子: 概念共振, 板块联动                           │
-│    │                                                         │
-│    ▼                                                         │
-│  [Score Layer] 多因子评分层 (Z-Score标准化 + 动态权重)        │
-│    ├─ 技术得分 (0-40分)                                      │
-│    ├─ 资金得分 (0-30分)                                      │
-│    └─ 概念得分 (0-30分)                                      │
-│    │                                                         │
-│    ▼                                                         │
-│  [Validate Layer] 启动质量验证层 (扣分制)                     │
-│    ├─ 一票否决: 墓碑线/放量滞涨/主力出货                      │
-│    └─ 渐进扣分: 上影线/尾盘急拉/孤军深入                      │
-│    │                                                         │
-│    ▼                                                         │
-│  [Output] 推荐结果 + 诊断信息 + 元数据                        │
-└─────────────────────────────────────────────────────────────┘
-
 使用说明：
 ================
 1. 默认参数已优化，直接调用即可：
@@ -170,10 +134,13 @@ class AlphaModelT7ConceptFlow:
     def __init__(self, config: ModelConfig = None):
         self.config = config or ModelConfig()
         self.regime_config = RegimeAdaptiveConfig()
-        self.model_version = "T7_Concept_Flow_v6.0"
+        self.model_version = "T7_Concept_Flow_v7.0_Evolution"
         self.regime = "Balance"
         self.rsrs_zscore = 0.0
         self.regime_score = 0.0
+        # T7 Evolution v7.0 新增组件（暂时注释，等待实现）
+        # self.sector_cluster_algo = SectorClusterAlgo()
+        # self.sector_metrics_etl = SectorMetricsETL()
     
     # ============================================
     # 默认参数（向后兼容）
@@ -681,6 +648,9 @@ class AlphaModelT7ConceptFlow:
             df['is_concept_leader'] = 0
             df['sector_linkage_strength'] = 0.0
             df['tag_total_inflow'] = 0.0
+            # T7 Evolution v7.0 新增字段
+            df['sector_rps_20'] = 0.0
+            df['sector_rps_50'] = 0.0
             return df
         
         try:
@@ -788,6 +758,46 @@ class AlphaModelT7ConceptFlow:
                     if up_ratio >= 0.6 and tag_avg >= 2.0:
                         strength = min(tag_avg / 5.0, 1.0) * up_ratio
                         df.loc[df['resonance_base_tag'] == tag_name, 'sector_linkage_strength'] = strength
+            
+            # T7 Evolution v7.0: 获取板块RPS信息
+            # 为每个股票关联其所属板块的RPS数据
+            try:
+                # 获取所有概念名称
+                concept_names = df_concepts['concept_name'].unique().tolist()
+                if concept_names:
+                    placeholders_concepts = ','.join(['%s'] * len(concept_names))
+                    with get_raw_connection() as conn:
+                        cursor = conn.cursor()
+                        cursor.execute(f"""
+                            SELECT sector_name, sector_rps_20, sector_rps_50
+                            FROM sector_money_flow
+                            WHERE sector_name IN ({placeholders_concepts})
+                              AND trade_date = %s
+                        """, concept_names + [trade_date])
+                        sector_rps_rows = cursor.fetchall()
+                        cursor.close()
+                        
+                        if sector_rps_rows:
+                            sector_rps_df = pd.DataFrame(sector_rps_rows, columns=['sector_name', 'sector_rps_20', 'sector_rps_50'])
+                            
+                            # 为每个股票匹配其概念对应的板块RPS数据
+                            # 如果一个股票有多个概念，取RPS最高的那个
+                            df_with_concepts = df.merge(df_concepts[['sheep_code', 'concept_name']], on='sheep_code', how='left')
+                            df_with_concepts = df_with_concepts.merge(sector_rps_df, left_on='resonance_base_tag', right_on='sector_name', how='left')
+                            
+                            # 如果没有匹配到RPS数据，使用默认值
+                            df['sector_rps_20'] = df_with_concepts['sector_rps_20'].fillna(0.0)
+                            df['sector_rps_50'] = df_with_concepts['sector_rps_50'].fillna(0.0)
+                        else:
+                            df['sector_rps_20'] = 0.0
+                            df['sector_rps_50'] = 0.0
+                else:
+                    df['sector_rps_20'] = 0.0
+                    df['sector_rps_50'] = 0.0
+            except Exception as e:
+                logger.warning(f"获取板块RPS数据失败: {e}")
+                df['sector_rps_20'] = 0.0
+                df['sector_rps_50'] = 0.0
             
             logger.info(f"Feature Layer: 概念因子计算完成，共振分数范围 {df['concept_resonance_score'].min():.0f}~{df['concept_resonance_score'].max():.0f}")
             return df
@@ -919,6 +929,25 @@ class AlphaModelT7ConceptFlow:
         linkage_score = np.where(df['sector_linkage_strength'] > 0.5, 10,
                        np.where(df['sector_linkage_strength'] > 0.3, 7,
                        np.where(df['sector_linkage_strength'] > 0.1, 4, 0)))
+        
+        # T7 Evolution v7.0: 分歧低吸公式
+        # 前提: Sector_RPS_50 > 85 (必须是主线) AND Stock_Change_Pct < 0 (个股回调)
+        # 加分项: Main_Inflow > 0 (资金逆势买入) + Vol_Ratio < 0.7 (极致缩量)
+        
+        # 检查是否存在新的RPS字段
+        if 'sector_rps_50' in df.columns:
+            # 个股回调且属于强势主线的股票给予额外加分
+            divergence_bonus = np.where(
+                (df.get('sector_rps_50', 0) > 85) &  # 主线地位
+                (df['change_pct'] < 0) &  # 个股回调
+                (df.get('main_net_inflow', 0) > 0) &  # 资金逆势买入
+                (df.get('vol_ratio', 10) < 0.7),  # 极致缩量
+                10,  # 分歧低吸加分
+                0
+            )
+            
+            # 如果股票满足分歧低吸条件，增加额外分数
+            resonance_norm = resonance_norm + divergence_bonus
         
         return pd.Series(resonance_norm + linkage_score, index=df.index).clip(0, 30)
     
@@ -1150,6 +1179,162 @@ class AlphaModelT7ConceptFlow:
         logger.info(f"Final Filter - 最终剩余: {len(df)}/{initial_count}")
         return df
     
+    def signal_radar_layer(self, df: pd.DataFrame, trade_date: date, params: Dict) -> pd.DataFrame:
+        """
+        信号雷达与实时看板 (T7 Evolution v7.0)
+        
+        信号逻辑:
+        - 主线确认: 当 sector_rps_20 首次突破 90 且 limit_up_count >= 5 -> 标记 "New Cycle" (新周期)
+        - 高潮预警: 当 sector_rps_20 > 95 且 change_pct > 4% (一致性过强) -> 标记 "Climax Risk"
+        """
+        if df.empty:
+            return df
+        
+        df = df.copy()
+        
+        # 检查是否有新的板块信号
+        try:
+            with get_raw_connection() as conn:
+                cursor = conn.cursor()
+                
+                # 查找强势板块
+                cursor.execute("""
+                    SELECT sector_name, sector_rps_20, change_pct, limit_up_count
+                    FROM sector_money_flow
+                    WHERE trade_date = %s
+                      AND sector_rps_20 IS NOT NULL
+                """, [trade_date])
+                sector_data = cursor.fetchall()
+                cursor.close()
+                
+                if sector_data:
+                    for sector_name, rps_20, change_pct, limit_up_count in sector_data:
+                        if rps_20 and rps_20 >= 90 and limit_up_count and limit_up_count >= 5:
+                            # 新周期确认信号
+                            signal_data = {
+                                'trade_date': trade_date,
+                                'sector_name': sector_name,
+                                'signal_type': 'OPPORTUNITY',
+                                'strategy_code': 'NEW_CYCLE',
+                                'technical_context': {
+                                    'sector_rps_20': rps_20,
+                                    'change_pct': change_pct,
+                                    'limit_up_count': limit_up_count
+                                },
+                                'confidence_score': 90.0
+                            }
+                            # 保存信号快照
+                            try:
+                                from db.sector_signal_snapshot_repository import SectorSignalSnapshotRepository
+                                repo = SectorSignalSnapshotRepository()
+                                repo.save_signal_snapshot(signal_data)
+                                logger.info(f"新周期信号: {sector_name} RPS20={rps_20}, 涨停数={limit_up_count}")
+                            except Exception as e:
+                                logger.warning(f"保存新周期信号失败: {e}")
+                        
+                        elif rps_20 and rps_20 > 95 and change_pct and change_pct > 4.0:
+                            # 高潮风险预警
+                            signal_data = {
+                                'trade_date': trade_date,
+                                'sector_name': sector_name,
+                                'signal_type': 'RISK',
+                                'strategy_code': 'CLIMAX_RISK',
+                                'technical_context': {
+                                    'sector_rps_20': rps_20,
+                                    'change_pct': change_pct,
+                                    'limit_up_count': limit_up_count
+                                },
+                                'confidence_score': 85.0
+                            }
+                            # 保存风险信号快照
+                            try:
+                                from db.sector_signal_snapshot_repository import SectorSignalSnapshotRepository
+                                repo = SectorSignalSnapshotRepository()
+                                repo.save_signal_snapshot(signal_data)
+                                logger.info(f"高潮风险预警: {sector_name} RPS20={rps_20}, 涨幅={change_pct}%")
+                            except Exception as e:
+                                logger.warning(f"保存高潮风险信号失败: {e}")
+        except Exception as e:
+            logger.warning(f"信号雷达执行失败: {e}")
+        
+        return df
+    
+    def main_line_gatekeeper_layer(self, df: pd.DataFrame, trade_date: date, params: Dict, regime_info: Dict) -> pd.DataFrame:
+        """
+        主线熔断层 (The Gatekeeper) - T7 Evolution v7.0
+        
+        规则: 仅允许Top 3 主线（及被折叠的关联板块）内的个股通过
+        """
+        if df.empty:
+            return df
+        
+        df = df.copy()
+        
+        # 获取Top 3主线板块（使用sector_money_flow表替代）
+        # 暂时注释掉 SectorClusterAlgo，使用 sector_money_flow 表的数据
+        try:
+            with get_raw_connection() as conn:
+                main_line_query = """
+                    SELECT sector_name, main_net_inflow
+                    FROM sector_money_flow
+                    WHERE trade_date = %s
+                      AND main_net_inflow > 10000
+                    ORDER BY main_net_inflow DESC
+                    LIMIT 3
+                """
+                main_line_df = pd.read_sql(main_line_query, conn, params=[trade_date])
+                
+                if main_line_df.empty:
+                    logger.warning("Main Line Gatekeeper: 未识别到资金流入>1亿的主线板块，跳过熔断")
+                    return df
+                
+                main_line_names = main_line_df['sector_name'].tolist()
+                logger.info(f"Main Line Gatekeeper: 识别到 {len(main_line_names)} 条主线板块: {main_line_names}")
+        except Exception as e:
+            logger.warning(f"Main Line Gatekeeper: 获取主线板块失败: {e}，跳过熔断")
+            return df
+        
+        # 获取这些主线板块下的个股（通过概念映射）
+        try:
+            sheep_codes = df['sheep_code'].tolist()
+            
+            with get_raw_connection() as conn:
+                cursor = conn.cursor()
+                
+                # 查询这些股票是否属于主线板块相关的概念
+                placeholders = ','.join(['%s'] * len(sheep_codes))
+                cursor.execute(f"""
+                    SELECT scm.sheep_code, ct.concept_name
+                    FROM sheep_concept_mapping scm
+                    INNER JOIN concept_theme ct ON scm.concept_id = ct.concept_id
+                    WHERE scm.sheep_code IN ({placeholders})
+                      AND ct.concept_name IN ({','.join(['%s'] * len(main_line_names))})
+                      AND ct.is_active = 1
+                """, sheep_codes + main_line_names)
+                
+                concept_rows = cursor.fetchall()
+                cursor.close()
+                
+                if concept_rows:
+                    concept_df = pd.DataFrame(concept_rows, columns=['sheep_code', 'concept_name'])
+                    main_line_sheep = set(concept_df['sheep_code'].tolist())
+                else:
+                    main_line_sheep = set()
+                    
+            # 对于不在主线板块中的股票，进行过滤
+            initial_count = len(df)
+            df['in_main_line'] = df['sheep_code'].isin(main_line_sheep)
+            df = df[df['in_main_line']]
+            
+            logger.info(f"Main Line Gatekeeper: {initial_count} -> {len(df)} 只 (主线板块股票: {len(main_line_sheep)})")
+            
+        except Exception as e:
+            logger.error(f"Main Line Gatekeeper执行失败: {e}", exc_info=True)
+            # 如果主线识别失败，返回原始数据
+            return df
+        
+        return df
+    
     # ============================================
     # 主Pipeline - 运行完整流程
     # ============================================
@@ -1204,15 +1389,18 @@ class AlphaModelT7ConceptFlow:
             # Layer 4: Validate
             df = self.validate_layer(df, params, regime_info)
             
-            # Layer 5: Final Filter
-            df = self.final_filter_layer(df, params, regime_info)
+            # Layer 5: Main Line Gatekeeper (T7 Evolution v7.0) - 新增主线熔断层
+            df = self.main_line_gatekeeper_layer(df, trade_date, params, regime_info)
             funnel_data['L3_pass'] = len(df)
-            logger.info(f"Pipeline Funnel - Final Filter: {funnel_data['L2_pass']} -> {len(df)} (通过率: {(len(df)/funnel_data['L2_pass']*100):.1f}%)" if funnel_data['L2_pass'] > 0 else f"Pipeline Funnel - Final Filter: {funnel_data['L2_pass']} -> {len(df)}")
+            logger.info(f"Pipeline Funnel - Main Line Gatekeeper: {funnel_data['L2_pass']} -> {len(df)} (通过率: {(len(df)/funnel_data['L2_pass']*100):.1f}%)" if funnel_data['L2_pass'] > 0 else f"Pipeline Funnel - Main Line Gatekeeper: {funnel_data['L2_pass']} -> {len(df)}")
             
             if df.empty:
-                return self._empty_result(diagnostic_info, funnel_data, regime_info, "Final Filter后无数据")
+                return self._empty_result(diagnostic_info, funnel_data, regime_info, "Main Line Gatekeeper后无数据")
             
-            logger.info(f"Post-Final Filter: 进入启动质量/AI分数筛选阶段，剩余 {len(df)} 只股票")
+            logger.info(f"Post-Gatekeeper: 进入启动质量/AI分数筛选阶段，剩余 {len(df)} 只股票")
+            
+            # Signal Radar Layer (T7 Evolution v7.0) - 信号雷达监控
+            df = self.signal_radar_layer(df, trade_date, params)
             
             # 启动质量筛选
             min_breakout_quality = params.get('min_breakout_quality', self.config.MIN_BREAKOUT_QUALITY)
@@ -1330,7 +1518,11 @@ class AlphaModelT7ConceptFlow:
                 'estimated_mv': float(row.get('estimated_mv', 0.0)) if pd.notna(row.get('estimated_mv')) else 0.0,
                 'return_5d': None,
                 'return_10d': None,
-                'return_nd': None
+                'return_nd': None,
+                # T7 Evolution v7.0 新增字段
+                'sector_rps_20': float(row.get('sector_rps_20', 0.0)) if pd.notna(row.get('sector_rps_20')) else None,
+                'sector_rps_50': float(row.get('sector_rps_50', 0.0)) if pd.notna(row.get('sector_rps_50')) else None,
+                'divergence_low_absorption': bool(row.get('change_pct', 0) < 0 and row.get('sector_rps_50', 0) > 85 and row.get('main_net_inflow', 0) > 0 and row.get('vol_ratio', 10) < 0.7)
             }
             results.append(result)
         

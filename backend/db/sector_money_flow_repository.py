@@ -18,26 +18,51 @@ class SectorMoneyFlowRepository:
         if not data_list:
             return
         
+        # 为每条数据补充缺失的字段（如果不存在则设为None）
+        normalized_data = []
+        for item in data_list:
+            normalized_item = {
+                'sector_name': item.get('sector_name'),
+                'trade_date': item.get('trade_date'),
+                'main_net_inflow': item.get('main_net_inflow', 0.0),
+                'super_large_inflow': item.get('super_large_inflow', 0.0),
+                'large_inflow': item.get('large_inflow', 0.0),
+                'medium_inflow': item.get('medium_inflow', 0.0),
+                'small_inflow': item.get('small_inflow', 0.0),
+                # 这些字段可能在初次采集时不存在，设为None（允许NULL）
+                'change_pct': item.get('change_pct'),
+                'avg_turnover': item.get('avg_turnover'),
+                'limit_up_count': item.get('limit_up_count'),
+                'top_weight_stocks': item.get('top_weight_stocks'),
+            }
+            normalized_data.append(normalized_item)
+        
         with get_db() as db:
             query = text("""
                 INSERT INTO sector_money_flow
                 (sector_name, trade_date, main_net_inflow, super_large_inflow, 
-                 large_inflow, medium_inflow, small_inflow)
+                 large_inflow, medium_inflow, small_inflow, change_pct, avg_turnover,
+                 limit_up_count, top_weight_stocks)
                 VALUES 
                 (:sector_name, :trade_date, :main_net_inflow, :super_large_inflow, 
-                 :large_inflow, :medium_inflow, :small_inflow)
+                 :large_inflow, :medium_inflow, :small_inflow, :change_pct, :avg_turnover,
+                 :limit_up_count, :top_weight_stocks)
                 ON DUPLICATE KEY UPDATE
                     main_net_inflow = VALUES(main_net_inflow),
                     super_large_inflow = VALUES(super_large_inflow),
                     large_inflow = VALUES(large_inflow),
                     medium_inflow = VALUES(medium_inflow),
                     small_inflow = VALUES(small_inflow),
+                    change_pct = COALESCE(VALUES(change_pct), change_pct),
+                    avg_turnover = COALESCE(VALUES(avg_turnover), avg_turnover),
+                    limit_up_count = COALESCE(VALUES(limit_up_count), limit_up_count),
+                    top_weight_stocks = COALESCE(VALUES(top_weight_stocks), top_weight_stocks),
                     updated_at = CURRENT_TIMESTAMP
             """)
             
             batch_size = 500
-            for i in range(0, len(data_list), batch_size):
-                batch = data_list[i:i+batch_size]
+            for i in range(0, len(normalized_data), batch_size):
+                batch = normalized_data[i:i+batch_size]
                 db.execute(query, batch)
                 db.commit()
     
@@ -53,7 +78,8 @@ class SectorMoneyFlowRepository:
         with get_db() as db:
             query = text("""
                 SELECT trade_date, main_net_inflow, super_large_inflow, large_inflow,
-                       medium_inflow, small_inflow
+                       medium_inflow, small_inflow, change_pct, avg_turnover,
+                       limit_up_count, top_weight_stocks, sector_rps_20, sector_rps_50, ma_status
                 FROM sector_money_flow
                 WHERE sector_name = :sector_name
                 ORDER BY trade_date DESC
@@ -62,14 +88,24 @@ class SectorMoneyFlowRepository:
             
             result = db.execute(query, {'sector_name': sector_name, 'limit': limit})
             data_list = []
+            
             for row in result:
+                trade_date = row[0]
+                
                 data_list.append({
-                    'trade_date': row[0],
+                    'trade_date': trade_date,
                     'main_net_inflow': float(row[1]) if row[1] is not None else 0.0,
                     'super_large_inflow': float(row[2]) if row[2] is not None else 0.0,
                     'large_inflow': float(row[3]) if row[3] is not None else 0.0,
                     'medium_inflow': float(row[4]) if row[4] is not None else 0.0,
                     'small_inflow': float(row[5]) if row[5] is not None else 0.0,
+                    'change_pct': float(row[6]) if row[6] is not None else 0.0,
+                    'avg_turnover': float(row[7]) if row[7] is not None else 0.0,
+                    'limit_up_count': int(row[8]) if row[8] is not None else 0,
+                    'top_weight_stocks': row[9] if row[9] is not None else [],
+                    'sector_rps_20': float(row[10]) if row[10] is not None else 0.0,
+                    'sector_rps_50': float(row[11]) if row[11] is not None else 0.0,
+                    'ma_status': int(row[12]) if row[12] is not None else 0,
                 })
             
             # 按日期升序排序（用于图表显示）
@@ -97,7 +133,12 @@ class SectorMoneyFlowRepository:
                             trade_date,
                             main_net_inflow,
                             super_large_inflow,
-                            large_inflow
+                            large_inflow,
+                            change_pct,
+                            limit_up_count,
+                            sector_rps_20,
+                            sector_rps_50,
+                            ma_status
                         FROM sector_money_flow
                         WHERE trade_date = (
                             SELECT MAX(trade_date) FROM sector_money_flow
@@ -115,6 +156,11 @@ class SectorMoneyFlowRepository:
                             'main_net_inflow': float(row[2]) if row[2] is not None else 0.0,
                             'super_large_inflow': float(row[3]) if row[3] is not None else 0.0,
                             'large_inflow': float(row[4]) if row[4] is not None else 0.0,
+                            'change_pct': float(row[5]) if row[5] is not None else 0.0,
+                            'limit_up_count': int(row[6]) if row[6] is not None else 0,
+                            'sector_rps_20': float(row[7]) if row[7] is not None else 0.0,
+                            'sector_rps_50': float(row[8]) if row[8] is not None else 0.0,
+                            'ma_status': int(row[9]) if row[9] is not None else 0,
                         })
                     # 确保按净流入降序排列（最多的在前）
                     sectors.sort(key=lambda x: x['main_net_inflow'], reverse=True)
@@ -186,7 +232,7 @@ class SectorMoneyFlowRepository:
                     
                     # 如果交易日数量不足，使用所有可用的交易日
                     actual_days = len(trade_dates)
-                    logger.info(f"实际获取到 {actual_days} 个交易日: {trade_dates}")
+                    logger.debug(f"实际获取到 {actual_days} 个交易日: {trade_dates}")
                     
                     if actual_days < days:
                         logger.warning(f"⚠️ 数据库中只有 {actual_days} 天的数据，少于请求的 {days} 天。累计数据可能不准确！")
@@ -201,7 +247,12 @@ class SectorMoneyFlowRepository:
                                 trade_date,
                                 main_net_inflow,
                                 super_large_inflow,
-                                large_inflow
+                                large_inflow,
+                                change_pct,
+                                limit_up_count,
+                                sector_rps_20,
+                                sector_rps_50,
+                                ma_status
                             FROM sector_money_flow
                             WHERE trade_date = :trade_date
                             ORDER BY main_net_inflow DESC
@@ -217,6 +268,11 @@ class SectorMoneyFlowRepository:
                                 'main_net_inflow': float(row[2]) if row[2] is not None else 0.0,
                                 'super_large_inflow': float(row[3]) if row[3] is not None else 0.0,
                                 'large_inflow': float(row[4]) if row[4] is not None else 0.0,
+                                'change_pct': float(row[5]) if row[5] is not None else 0.0,
+                                'limit_up_count': int(row[6]) if row[6] is not None else 0,
+                                'sector_rps_20': float(row[7]) if row[7] is not None else 0.0,
+                                'sector_rps_50': float(row[8]) if row[8] is not None else 0.0,
+                                'ma_status': int(row[9]) if row[9] is not None else 0,
                                 'total_inflow': float(row[2]) if row[2] is not None else 0.0,  # 当日数据作为累计数据
                                 'total_super_large': float(row[3]) if row[3] is not None else 0.0,
                                 'total_large': float(row[4]) if row[4] is not None else 0.0,
@@ -225,6 +281,11 @@ class SectorMoneyFlowRepository:
                                     'main_net_inflow': float(row[2]) if row[2] is not None else 0.0,
                                     'super_large_inflow': float(row[3]) if row[3] is not None else 0.0,
                                     'large_inflow': float(row[4]) if row[4] is not None else 0.0,
+                                    'change_pct': float(row[5]) if row[5] is not None else 0.0,
+                                    'limit_up_count': int(row[6]) if row[6] is not None else 0,
+                                    'sector_rps_20': float(row[7]) if row[7] is not None else 0.0,
+                                    'sector_rps_50': float(row[8]) if row[8] is not None else 0.0,
+                                    'ma_status': int(row[9]) if row[9] is not None else 0,
                                 }]
                             })
                         sectors.sort(key=lambda x: x['main_net_inflow'], reverse=True)
@@ -361,7 +422,261 @@ class SectorMoneyFlowRepository:
             logger.error(f"获取板块资金流入推荐失败: {e}", exc_info=True)
             # 返回空列表而不是抛出异常，避免前端网络错误
             return []
+
+    @staticmethod
+    def get_sector_performance_history(sector_name: str, days: int = 60) -> List[Dict]:
+        """
+        获取板块历史表现数据（用于RPS计算）
+        """
+        with get_db() as db:
+            query = text("""
+                SELECT 
+                    trade_date, 
+                    change_pct
+                FROM sector_money_flow
+                WHERE sector_name = :sector_name
+                  AND change_pct IS NOT NULL
+                  AND trade_date >= DATE_SUB(CURDATE(), INTERVAL :days DAY)
+                ORDER BY trade_date ASC
+            """)
+            
+            result = db.execute(query, {
+                'sector_name': sector_name,
+                'days': days
+            })
+            
+            history = []
+            for row in result:
+                history.append({
+                    'trade_date': row[0],
+                    'change_pct': float(row[1]) if row[1] is not None else 0.0
+                })
+            
+            return history
+
+    @staticmethod
+    def update_sector_rps_scores(sector_name: str, trade_date: date, rps_20: float, rps_50: float) -> bool:
+        """
+        更新板块RPS分数
+        """
+        with get_db() as db:
+            query = text("""
+                UPDATE sector_money_flow 
+                SET sector_rps_20 = :rps_20, 
+                    sector_rps_50 = :rps_50,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE sector_name = :sector_name 
+                  AND trade_date = :trade_date
+            """)
+            
+            result = db.execute(query, {
+                'sector_name': sector_name,
+                'trade_date': trade_date,
+                'rps_20': rps_20,
+                'rps_50': rps_50
+            })
+            
+            db.commit()
+            return result.rowcount > 0
+
+    @staticmethod
+    def update_sector_ma_status(sector_name: str, trade_date: date, ma_status: int) -> bool:
+        """
+        更新板块均线状态
+        """
+        with get_db() as db:
+            query = text("""
+                UPDATE sector_money_flow 
+                SET ma_status = :ma_status,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE sector_name = :sector_name 
+                  AND trade_date = :trade_date
+            """)
+            
+            result = db.execute(query, {
+                'sector_name': sector_name,
+                'trade_date': trade_date,
+                'ma_status': ma_status
+            })
+            
+            db.commit()
+            return result.rowcount > 0
+
+    @staticmethod
+    def get_records_with_missing_fields(trade_date: date) -> List[Dict]:
+        """
+        获取指定日期存在缺失字段的记录
+        
+        新增字段包括：
+        - change_pct: 板块指数加权涨跌幅
+        - avg_turnover: 平均换手率
+        - limit_up_count: 涨停家数
+        - top_weight_stocks: 前5大权重股代码（JSON）
+        - sector_rps_20: 20日相对强度
+        - sector_rps_50: 50日相对强度
+        - ma_status: 均线状态
+        
+        Returns:
+            List[Dict]: 包含缺失字段信息的记录列表
+        """
+        with get_db() as db:
+            query = text("""
+                SELECT 
+                    sector_name,
+                    trade_date,
+                    change_pct,
+                    avg_turnover,
+                    limit_up_count,
+                    top_weight_stocks,
+                    sector_rps_20,
+                    sector_rps_50,
+                    ma_status
+                FROM sector_money_flow
+                WHERE trade_date = :trade_date
+                  AND (
+                      change_pct IS NULL
+                      OR avg_turnover IS NULL
+                      OR limit_up_count IS NULL
+                      OR top_weight_stocks IS NULL
+                      OR sector_rps_20 IS NULL
+                      OR sector_rps_50 IS NULL
+                      OR ma_status IS NULL
+                  )
+            """)
+            
+            result = db.execute(query, {'trade_date': trade_date})
+            
+            records = []
+            for row in result:
+                missing_fields = []
+                
+                # 检查每个新增字段是否缺失
+                if row[2] is None:  # change_pct
+                    missing_fields.append('change_pct')
+                if row[3] is None:  # avg_turnover
+                    missing_fields.append('avg_turnover')
+                if row[4] is None:  # limit_up_count
+                    missing_fields.append('limit_up_count')
+                if row[5] is None:  # top_weight_stocks
+                    missing_fields.append('top_weight_stocks')
+                if row[6] is None:  # sector_rps_20
+                    missing_fields.append('sector_rps_20')
+                if row[7] is None:  # sector_rps_50
+                    missing_fields.append('sector_rps_50')
+                if row[8] is None:  # ma_status
+                    missing_fields.append('ma_status')
+                
+                if missing_fields:
+                    records.append({
+                        'sector_name': row[0],
+                        'trade_date': row[1],
+                        'missing_fields': missing_fields
+                    })
+            
+            return records
     
+    @staticmethod
+    def get_all_sectors_for_rps_calculation(trade_date: date) -> List[Dict]:
+        """
+        获取指定日期的所有板块数据用于RPS计算
+        """
+        with get_db() as db:
+            query = text("""
+                SELECT 
+                    sector_name,
+                    change_pct,
+                    avg_turnover,
+                    limit_up_count,
+                    top_weight_stocks,
+                    sector_rps_20,
+                    sector_rps_50,
+                    ma_status
+                FROM sector_money_flow
+                WHERE trade_date = :trade_date
+                ORDER BY change_pct DESC
+            """)
+            
+            result = db.execute(query, {'trade_date': trade_date})
+            
+            sectors = []
+            for row in result:
+                sectors.append({
+                    'sector_name': row[0],
+                    'change_pct': float(row[1]) if row[1] is not None else 0.0,
+                    'avg_turnover': float(row[2]) if row[2] is not None else 0.0,
+                    'limit_up_count': int(row[3]) if row[3] is not None else 0,
+                    'top_weight_stocks': row[4] if row[4] is not None else [],
+                    'sector_rps_20': float(row[5]) if row[5] is not None else 0.0,
+                    'sector_rps_50': float(row[6]) if row[6] is not None else 0.0,
+                    'ma_status': int(row[7]) if row[7] is not None else 0
+                })
+            
+            return sectors
+    
+    @staticmethod
+    def update_sector_additional_fields(sector_name: str, trade_date: date, change_pct: Optional[float] = None, 
+                                         avg_turnover: Optional[float] = None, limit_up_count: Optional[int] = None, 
+                                         top_weight_stocks: Optional[List[str]] = None) -> bool:
+        """
+        更新板块的额外字段
+        
+        Args:
+            sector_name: 板块名称
+            trade_date: 交易日期
+            change_pct: 涨跌幅
+            avg_turnover: 平均换手率
+            limit_up_count: 涨停家数
+            top_weight_stocks: 前几大权重股
+        
+        Returns:
+            bool: 是否更新成功
+        """
+        with get_db() as db:
+            # 构建动态更新语句
+            update_fields = []
+            params = {
+                'sector_name': sector_name,
+                'trade_date': trade_date
+            }
+            
+            if change_pct is not None:
+                update_fields.append('change_pct = :change_pct')
+                params['change_pct'] = change_pct
+            
+            if avg_turnover is not None:
+                update_fields.append('avg_turnover = :avg_turnover')
+                params['avg_turnover'] = avg_turnover
+            
+            if limit_up_count is not None:
+                update_fields.append('limit_up_count = :limit_up_count')
+                params['limit_up_count'] = limit_up_count
+            
+            if top_weight_stocks is not None:
+                update_fields.append('top_weight_stocks = :top_weight_stocks')
+                # 将列表转换为JSON字符串
+                import json
+                if isinstance(top_weight_stocks, list):
+                    params['top_weight_stocks'] = json.dumps(top_weight_stocks, ensure_ascii=False)
+                elif top_weight_stocks == []:
+                    params['top_weight_stocks'] = json.dumps([], ensure_ascii=False)
+                else:
+                    params['top_weight_stocks'] = top_weight_stocks
+            
+            if not update_fields:
+                return False  # 没有要更新的字段
+            
+            query = text(f"""
+                UPDATE sector_money_flow 
+                SET {', '.join(update_fields)},
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE sector_name = :sector_name 
+                  AND trade_date = :trade_date
+            """)
+            
+            result = db.execute(query, params)
+            db.commit()
+            return result.rowcount > 0
+
     @staticmethod
     def get_concept_money_flow_count_for_date(trade_date: date) -> int:
         """

@@ -30,3 +30,8 @@ class SheepService:
     def get_continuous_inflow_stocks(days: int = 5) -> List[Dict]:
         """获取最近N天资金持续流入的标的"""
         return MoneyFlowRepository.get_continuous_inflow_stocks(days=days, min_days=days)
+
+    @staticmethod
+    def get_top_inflow_stocks(days: int = 1, limit: int = 100) -> List[Dict]:
+        """获取最近N个交易日净流入Top标的"""
+        return MoneyFlowRepository.get_top_inflow_stocks(days=days, limit=limit)

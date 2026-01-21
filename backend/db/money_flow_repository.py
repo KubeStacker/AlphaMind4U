@@ -193,6 +193,141 @@ class MoneyFlowRepository:
             filtered_stocks.sort(key=lambda x: x['total_inflow'], reverse=True)
             
             return filtered_stocks
+
+    @staticmethod
+    def get_top_inflow_stocks(days: int = 1, limit: int = 100) -> List[Dict]:
+        """
+        获取最近N个交易日净流入Top标的（按主力净流入合计降序）
+            
+        Args:
+            days: 统计最近N个交易日（1/3/5）
+            limit: 返回数量（默认100，最大200）
+                
+        Returns:
+            标的列表：sheep_code, sheep_name, total_inflow(亿元), avg_daily_inflow(亿元), latest_trade_date, daily_data
+        """
+        if days <= 0:
+            days = 1
+        if limit <= 0:
+            limit = 100
+        if limit > 200:
+            limit = 200
+            
+        with get_db() as db:
+            # 取最近N个交易日（以表里实际日期为准，避免用自然日导致缺失）
+            query = text("""
+                SELECT 
+                    smf.sheep_code,
+                    COALESCE(sb.sheep_name, smf.sheep_code) AS sheep_name,
+                    SUM(COALESCE(smf.main_net_inflow, 0)) AS total_main_net_inflow,
+                    AVG(COALESCE(smf.main_net_inflow, 0)) AS avg_main_net_inflow,
+                    MAX(smf.trade_date) AS latest_trade_date
+                FROM sheep_money_flow smf
+                LEFT JOIN sheep_basic sb 
+                    ON smf.sheep_code = sb.sheep_code AND sb.is_active = 1
+                WHERE smf.trade_date IN (
+                    SELECT trade_date FROM (
+                        SELECT DISTINCT trade_date
+                        FROM sheep_money_flow
+                        ORDER BY trade_date DESC
+                        LIMIT :days
+                    ) d
+                )
+                GROUP BY smf.sheep_code, sheep_name
+                HAVING total_main_net_inflow > 0
+                ORDER BY total_main_net_inflow DESC
+                LIMIT :limit
+            """)
+                
+            result = db.execute(query, {'days': days, 'limit': limit})
+                
+            stocks = []
+            sheep_codes = []
+            for row in result:
+                sheep_code = row[0]
+                sheep_name = row[1] if row[1] and not str(row[1]).strip().isdigit() else sheep_code
+                total_main = float(row[2]) if row[2] is not None else 0.0
+                avg_main = float(row[3]) if row[3] is not None else 0.0
+                latest_date = row[4]
+                    
+                # 兆底：名称无效则用代码
+                if not sheep_name or str(sheep_name).strip().isdigit() or len(str(sheep_name).strip()) == 6:
+                    sheep_name = sheep_code
+                    
+                stocks.append({
+                    'sheep_code': sheep_code,
+                    'sheep_name': sheep_name,
+                    # 与现有接口保持一致：转换为"亿元"
+                    'total_inflow': round(total_main / 10000, 2),
+                    'avg_daily_inflow': round(avg_main / 10000, 2),
+                    'latest_trade_date': latest_date.strftime('%Y-%m-%d') if hasattr(latest_date, 'strftime') else str(latest_date)
+                })
+                sheep_codes.append(sheep_code)
+                
+            # 如果是多天视图，获取每日详细数据
+            if days > 1 and sheep_codes:
+                daily_data_map = MoneyFlowRepository._get_stocks_daily_inflow(sheep_codes, days)
+                for stock in stocks:
+                    stock['daily_data'] = daily_data_map.get(stock['sheep_code'], [])
+                
+            return stocks
+        
+    @staticmethod
+    def _get_stocks_daily_inflow(sheep_codes: List[str], days: int) -> Dict[str, List[Dict]]:
+        """
+        获取多只股票的每日资金流数据
+            
+        Args:
+            sheep_codes: 股票代码列表
+            days: 统计天数
+                
+        Returns:
+            股票代码 -> 每日数据列表的映射
+        """
+        try:
+            with get_db() as db:
+                # 获取这些股票在最近N天的资金流数据
+                placeholders = ','.join([f':code_{i}' for i in range(len(sheep_codes))])
+                query = text(f"""
+                    SELECT sheep_code, trade_date, main_net_inflow
+                    FROM sheep_money_flow
+                    WHERE sheep_code IN ({placeholders})
+                    AND trade_date IN (
+                        SELECT trade_date FROM (
+                            SELECT DISTINCT trade_date 
+                            FROM sheep_money_flow 
+                            ORDER BY trade_date DESC 
+                            LIMIT :days
+                        ) d
+                    )
+                    ORDER BY sheep_code, trade_date ASC
+                """)
+                    
+                params = {'days': days}
+                for i, code in enumerate(sheep_codes):
+                    params[f'code_{i}'] = code
+                    
+                result = db.execute(query, params)
+                    
+                # 按股票代码分组
+                daily_data_map: Dict[str, List[Dict]] = {}
+                for row in result:
+                    sheep_code = row[0]
+                    trade_date = row[1]
+                    main_net_inflow = float(row[2]) if row[2] else 0.0
+                        
+                    if sheep_code not in daily_data_map:
+                        daily_data_map[sheep_code] = []
+                        
+                    daily_data_map[sheep_code].append({
+                        'trade_date': trade_date.strftime('%Y-%m-%d') if hasattr(trade_date, 'strftime') else str(trade_date),
+                        'main_net_inflow': round(main_net_inflow / 10000, 4)  # 转换为亿元
+                    })
+                    
+                return daily_data_map
+        except Exception as e:
+            logger.error(f"获取股票每日数据失败: {e}", exc_info=True)
+            return {}
     
     @staticmethod
     def get_sheep_money_flow_count_for_date(trade_date: date) -> int:

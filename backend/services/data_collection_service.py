@@ -1885,99 +1885,6 @@ class DataCollectionService:
         return updated_count
     
 
-    def backfill_rps_history(self, start_date: date = None, end_date: date = None, days: int = 365) -> Dict[str, any]:
-        """
-        批量补全历史RPS数据
-        
-        Args:
-            start_date: 起始日期，默认为 end_date - days
-            end_date: 结束日期，默认为最新交易日
-            days: 补全天数（默认365天，即1年）
-            
-        Returns:
-            补全结果统计
-        """
-        from datetime import timedelta
-        
-        logger.info(f"开始批量补全RPS历史数据...")
-        
-        try:
-            # 确定日期范围
-            if end_date is None:
-                today = date.today()
-                if not self.trade_date_adapter.is_trading_day(today):
-                    end_date = self.trade_date_adapter.get_last_trading_day(today)
-                else:
-                    end_date = today
-            
-            if start_date is None:
-                start_date = end_date - timedelta(days=days)
-            
-            # 获取日期范围内的所有交易日
-            trading_days = self.trade_date_adapter.get_trading_days_in_range(start_date, end_date)
-            
-            if not trading_days:
-                logger.warning(f"在 {start_date} 至 {end_date} 范围内没有找到交易日")
-                return {'success': False, 'message': '没有找到交易日'}
-            
-            logger.info(f"RPS补全日期范围: {start_date} 至 {end_date}, 共 {len(trading_days)} 个交易日")
-            
-            # 逐日计算RPS（按时间倒序处理，从最近的日期到最远的日期）
-            results = {
-                'success': True,
-                'start_date': str(start_date),
-                'end_date': str(end_date),
-                'total_days': len(trading_days),
-                'success_days': 0,
-                'failed_days': 0,
-                'total_updated': 0,
-                'details': []
-            }
-            
-            # 按时间倒序处理（从最近的日期到最远的日期）
-            trading_days_reversed = sorted(trading_days, reverse=True)
-            
-            for i, trade_date in enumerate(trading_days_reversed):
-                try:
-                    result = self.calculate_and_update_rps(target_date=trade_date)
-                    
-                    if result.get('success'):
-                        results['success_days'] += 1
-                        results['total_updated'] += result.get('updated_count', 0)
-                        results['details'].append({
-                            'date': str(trade_date),
-                            'success': True,
-                            'updated': result.get('updated_count', 0)
-                        })
-                    else:
-                        results['failed_days'] += 1
-                        results['details'].append({
-                            'date': str(trade_date),
-                            'success': False,
-                            'message': result.get('message')
-                        })
-                    
-                    # 进度日志
-                    if (i + 1) % 5 == 0 or i == len(trading_days_reversed) - 1:
-                        logger.info(f"RPS补全进度: {i + 1}/{len(trading_days_reversed)}, 成功: {results['success_days']}, 总更新: {results['total_updated']}")
-                        
-                except Exception as e:
-                    logger.error(f"计算 {trade_date} 的RPS失败: {e}")
-                    results['failed_days'] += 1
-                    results['details'].append({
-                        'date': str(trade_date),
-                        'success': False,
-                        'message': str(e)
-                    })
-            
-            logger.info(f"RPS历史补全完成: 成功 {results['success_days']}/{results['total_days']} 天, 总更新 {results['total_updated']} 条")
-            
-            return results
-            
-        except Exception as e:
-            logger.error(f"RPS历史补全失败: {e}", exc_info=True)
-            return {'success': False, 'message': str(e)}
-    
     def _calculate_rps_batch(self, trading_days: List[date]) -> Dict[str, any]:
         """
         批量计算多个交易日的RPS值
@@ -2345,201 +2252,49 @@ class DataCollectionService:
         
         return updated_count
     
-    def backfill_vcp_vol_ma5_history(self, start_date: date = None, end_date: date = None, days: int = 365) -> Dict[str, any]:
+    def calculate_and_update_sector_rps(self, target_date: date = None) -> dict:
         """
-        批量补全历史VCP和vol_ma_5数据
-        
-        Args:
-            start_date: 起始日期，默认为 end_date - days
-            end_date: 结束日期，默认为最新交易日
-            days: 补全天数（默认365天，即1年）
-            
-        Returns:
-            补全结果统计
+        Calculate and update sector RPS (Relative Price Strength) indicators
+        Adds sector_rps_20 and sector_rps_50 to sector_money_flow table
         """
-        from datetime import timedelta
-        
-        logger.info(f"开始批量补全VCP和vol_ma_5历史数据...")
+        if target_date is None:
+            target_date = date.today()
         
         try:
-            # 确定日期范围
-            if end_date is None:
-                today = date.today()
-                if not self.trade_date_adapter.is_trading_day(today):
-                    end_date = self.trade_date_adapter.get_last_trading_day(today)
-                else:
-                    end_date = today
+            from db.sector_money_flow_repository import SectorMoneyFlowRepository
+            repo = SectorMoneyFlowRepository()
             
-            if start_date is None:
-                start_date = end_date - timedelta(days=days)
+            # Check if it's a trading day
+            from etl.trade_date_adapter import TradeDateAdapter
+            trade_date_adapter = TradeDateAdapter()
+            if not trade_date_adapter.is_trading_day(target_date):
+                return {'success': False, 'message': f'{target_date} is not a trading day'}
             
-            # 获取日期范围内的所有交易日
-            trading_days = self.trade_date_adapter.get_trading_days_in_range(start_date, end_date)
+            # Use the new calculator from sector_money_flow_adapter to calculate ALL fields
+            from etl.sector_money_flow_adapter import SectorMetricsCalculator
+            calculator = SectorMetricsCalculator()
+            success = calculator.calculate_comprehensive_sector_metrics(target_date)
             
-            if not trading_days:
-                logger.warning(f"在 {start_date} 至 {end_date} 范围内没有找到交易日")
-                return {'success': False, 'message': '没有找到交易日'}
-            
-            logger.info(f"VCP/vol_ma_5补全日期范围: {start_date} 至 {end_date}, 共 {len(trading_days)} 个交易日")
-            
-            # 逐日计算VCP和vol_ma_5（按时间倒序处理，从最近的日期到最远的日期）
-            results = {
-                'success': True,
-                'start_date': str(start_date),
-                'end_date': str(end_date),
-                'total_days': len(trading_days),
-                'success_days': 0,
-                'failed_days': 0,
-                'total_updated': 0,
-                'details': []
-            }
-            
-            # 按时间倒序处理（从最近的日期到最远的日期）
-            trading_days_reversed = sorted(trading_days, reverse=True)
-            
-            for i, trade_date in enumerate(trading_days_reversed):
-                try:
-                    result = self.calculate_and_update_vcp_vol_ma5(target_date=trade_date)
-                    
-                    if result.get('success'):
-                        results['success_days'] += 1
-                        results['total_updated'] += result.get('updated_count', 0)
-                        results['details'].append({
-                            'date': str(trade_date),
-                            'success': True,
-                            'updated': result.get('updated_count', 0)
-                        })
-                    else:
-                        results['failed_days'] += 1
-                        results['details'].append({
-                            'date': str(trade_date),
-                            'success': False,
-                            'message': result.get('message')
-                        })
-                    
-                    # 进度日志
-                    if (i + 1) % 5 == 0 or i == len(trading_days_reversed) - 1:
-                        logger.info(f"VCP/vol_ma_5补全进度: {i + 1}/{len(trading_days_reversed)}, 成功: {results['success_days']}, 总更新: {results['total_updated']}")
-                        
-                except Exception as e:
-                    logger.error(f"计算 {trade_date} 的VCP/vol_ma_5失败: {e}")
-                    results['failed_days'] += 1
-                    results['details'].append({
-                        'date': str(trade_date),
-                        'success': False,
-                        'message': str(e)
-                    })
-            
-            logger.info(f"VCP/vol_ma_5历史补全完成: 成功 {results['success_days']}/{results['total_days']} 天, 总更新 {results['total_updated']} 条")
-            
-            return results
-            
+            if success:
+                # Count how many sectors were updated
+                sectors = repo.get_all_sectors_for_rps_calculation(target_date)
+                updated_count = len(sectors)  # All sectors now have metrics
+                
+                return {
+                    'success': True,
+                    'message': f'Sector metrics calculation completed for {target_date}',
+                    'updated_count': updated_count,
+                    'date': str(target_date)
+                }
+            else:
+                return {
+                    'success': False,
+                    'message': f'No sectors found or calculation failed for {target_date}'
+                }
+        
         except Exception as e:
-            logger.error(f"VCP/vol_ma_5历史补全失败: {e}", exc_info=True)
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f'Sector metrics calculation failed: {e}', exc_info=True)
             return {'success': False, 'message': str(e)}
     
-
-    def calculate_all_indicators_historical(self) -> Dict[str, any]:
-        """
-        计算所有指标的历史数据：rps_250, vol_ma_5, vcp_factor
-        从最新的交易日开始，往回计算所有可用的历史数据
-        """
-        from datetime import timedelta, datetime
-        from db.database import get_raw_connection
-        import time
-        
-        start_time = time.time()
-        logger.info("开始计算所有指标的历史数据 (rps_250, vol_ma_5, vcp_factor)...")
-        
-        try:
-            # 获取所有交易日，从最新到最老
-            today = date.today()
-            end_date = self.trade_date_adapter.get_last_trading_day(today)
-            # 获取数据库中最早的交易日
-            with get_raw_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT MIN(trade_date) FROM sheep_daily WHERE rps_250 IS NOT NULL OR vcp_factor IS NOT NULL OR vol_ma_5 IS NOT NULL")
-                result = cursor.fetchone()
-                cursor.close()
-                
-                if result and result[0]:
-                    start_date = result[0] if isinstance(result[0], date) else datetime.strptime(str(result[0]), "%Y-%m-%d").date()
-                else:
-                    # 如果没有指标数据，使用最早的数据日期
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT MIN(trade_date) FROM sheep_daily")
-                    result = cursor.fetchone()
-                    cursor.close()
-                    
-                    if result and result[0]:
-                        start_date = result[0] if isinstance(result[0], date) else datetime.strptime(str(result[0]), "%Y-%m-%d").date()
-                    else:
-                        # 如果连数据都没有，使用一年前的日期
-                        start_date = end_date - timedelta(days=365)
-            
-            logger.info(f"计算历史指标数据范围: {start_date} 到 {end_date}")
-            
-            trading_days = self.trade_date_adapter.get_trading_days_in_range(start_date, end_date)
-            
-            if not trading_days:
-                logger.warning("未找到交易日")
-                return {'success': False, 'message': '未找到交易日'}
-            
-            # 按时间倒序处理（从最新到最老）
-            trading_days_reversed = sorted(trading_days, reverse=True)
-            
-            total_processed = 0
-            total_rps_updated = 0
-            total_vcp_vol_updated = 0
-            failed_days = 0
-            
-            logger.info(f"开始处理 {len(trading_days_reversed)} 个交易日的历史指标数据")
-            
-            for i, trade_date in enumerate(trading_days_reversed):
-                try:
-                    # 计算RPS指标
-                    rps_result = self.calculate_and_update_rps(target_date=trade_date)
-                    if rps_result.get('success'):
-                        total_rps_updated += rps_result.get('updated_count', 0)
-                    
-                    # 计算VCP和vol_ma_5指标
-                    vcp_result = self.calculate_and_update_vcp_vol_ma5(target_date=trade_date)
-                    if vcp_result.get('success'):
-                        total_vcp_vol_updated += vcp_result.get('updated_count', 0)
-                    
-                    total_processed += 1
-                    
-                    # 每处理10天输出一次进度
-                    if (i + 1) % 10 == 0 or i == len(trading_days_reversed) - 1:
-                        elapsed = time.time() - start_time
-                        logger.info(f"历史指标计算进度: {i + 1}/{len(trading_days_reversed)}, "
-                                  f"RPS更新: {total_rps_updated}, VCP/vol_ma_5更新: {total_vcp_vol_updated}, "
-                                  f"耗时: {elapsed:.1f}秒")
-                
-                except Exception as e:
-                    logger.error(f"计算交易日 {trade_date} 的指标失败: {e}")
-                    failed_days += 1
-                    continue
-            
-            elapsed_time = time.time() - start_time
-            
-            result = {
-                'success': True,
-                'message': f"历史指标计算完成: 处理 {total_processed} 天, "
-                         f"RPS更新 {total_rps_updated} 条, VCP/vol_ma_5更新 {total_vcp_vol_updated} 条, "
-                         f"失败 {failed_days} 天",
-                'total_processed_days': total_processed,
-                'total_rps_updated': total_rps_updated,
-                'total_vcp_vol_updated': total_vcp_vol_updated,
-                'failed_days': failed_days,
-                'elapsed_time': round(elapsed_time, 2)
-            }
-            
-            logger.info(f"历史指标计算完成: {result['message']}")
-            return result
-            
-        except Exception as e:
-            error_msg = f"计算历史指标失败: {str(e)}"
-            logger.error(error_msg, exc_info=True)
-            return {'success': False, 'message': error_msg}
-
