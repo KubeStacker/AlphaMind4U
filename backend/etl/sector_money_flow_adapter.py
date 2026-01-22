@@ -52,129 +52,79 @@ class SectorMetricsCalculator:
             return False
     
     def _calculate_rps_scores(self, sectors: List[Dict], trade_date: date, lookback_periods: List[int]) -> bool:
-        """计算RPS分数"""
+        """计算RPS分数 - 优化版本，避免O(n²)复杂度"""
         try:
+            logger.info(f"开始计算 {len(sectors)} 个板块的RPS分数...")
+
             # 获取历史数据用于RPS计算
-            # 如果历史数据中没有change_pct，则从股票数据中计算
+            # 简化版本：只使用数据库中已有的历史数据，避免从股票数据计算（太慢）
             sector_performance_history = {}
             for sector in sectors:
                 sector_name = sector['sector_name']
                 history = self.repo.get_sector_performance_history(sector_name, max(lookback_periods) + 10)
-                
-                # 如果历史数据不足或没有change_pct，从股票数据中计算
-                if len(history) < max(lookback_periods) or not any(record.get('change_pct') is not None for record in history):
-                    # 从股票数据计算历史涨跌幅
-                    calculated_history = self._calculate_sector_history_from_stocks(sector_name, trade_date, max(lookback_periods) + 10)
-                    if calculated_history and len(calculated_history) > len(history):
-                        history = calculated_history
-                
                 sector_performance_history[sector_name] = history
-            
+
+            # 预先计算所有板块的累积收益率，避免重复计算
+            logger.info("预计算所有板块的累积收益率...")
+            sector_cumulative_returns = {}
+            for period in lookback_periods:
+                sector_cumulative_returns[period] = {}
+                for sector in sectors:
+                    sector_name = sector['sector_name']
+                    history = sector_performance_history.get(sector_name, [])
+
+                    if len(history) >= period:
+                        recent_history = history[-period:]
+                        cumulative_return = 1.0
+                        for record in recent_history:
+                            if record.get('change_pct') is not None:
+                                cumulative_return *= (1 + record['change_pct'] / 100.0)
+                        cumulative_return = (cumulative_return - 1) * 100  # 转换为百分比
+                        sector_cumulative_returns[period][sector_name] = cumulative_return
+
             # 计算每个板块的RPS分数
             update_results = []
             for sector in sectors:
                 sector_name = sector['sector_name']
-                history = sector_performance_history.get(sector_name, [])
-                
-                # 如果历史数据不足，尝试从股票数据计算
-                if len(history) < max(lookback_periods):
-                    calculated_history = self._calculate_sector_history_from_stocks(sector_name, trade_date, max(lookback_periods) + 10)
-                    if calculated_history and len(calculated_history) > len(history):
-                        history = calculated_history
-                        sector_performance_history[sector_name] = history
-                
-                # 即使历史数据不足，也计算RPS（使用可用数据或默认值）
-                # 这样可以确保所有记录都有RPS字段值
-                
-                # 计算不同周期的累积收益率
-                rps_scores = {}
-                for period in lookback_periods:
-                    if len(history) < period:
-                        continue
-                    
-                    # 取最近period天的数据
-                    recent_history = history[-period:]
-                    if len(recent_history) < period:
-                        continue
-                    
-                    # 计算累积收益率
-                    cumulative_return = 1.0
-                    for record in recent_history:
-                        cumulative_return *= (1 + record['change_pct'] / 100.0 if record.get('change_pct') else 1.0)
-                    cumulative_return = (cumulative_return - 1) * 100  # 转换为百分比
-                    
-                    rps_scores[f'rps_{period}'] = cumulative_return
-                
-                # 计算RPS百分位数（相对于其他板块）
-                # 即使只有一个周期的RPS，也进行更新
+
+                # 计算RPS百分位数
                 final_rps_20 = None
                 final_rps_50 = None
-                
-                if 'rps_20' in rps_scores:
-                    # 获取所有板块的20日收益用于计算百分位数
-                    all_rps_20_values = []
-                    for other_sector in sectors:
-                        other_sector_name = other_sector['sector_name']
-                        other_history = sector_performance_history.get(other_sector_name, [])
-                        
-                        if len(other_history) >= 20:
-                            recent_other_history = other_history[-20:]
-                            other_cumulative_return_20 = 1.0
-                            for record in recent_other_history:
-                                if record.get('change_pct') is not None:
-                                    other_cumulative_return_20 *= (1 + record['change_pct'] / 100.0)
-                            other_cumulative_return_20 = (other_cumulative_return_20 - 1) * 100
-                            all_rps_20_values.append(other_cumulative_return_20)
-                    
-                    # 计算百分位数RPS
-                    if all_rps_20_values and rps_scores['rps_20'] is not None:
-                        rps_20_percentile = percentileofscore(all_rps_20_values, rps_scores['rps_20'])
+
+                # 计算20日RPS
+                if 20 in sector_cumulative_returns and sector_name in sector_cumulative_returns[20]:
+                    current_return_20 = sector_cumulative_returns[20][sector_name]
+                    all_returns_20 = list(sector_cumulative_returns[20].values())
+
+                    if all_returns_20:
+                        rps_20_percentile = percentileofscore(all_returns_20, current_return_20)
                         final_rps_20 = round(rps_20_percentile, 2)
-                    elif rps_scores['rps_20'] is not None:
-                        # 如果没有其他板块数据，使用原始累积收益率作为RPS（简化处理）
-                        final_rps_20 = round(max(0, min(100, rps_scores['rps_20'] + 50)), 2)  # 映射到0-100范围
-                
-                if 'rps_50' in rps_scores:
-                    # 获取所有板块的50日收益用于计算百分位数
-                    all_rps_50_values = []
-                    for other_sector in sectors:
-                        other_sector_name = other_sector['sector_name']
-                        other_history = sector_performance_history.get(other_sector_name, [])
-                        
-                        if len(other_history) >= 50:
-                            recent_other_history = other_history[-50:]
-                            other_cumulative_return_50 = 1.0
-                            for record in recent_other_history:
-                                if record.get('change_pct') is not None:
-                                    other_cumulative_return_50 *= (1 + record['change_pct'] / 100.0)
-                            other_cumulative_return_50 = (other_cumulative_return_50 - 1) * 100
-                            all_rps_50_values.append(other_cumulative_return_50)
-                    
-                    # 计算百分位数RPS
-                    if all_rps_50_values and rps_scores['rps_50'] is not None:
-                        rps_50_percentile = percentileofscore(all_rps_50_values, rps_scores['rps_50'])
+
+                # 计算50日RPS
+                if 50 in sector_cumulative_returns and sector_name in sector_cumulative_returns[50]:
+                    current_return_50 = sector_cumulative_returns[50][sector_name]
+                    all_returns_50 = list(sector_cumulative_returns[50].values())
+
+                    if all_returns_50:
+                        rps_50_percentile = percentileofscore(all_returns_50, current_return_50)
                         final_rps_50 = round(rps_50_percentile, 2)
-                    elif rps_scores['rps_50'] is not None:
-                        # 如果没有其他板块数据，使用原始累积收益率作为RPS（简化处理）
-                        final_rps_50 = round(max(0, min(100, rps_scores['rps_50'] + 50)), 2)  # 映射到0-100范围
-                
-                # 即使没有足够的RPS数据，也更新数据库（使用默认值0.0）
-                # 这样可以确保所有记录都有RPS字段值，避免缺失
+
+                # 如果无法计算，使用默认值0.0
                 if final_rps_20 is None:
                     final_rps_20 = 0.0
                 if final_rps_50 is None:
                     final_rps_50 = 0.0
-                
-                # 更新数据库（所有板块都更新，即使值为0.0）
+
+                # 更新数据库
                 update_success = self.repo.update_sector_rps_scores(
                     sector_name, trade_date, final_rps_20, final_rps_50
                 )
                 if update_success:
                     update_results.append((sector_name, final_rps_20, final_rps_50))
-            
+
             logger.info(f"{trade_date} RPS计算完成，更新了 {len(update_results)} 个板块")
             return len(update_results) > 0
-            
+
         except Exception as e:
             logger.error(f"计算RPS分数时发生错误: {e}", exc_info=True)
             return False
@@ -599,33 +549,94 @@ class SectorMoneyFlowAdapter:
     """板块资金流向数据采集适配器"""
     
     @staticmethod
-    def get_sector_money_flow_today(sector_type: str = '概念资金流') -> Optional[pd.DataFrame]:
+    def get_sector_money_flow_today(sector_type: str = '概念资金流', max_retries: int = 3) -> Optional[pd.DataFrame]:
         """
         获取今日板块资金流向数据
         
         Args:
             sector_type: 板块类型（'行业资金流'、'概念资金流'、'地域资金流'）
+            max_retries: 最大重试次数
             
         Returns:
             板块资金流向DataFrame
         """
-        try:
-            # 使用akshare获取今日板块资金流排名
-            df = ak.stock_sector_fund_flow_rank(indicator="今日", sector_type=sector_type)
-            
-            if df is None or df.empty:
-                logger.warning(f"获取{sector_type}资金流数据为空")
-                return None
-            
-            logger.debug(f"获取到 {len(df)} 条{sector_type}资金流数据")
-            return df
-            
-        except Exception as e:
-            logger.error(f"获取{sector_type}资金流数据失败: {e}", exc_info=True)
-            return None
-    
+        import requests
+        import warnings
+        
+        # 方法1: 尝试使用 stock_sector_fund_flow_rank (带重试)
+        last_exception = None
+        for attempt in range(max_retries):
+            try:
+                df = ak.stock_sector_fund_flow_rank(indicator="今日", sector_type=sector_type)
+                
+                if df is not None and not df.empty:
+                    logger.debug(f"获取到 {len(df)} 条{sector_type}资金流数据 (stock_sector_fund_flow_rank)")
+                    return df
+                    
+            except (requests.exceptions.ConnectionError, 
+                    requests.exceptions.Timeout,
+                    requests.exceptions.ChunkedEncodingError) as e:
+                last_exception = e
+                wait_time = 2 ** attempt
+                logger.warning(f"获取{sector_type}资金流数据网络错误 (尝试 {attempt + 1}/{max_retries}): {type(e).__name__}，{wait_time}秒后重试")
+                if attempt < max_retries - 1:
+                    time.sleep(wait_time)
+            except Exception as e:
+                last_exception = e
+                logger.warning(f"stock_sector_fund_flow_rank 失败: {type(e).__name__}")
+                break
+        
+        # 方法2: 使用备用接口 stock_fund_flow_concept (仅概念资金流)
+        if sector_type == '概念资金流':
+            logger.info("尝试使用备用接口 stock_fund_flow_concept...")
+            try:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    df = ak.stock_fund_flow_concept()
+                
+                if df is not None and not df.empty:
+                    # 转换列名以匹配预期格式
+                    df = df.rename(columns={
+                        '行业': '名称',
+                        '净额': '今日主力净流入-净额',
+                        '行业-涨跌幅': '涨跌幅'
+                    })
+                    # 净额单位是亿元，转换为元以保持一致
+                    if '今日主力净流入-净额' in df.columns:
+                        df['今日主力净流入-净额'] = df['今日主力净流入-净额'] * 100000000
+                    logger.info(f"备用接口获取到 {len(df)} 条概念资金流数据")
+                    return df
+            except Exception as e:
+                logger.error(f"备用接口 stock_fund_flow_concept 也失败: {e}")
+        
+        logger.error(f"获取{sector_type}资金流数据失败，所有方法均已尝试: {last_exception}")
+        return None
+
     @staticmethod
-    def normalize_sector_money_flow(df: pd.DataFrame, sector_type: str = '概念资金流') -> List[Dict]:
+    def get_sector_price_data_today() -> Optional[pd.DataFrame]:
+        """
+        获取今日板块价格数据（用于计算change_pct）
+
+        Returns:
+            板块价格DataFrame
+        """
+        try:
+            # 使用akshare获取今日概念板块价格数据
+            df = ak.stock_board_concept_name_em()
+
+            if df is None or df.empty:
+                logger.warning("获取板块价格数据为空")
+                return None
+
+            logger.debug(f"获取到 {len(df)} 条板块价格数据")
+            return df
+
+        except Exception as e:
+            logger.error(f"获取板块价格数据失败: {e}", exc_info=True)
+            return None
+
+    @staticmethod
+    def normalize_sector_money_flow(df: pd.DataFrame, sector_type: str = '概念资金流', price_dict: Optional[Dict[str, float]] = None) -> List[Dict]:
         """
         标准化板块资金流向数据
         
@@ -725,6 +736,11 @@ class SectorMoneyFlowAdapter:
                     except (ValueError, TypeError):
                         pass
                 
+                # 获取涨跌幅数据
+                change_pct = None
+                if price_dict and sector_name in price_dict:
+                    change_pct = price_dict[sector_name]
+
                 data_list.append({
                     'sector_name': sector_name,
                     'trade_date': date.today(),
@@ -733,6 +749,7 @@ class SectorMoneyFlowAdapter:
                     'large_inflow': large_inflow,
                     'medium_inflow': medium_inflow,
                     'small_inflow': small_inflow,
+                    'change_pct': change_pct,
                 })
                 
             except Exception as e:
@@ -745,29 +762,41 @@ class SectorMoneyFlowAdapter:
     def get_all_sector_money_flow_today() -> List[Dict]:
         """
         获取所有类型的板块资金流向数据（今日）
-        
+        包含资金流数据和价格数据
+
         Returns:
             所有板块资金流向数据列表
         """
         all_data = []
-        
+
+        # 获取板块价格数据（用于change_pct）
+        price_df = SectorMoneyFlowAdapter.get_sector_price_data_today()
+        price_dict = {}
+        if price_df is not None:
+            # 创建板块名称到涨跌幅的映射
+            for _, row in price_df.iterrows():
+                sector_name = str(row.get('板块名称', '')).strip()
+                change_pct = row.get('涨跌幅')
+                if sector_name and pd.notna(change_pct):
+                    price_dict[sector_name] = float(change_pct)
+
         # 获取概念资金流
         concept_df = SectorMoneyFlowAdapter.get_sector_money_flow_today('概念资金流')
         if concept_df is not None:
-            concept_data = SectorMoneyFlowAdapter.normalize_sector_money_flow(concept_df, '概念资金流')
+            concept_data = SectorMoneyFlowAdapter.normalize_sector_money_flow(concept_df, '概念资金流', price_dict)
             all_data.extend(concept_data)
             logger.debug(f"获取到 {len(concept_data)} 条概念资金流数据")
-        
+
         # 延迟，避免请求过快
         time.sleep(0.5)
-        
+
         # 获取行业资金流
         industry_df = SectorMoneyFlowAdapter.get_sector_money_flow_today('行业资金流')
         if industry_df is not None:
-            industry_data = SectorMoneyFlowAdapter.normalize_sector_money_flow(industry_df, '行业资金流')
+            industry_data = SectorMoneyFlowAdapter.normalize_sector_money_flow(industry_df, '行业资金流', price_dict)
             all_data.extend(industry_data)
             logger.debug(f"获取到 {len(industry_data)} 条行业资金流数据")
-        
+
         return all_data
     
     @staticmethod

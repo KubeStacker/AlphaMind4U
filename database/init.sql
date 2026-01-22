@@ -168,20 +168,6 @@ CREATE TABLE IF NOT EXISTS `login_logs` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='登录日志表';
 
 -- ============================================
--- 10. AI配置表
--- ============================================
-CREATE TABLE IF NOT EXISTS `ai_config` (
-    `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
-    `config_key` VARCHAR(50) NOT NULL COMMENT '配置键（api_key, prompt_recommend, prompt_analyze等）',
-    `config_value` TEXT DEFAULT NULL COMMENT '配置值',
-    `description` VARCHAR(255) DEFAULT NULL COMMENT '配置说明',
-    `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-    `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-    PRIMARY KEY (`id`),
-    UNIQUE KEY `uk_config_key` (`config_key`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AI配置表';
-
--- ============================================
 -- 11. AI模型配置表
 -- ============================================
 CREATE TABLE IF NOT EXISTS `ai_model_config` (

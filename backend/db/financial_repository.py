@@ -48,7 +48,7 @@ class FinancialRepository:
                     })
                 
                 db.commit()
-                logger.info(f"批量保存财务数据完成，共 {len(data_list)} 条")
+                # logger.info(f"批量保存财务数据完成，共 {len(data_list)} 条")
         except Exception as e:
             logger.error(f"批量保存财务数据失败: {e}", exc_info=True)
             raise

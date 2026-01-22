@@ -1,54 +1,22 @@
 import client from './client'
 
 export interface BacktestParams {
+  // T10 结构狙击者参数
+  vol_ratio_max?: number  // 极致缩量阈值（Vol/MA5 < 0.6）
+  turnover_min?: number   // 最优换手率下限
+  turnover_max?: number   // 最优换手率上限
+  golden_pit_change_min?: number // 黄金坑涨跌幅下限
+  golden_pit_change_max?: number // 黄金坑涨跌幅上限
+  min_score?: number      // 最低评分门槛
+  max_recommendations?: number // 最大推荐数量
+  prefer_negative_change?: boolean // 优先阴线低吸
+  require_sector_bullish?: boolean // 要求板块多头
+  
+  // 兼容旧版 T7 参数
   min_mv?: number  // 最小市值（亿）
   max_mv?: number  // 最大市值（亿）
-  ma_support?: 'MA20' | 'MA60' | 'MA120' | null  // 趋势均线，null表示不限制
   rps_threshold?: number  // RPS阈值
-  vol_ratio?: number  // 倍量定义
   vol_threshold?: number  // 倍量阈值
-  sector_boost?: boolean  // 板块共振
-  ai_filter?: boolean  // AI过滤（v3.0已移除，保留兼容）
-  w_tech?: number  // 技术权重
-  w_trend?: number  // 趋势权重
-  w_hot?: number  // 热度权重
-  // Level 2 筛选参数
-  min_change_pct?: number  // 最小涨幅（%）
-  max_change_pct?: number  // 最大涨幅（%）
-  change_pct_required?: boolean  // 是否要求涨幅
-  vol_ratio_ma20_threshold?: number  // 量比阈值（Volume/MA20）
-  vol_ratio_required?: boolean  // 是否要求量比
-  upper_shadow_required?: boolean  // 是否要求上影线比例
-  max_upper_shadow_ratio?: number  // 最大上影线比例
-  vwap_required?: boolean  // 是否要求VWAP
-  vwap_tolerance?: number  // VWAP容忍度（0-1）
-  // Attack模式参数
-  min_change_pct_attack?: number  // 进攻模式最小涨幅
-  max_change_pct_attack?: number  // 进攻模式最大涨幅
-  concept_boost?: boolean  // 概念共振优先
-  rps_threshold_attack?: number  // 进攻模式RPS阈值
-  // Defense模式参数
-  max_change_pct_defense?: number  // 防守模式最大涨幅
-  // v3.0新增：资金流参数
-  min_main_inflow?: number  // 最小主力净流入（万元）
-  require_positive_inflow?: boolean  // 是否要求主力净流入为正
-  // v3.0新增：换手率控制
-  min_turnover?: number  // 最小换手率(%)
-  max_turnover?: number  // 最大换手率(%)
-  // v3.0新增：启动质量控制
-  breakout_validation?: boolean  // 启动有效性验证开关
-  min_breakout_quality?: number  // 最低启动质量分（0-100）
-  // v6.0新增：严苛筛选（提升成功率）
-  min_ai_score?: number  // 最低AI评分（0-100），v6.0默认50
-  max_recommendations?: number  // 单日最多推荐数量
-  require_concept_resonance?: boolean  // 必须有概念共振支撑（概念共振>=20）
-  enable_sector_linkage?: boolean  // v6.0新增：启用板块联动筛选（板块联动强度>=0.2）
-  // v3.0新增：其他
-  prefer_20cm?: boolean  // 偏好20cm肥羊
-  // 已移除的参数（保留兼容）
-  min_win_probability?: number  // 最小胜率（%）- v3.0已移除
-  ai_vol_ratio_min?: number  // AI过滤量比要求 - v3.0已移除
-  ai_vcp_factor_max?: number  // AI过滤VCP因子最大值 - v3.0已移除
 }
 
 export interface BacktestRequest {
@@ -110,28 +78,24 @@ export interface Recommendation {
   sheep_name: string
   entry_price: number
   ai_score: number
-  win_probability: number  // v3.0映射为breakout_quality
   reason_tags: string
   stop_loss_price: number
   vol_ratio?: number
+  turnover_rate?: number
+  change_pct?: number
   rps_250?: number
-  vcp_factor?: number
-  return_5d?: number  // 5日涨幅（%）
-  return_10d?: number  // 10日涨幅（%）
-  return_nd?: number  // 最近N天涨幅（%，10个交易日内时使用）
-  market_regime?: string  // 市场状态：Attack/Defense/Balance
-  concept_trend?: string  // 驱动概念（原sector_trend）
-  sector_trend?: string  // 所属板块（兼容旧字段）
-  resonance_score?: number  // 板块共振分数
-  tag_total_inflow?: number  // 驱动概念总资金流入（万元）
-  tag_avg_pct?: number  // 驱动概念平均涨幅（%）
-  is_star_market?: boolean  // 是否科创板
-  is_gem?: boolean  // 是否创业板
-  // v3.0新增：启动质量
-  breakout_quality?: number  // 启动质量分（0-100）
-  breakout_warning?: string  // 风险警告
-  // v3.1新增：估算市值
-  estimated_mv?: number  // 估算流通市值（亿元）
+  industry?: string
+  is_star_market?: boolean
+  is_gem?: boolean
+  estimated_mv?: number
+  // T10特有字段
+  f1_vol_score?: number
+  f2_turnover_score?: number
+  f3_rps_score?: number
+  is_negative_day?: boolean
+  is_extreme_shrink?: boolean
+  sniper_setup?: boolean
+  model_version?: string
 }
 
 export interface RecommendResponse {
@@ -144,10 +108,10 @@ export interface RecommendResponse {
     regime_score?: number  // 综合评分（-1到+1）
     funnel_data?: {
       total: number  // 全市场扫描
-      L0_pass: number  // Filter Layer通过
-      L1_pass: number  // Feature Layer通过
-      L2_pass: number  // Score Layer通过
-      L3_pass: number  // Final Filter通过
+      L1_pass: number  // Layer 1通过
+      L2_pass: number  // Layer 2通过
+      L3_pass: number  // Layer 3通过
+      L4_pass?: number // Layer 4通过
       final: number  // 最终优选
     }
     // v6.0新增：市场状态各维度评分

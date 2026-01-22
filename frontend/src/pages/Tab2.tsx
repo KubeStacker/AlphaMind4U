@@ -1300,8 +1300,25 @@ K线数据（最近10天）：${JSON.stringify(klineSummary, null, 2)}
               <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 16 }}>
                 {/* 当日最热 */}
                 <Card size="small" title="当日最热（市场焦点）">
-                  {hottestSectors.length === 0 ? (
-                    <div style={{ textAlign: 'center', padding: 20, color: '#999' }}>暂无数据</div>
+                  {hottestSectorsLoading ? (
+                    <div style={{ textAlign: 'center', padding: 20, color: '#999' }}>
+                      <Spin size="small" /> 正在加载...
+                    </div>
+                  ) : hottestSectors.length === 0 ? (
+                    <div style={{ textAlign: 'center', padding: 20, color: '#999' }}>
+                      <div style={{ marginBottom: 8 }}>暂无数据</div>
+                      <div style={{ fontSize: '12px', color: '#bbb' }}>
+                        可能原因：RPS指标计算中，请稍后刷新
+                      </div>
+                      <Button
+                        size="small"
+                        type="link"
+                        onClick={() => { loadHottestSectors(); loadFalconRecommendations(); }}
+                        style={{ marginTop: 8 }}
+                      >
+                        重新加载
+                      </Button>
+                    </div>
                   ) : (
                     <Table
                       size="small"

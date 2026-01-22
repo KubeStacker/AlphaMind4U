@@ -18,7 +18,7 @@ from sqlalchemy import text
 from db.database import get_db, get_raw_connection, engine
 from functools import lru_cache
 import concurrent.futures
-from services.alpha_model_t7_concept_flow import AlphaModelT7ConceptFlow
+from services.alpha_model_t10 import AlphaModelT10StructuralSniper
 
 logger = logging.getLogger(__name__)
 
@@ -64,21 +64,17 @@ class BacktestEngine:
     
     # 回测模式下的宽松参数（覆盖模型默认值）
     BACKTEST_RELAXED_PARAMS = {
-        'min_change_pct': 3.0,       # 回测时降低涨幅要求（从5%降到3%）
-        'max_change_pct': 15,        # 回测时放宽最高涨幅（从12%到15%）
-        'rps_threshold': 75,         # 回测时降低RPS要求（从85降到75）
-        'min_main_inflow': -200,     # 回测时允许小幅资金流出
-        'require_positive_inflow': False,  # 回测时不强制要求资金流入
-        'min_turnover': 3.0,         # 回测时降低换手率要求（从5%到3%）
-        'max_turnover': 30.0,        # 回测时放宽最高换手率（从20%到30%）
-        'min_breakout_quality': 30,  # 回测时降低启动质量要求（从50到30）
-        'min_ai_score': 40,          # 回测时降低AI评分要求（从55到40）
-        'require_concept_resonance': False,  # 回测时不强制要求概念共振
+        'vol_ratio_max': 0.7,        # 回测时放宽缩量要求（从0.6到0.7）
+        'turnover_min': 1.0,         # 回测时放宽换手下限（从2.0到1.0）
+        'turnover_max': 15.0,        # 回测时放宽换手上限（从8.0到15.0）
+        'min_score': 40,             # 回测时降低评分要求（从50到40）
+        'golden_pit_change_min': -5.0, # 回测时放宽黄金坑下限（从-3到-5）
+        'golden_pit_change_max': 2.0,  # 回测时放宽黄金坑上限（从1到2）
     }
     
     def __init__(self):
-        # 使用T7概念资金双驱模型
-        self.model = AlphaModelT7ConceptFlow()
+        # 使用T10结构狙击者模型
+        self.model = AlphaModelT10StructuralSniper()
         # 价格数据缓存（减少重复查询）
         self._price_cache: Dict[str, pd.DataFrame] = {}
         self._cache_date_range: Tuple[date, date] = (None, None)
@@ -165,11 +161,6 @@ class BacktestEngine:
     def _merge_backtest_params(self, user_params: Dict) -> Dict:
         """
         合并用户参数和回测宽松参数
-        
-        逻辑：
-        1. 使用回测宽松参数作为基础
-        2. 用户参数覆盖宽松参数（用户可以选择更严格或更宽松）
-        3. 但某些关键参数保持宽松（避免回测完全失败）
         """
         # 深拷贝回测宽松参数
         merged = dict(self.BACKTEST_RELAXED_PARAMS)
@@ -181,22 +172,10 @@ class BacktestEngine:
                     merged[key] = value
         
         # 强制保证某些参数不会太严格（防止回测完全失败）
-        # RPS 不能高于 90
-        if merged.get('rps_threshold', 75) > 90:
-            merged['rps_threshold'] = 90
-            logger.info("回测模式：RPS阈值已限制为90")
-        
-        # 涨幅范围至少有 5% 空间
-        min_pct = merged.get('min_change_pct', 3.0)
-        max_pct = merged.get('max_change_pct', 15)
-        if max_pct - min_pct < 5:
-            merged['max_change_pct'] = min_pct + 5
-            logger.info(f"回测模式：涨幅范围已调整为 {min_pct}%-{merged['max_change_pct']}%")
-        
-        # AI评分不能高于 70
-        if merged.get('min_ai_score', 40) > 70:
-            merged['min_ai_score'] = 70
-            logger.info("回测模式：AI评分要求已限制为70")
+        # 评分不能高于 70
+        if merged.get('min_score', 40) > 70:
+            merged['min_score'] = 70
+            logger.info("回测模式：评分要求已限制为70")
         
         return merged
     

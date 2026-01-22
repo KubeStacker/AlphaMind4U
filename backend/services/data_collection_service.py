@@ -2252,6 +2252,105 @@ class DataCollectionService:
         
         return updated_count
     
+    def backfill_sector_change_pct(self, days: int = 60) -> dict:
+        """
+        Backfill change_pct for historical sector_money_flow records.
+        This is required for RPS calculation which needs 20+ days of change_pct data.
+        
+        Args:
+            days: Number of historical days to backfill
+            
+        Returns:
+            Result dict with success status and counts
+        """
+        import logging
+        from datetime import timedelta
+        from db.database import get_db
+        from sqlalchemy import text
+        from etl.sector_money_flow_adapter import SectorMetricsCalculator
+        
+        logger = logging.getLogger(__name__)
+        logger.info(f"Starting change_pct backfill for {days} days...")
+        
+        try:
+            calculator = SectorMetricsCalculator()
+            
+            # Get all historical trade dates that need backfill
+            with get_db() as db:
+                query = text("""
+                    SELECT DISTINCT trade_date 
+                    FROM sector_money_flow 
+                    WHERE trade_date >= DATE_SUB(CURDATE(), INTERVAL :days DAY)
+                    ORDER BY trade_date ASC
+                """)
+                result = db.execute(query, {'days': days})
+                trade_dates = [row[0] for row in result]
+            
+            logger.info(f"Found {len(trade_dates)} trade dates to process")
+            
+            total_updated = 0
+            dates_processed = 0
+            
+            for trade_date in trade_dates:
+                try:
+                    # Get all sectors for this date
+                    with get_db() as db:
+                        sectors_query = text("""
+                            SELECT sector_name, change_pct 
+                            FROM sector_money_flow 
+                            WHERE trade_date = :trade_date
+                        """)
+                        result = db.execute(sectors_query, {'trade_date': trade_date})
+                        sectors = list(result)
+                    
+                    updated_count = 0
+                    for sector_name, current_change_pct in sectors:
+                        # Skip if already has valid change_pct
+                        if current_change_pct is not None and current_change_pct != 0:
+                            continue
+                        
+                        # Calculate change_pct from stocks
+                        new_change_pct = calculator._calculate_change_pct_from_stocks(sector_name, trade_date)
+                        
+                        if new_change_pct is not None:
+                            # Update database
+                            with get_db() as db:
+                                update_query = text("""
+                                    UPDATE sector_money_flow 
+                                    SET change_pct = :change_pct 
+                                    WHERE sector_name = :sector_name AND trade_date = :trade_date
+                                """)
+                                db.execute(update_query, {
+                                    'change_pct': new_change_pct,
+                                    'sector_name': sector_name,
+                                    'trade_date': trade_date
+                                })
+                                db.commit()
+                                updated_count += 1
+                    
+                    total_updated += updated_count
+                    dates_processed += 1
+                    
+                    if dates_processed % 5 == 0:
+                        logger.info(f"Progress: {dates_processed}/{len(trade_dates)} dates, {total_updated} sectors updated")
+                        
+                except Exception as e:
+                    logger.warning(f"Failed to process {trade_date}: {e}")
+                    continue
+            
+            logger.info(f"Backfill completed: {dates_processed} dates, {total_updated} sectors updated")
+            
+            return {
+                'success': True,
+                'message': f'Backfill completed for {dates_processed} dates',
+                'dates_processed': dates_processed,
+                'sectors_updated': total_updated
+            }
+            
+        except Exception as e:
+            logger.error(f"Backfill failed: {e}", exc_info=True)
+            return {'success': False, 'message': str(e)}
+
     def calculate_and_update_sector_rps(self, target_date: date = None) -> dict:
         """
         Calculate and update sector RPS (Relative Price Strength) indicators

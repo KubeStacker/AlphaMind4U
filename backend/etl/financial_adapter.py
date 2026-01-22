@@ -111,7 +111,7 @@ class FinancialAdapter:
                     logger.debug(f"处理财务数据行失败: {e}")
                     continue
             
-            logger.info(f"标准化财务数据完成，共 {len(data_list)} 条")
+            # logger.info(f"标准化财务数据完成，共 {len(data_list)} 条")
             return data_list
             
         except Exception as e:

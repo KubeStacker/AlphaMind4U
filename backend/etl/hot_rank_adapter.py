@@ -28,7 +28,7 @@ class HotRankAdapter:
                 # 雪球热度榜
                 hot_data = ak.stock_hot_rank_em()
                 if hot_data is not None and not hot_data.empty:
-                    logger.info(f"获取雪球热度榜 {len(hot_data)} 条")
+                    logger.debug(f"获取雪球热度榜 {len(hot_data)} 条")
                     return hot_data
             
             if source == 'dongcai':
@@ -36,7 +36,7 @@ class HotRankAdapter:
                 try:
                     hot_data = ak.stock_hot_rank_latest_em()
                     if hot_data is not None and not hot_data.empty:
-                        logger.info(f"获取东财热度榜 {len(hot_data)} 条")
+                        logger.debug(f"获取东财热度榜 {len(hot_data)} 条")
                         return hot_data
                 except:
                     # 如果东财接口不可用，使用雪球数据
@@ -158,7 +158,7 @@ class HotRankAdapter:
                 return None
             
             result = pd.DataFrame(result_rows)
-            logger.info(f"标准化后得到 {len(result)} 条有效数据")
+            logger.debug(f"标准化后得到 {len(result)} 条有效数据")
             
             return result
             

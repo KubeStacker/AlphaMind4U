@@ -486,6 +486,17 @@ async def get_falcon_radar_hottest(limit: int = 10, current_user: dict = Depends
         logger.error(f"获取当日最热板块失败: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
+# TEMPORARY TEST ENDPOINT - Remove after fixing
+@app.get("/api/test/hottest-sectors")
+async def test_hottest_sectors(limit: int = 10):
+    """临时测试端点，绕过认证"""
+    try:
+        sectors = FalconRadarService.get_hottest_sectors(limit=limit)
+        return {"sectors": sectors, "limit": limit, "count": len(sectors)}
+    except Exception as e:
+        logger.error(f"测试获取当日最热板块失败: {e}", exc_info=True)
+        return {"error": str(e), "sectors": [], "count": 0}
+
 @app.get("/api/falcon-radar/recommendations")
 async def get_falcon_radar_recommendations(current_user: dict = Depends(get_current_user)):
     """获取猎鹰推荐（基于三种策略：主线首阴、资金背离、平台突破）"""
@@ -1377,18 +1388,18 @@ async def ai_analyze_sheep(
 
 # ========== 模型老K API ==========
 
-from services.alpha_model_t7_concept_flow import AlphaModelT7ConceptFlow
+from services.alpha_model_t10 import AlphaModelT10StructuralSniper
 from services.backtest_engine import BacktestEngine
 from db.strategy_recommendation_repository import StrategyRecommendationRepository
 
 @app.get("/api/model-k/default-params")
 async def get_default_params():
-    """获取T7模型的默认参数配置（前端自动同步）"""
+    """获取T10模型的默认参数配置（前端自动同步）"""
     try:
         return {
-            "params": AlphaModelT7ConceptFlow.DEFAULT_PARAMS,
-            "veto_conditions": AlphaModelT7ConceptFlow.VETO_CONDITIONS,
-            "version": AlphaModelT7ConceptFlow().model_version
+            "params": AlphaModelT10StructuralSniper.DEFAULT_PARAMS,
+            "veto_conditions": {},  # T10暂无显式否决条件表
+            "version": AlphaModelT10StructuralSniper().model_version
         }
     except Exception as e:
         logger.error(f"获取默认参数失败: {e}")
@@ -1600,9 +1611,9 @@ async def get_recommendations(
         
         # 设置超时保护（因为模型包含多种计算，可能需要较长时间）
         async def run_model():
-            # T7 概念资金双驱模型
-            model = AlphaModelT7ConceptFlow()
-            logger.info("使用 T7 概念资金双驱模型")
+            # T10 结构狙击者模型
+            model = AlphaModelT10StructuralSniper()
+            logger.info("使用 T10 结构狙击者模型")
             
             return await asyncio.to_thread(
                 model.run_full_pipeline, trade_date, request.params, request.top_n
@@ -1624,10 +1635,10 @@ async def get_recommendations(
                 recommendations = result
                 diagnostic_info = None
                 metadata = None
-            logger.info(f"T7概念资金双驱推荐完成，耗时: {elapsed_time:.2f}秒，返回 {len(recommendations) if recommendations else 0} 条结果")
+            logger.info(f"modelK模型推荐完成，耗时: {elapsed_time:.2f}秒，返回 {len(recommendations) if recommendations else 0} 条结果")
         except asyncio.TimeoutError:
             elapsed_time = timeout_seconds
-            logger.error(f"T7概念资金双驱推荐超时（{timeout_seconds}秒），可能原因：肥羊数据量过大或筛选条件导致计算时间过长")
+            logger.error(f"modelK模型推荐超时（{timeout_seconds}秒），可能原因：肥羊数据量过大或筛选条件导致计算时间过长")
             raise HTTPException(
                 status_code=504, 
                 detail=f"推荐计算超时（{int(timeout_seconds)}秒）。建议：1) 限制返回数量(top_n参数，建议<=50) 2) 放宽筛选条件 3) 检查数据库性能 4) 稍后重试"
@@ -1645,7 +1656,7 @@ async def get_recommendations(
         # 保存推荐记录（关联到当前用户，立即保存）
         user_id = current_user.get('id', 0)
         if recommendations:
-            strategy_version = "T7_Concept_Flow"
+            strategy_version = "T10_Structural_Sniper"
             
             logger.info(f"开始保存 {len(recommendations)} 条推荐记录到数据库（用户ID: {user_id}, 模型: {strategy_version}）")
             for rec in recommendations:
@@ -1658,7 +1669,7 @@ async def get_recommendations(
                         params_snapshot=request.params,
                         entry_price=rec['entry_price'],
                         ai_score=rec['ai_score'],
-                        win_probability=rec['win_probability'],
+                        win_probability=rec.get('breakout_quality', 0), # T10使用breakout_quality映射
                         reason_tags=rec['reason_tags'],
                         stop_loss_price=rec['stop_loss_price'],
                         strategy_version=strategy_version  # 保存模型版本

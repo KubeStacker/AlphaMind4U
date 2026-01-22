@@ -44,23 +44,23 @@ const ModelK: React.FC = () => {
           // 仅在后端没有时设置默认
           min_mv: response.params.min_mv || 10,
           max_mv: response.params.max_mv || 1000,
-          change_pct_required: true,
         })
         // modelVersion已移除，改用selectedModel
         setParamsLoaded(true)
         console.log('已从后端同步默认参数:', response.params)
       } catch (error) {
         console.error('加载默认参数失败，使用前端默认值:', error)
-        // 回退到前端默认参数
+        // 回退到前端默认参数 (T10)
         setParams({
-          min_mv: 10, max_mv: 1000, rps_threshold: 75, vol_threshold: 1.3,
-          min_change_pct: 1.0, max_change_pct: 9.9, 
-          min_main_inflow: -300, require_positive_inflow: false,
-          min_turnover: 1.0, max_turnover: 35.0,
-          breakout_validation: true, min_breakout_quality: 30,
-          min_ai_score: 40, max_recommendations: 20, require_concept_resonance: true,
-          prefer_20cm: true, change_pct_required: true,
-          enable_sector_linkage: true,  // v6.0新增
+          vol_ratio_max: 0.6,
+          turnover_min: 2.0,
+          turnover_max: 8.0,
+          golden_pit_change_min: -3.0,
+          golden_pit_change_max: 1.0,
+          min_score: 50,
+          max_recommendations: 20,
+          prefer_negative_change: true,
+          require_sector_bullish: true
         })
         setParamsLoaded(true)
       }
@@ -107,7 +107,7 @@ const ModelK: React.FC = () => {
   const [historyData, setHistoryData] = useState<RecommendationHistory[]>([])
   const [marketRegime, setMarketRegime] = useState<string>('')
   const [regimeScore, setRegimeScore] = useState<number>(0)
-  const [funnelData, setFunnelData] = useState<{total: number, L0_pass: number, L1_pass: number, L2_pass: number, L3_pass: number, final: number} | null>(null)
+  const [funnelData, setFunnelData] = useState<{total: number, L1_pass: number, L2_pass: number, L3_pass: number, L4_pass?: number, final: number} | null>(null)
   const [regimeDetails, setRegimeDetails] = useState<any>(null)
   const [breakoutStats, setBreakoutStats] = useState<{high_quality_count: number, medium_quality_count: number, trap_risk_count: number} | null>(null)
   
@@ -122,14 +122,14 @@ const ModelK: React.FC = () => {
   const [currentStep, setCurrentStep] = useState(0)
   const stepStartTimeRef = React.useRef<number>(0)
   
-  // 执行步骤定义 - v6.0重构版
+  // 执行步骤定义 - T10 结构狙击者
   const EXECUTION_STEPS = [
-    { name: '市场状态识别', desc: 'RSRS/板块轮动/市场宽度', duration: 2000 },
-    { name: 'Filter Layer', desc: 'SQL层筛选(ST/新股/市值/RPS)', duration: 2500 },
-    { name: 'Feature Layer', desc: '因子提取(技术/资金/概念)', duration: 3000 },
-    { name: 'Score Layer', desc: 'Z-Score标准化 + 动态权重', duration: 3500 },
-    { name: 'Validate Layer', desc: '启动质量验证(扣分制)', duration: 3000 },
-    { name: 'Final Filter', desc: '涌幅/概念共振/量比筛选', duration: 2000 },
+    { name: '板块锚定', desc: 'Layer 1: 只选MA20向上的板块', duration: 2000 },
+    { name: '基本面排雷', desc: 'Layer 1: 剔除ST/退市风险股', duration: 1500 },
+    { name: '股性基因', desc: 'Layer 2: 20日内有涨停或大阳线', duration: 2500 },
+    { name: '流动性筛选', desc: 'Layer 2: 日均成交额门槛', duration: 1500 },
+    { name: '狙击形态', desc: 'Layer 3: 极致缩量 + MA20支撑', duration: 3000 },
+    { name: '筹码评分', desc: 'Layer 4: 缩量/换手/RPS综合评分', duration: 2000 },
   ]
   
   // 进度定时器 - 改进版：循环显示直到完成
@@ -651,105 +651,47 @@ const ModelK: React.FC = () => {
       },
       { title: '现价', dataIndex: 'entry_price', key: 'entry_price', width: 80, render: (price: number) => `¥${price.toFixed(2)}` },
       { 
-        title: '市值', 
-        dataIndex: 'estimated_mv', 
-        key: 'estimated_mv', 
+        title: '量比', 
+        dataIndex: 'vol_ratio', 
+        key: 'vol_ratio', 
         width: 80, 
-        render: (mv: number | undefined) => {
-          if (!mv || mv <= 0) return '-'
-          return <span style={{ color: mv < 100 ? '#52c41a' : mv > 500 ? '#ff4d4f' : '#1890ff' }}>
-            {mv.toFixed(0)}亿
-          </span>
-        }
+        render: (ratio: number | undefined) => ratio ? <Tag color={ratio < 0.6 ? 'green' : 'default'}>{ratio.toFixed(2)}</Tag> : '-'
       },
-      { title: 'AI打分', dataIndex: 'ai_score', key: 'ai_score', width: 90, render: (score: number) => <Tag color={score > 50 ? 'green' : score > 30 ? 'orange' : 'red'}>{score.toFixed(1)}</Tag> },
       { 
-        title: '启动质量', 
-        dataIndex: 'breakout_quality', 
-        key: 'breakout_quality', 
+        title: '换手率', 
+        dataIndex: 'turnover_rate', 
+        key: 'turnover_rate', 
+        width: 80, 
+        render: (rate: number | undefined) => rate ? <span style={{ color: (rate >= 2 && rate <= 8) ? '#52c41a' : 'inherit' }}>{rate.toFixed(1)}%</span> : '-'
+      },
+      { 
+        title: '涨跌幅', 
+        dataIndex: 'change_pct', 
+        key: 'change_pct', 
+        width: 80, 
+        render: (pct: number | undefined) => pct !== undefined ? <span style={{ color: pct >= 0 ? '#ff4d4f' : '#52c41a' }}>{pct > 0 ? '+' : ''}{pct.toFixed(2)}%</span> : '-'
+      },
+      { title: 'AI打分', dataIndex: 'ai_score', key: 'ai_score', width: 90, render: (score: number) => <Tag color={score > 60 ? 'green' : score > 50 ? 'orange' : 'red'}>{score.toFixed(1)}</Tag> },
+      { 
+        title: '形态', 
+        dataIndex: 'sniper_setup', 
+        key: 'sniper_setup', 
         width: 100, 
-        render: (quality: number | undefined, record: Recommendation) => {
-          const q = quality || record.win_probability || 50
-          const warning = record.breakout_warning
-          return (
-            <Tooltip title={warning ? `风险: ${warning}` : '启动质量评估'}>
-              <Tag color={q >= 70 ? 'green' : q >= 40 ? 'orange' : 'red'}>
-                {q >= 70 ? '优质' : q >= 40 ? '一般' : '风险'} {q.toFixed(0)}
-              </Tag>
-            </Tooltip>
-          )
-        }
+        render: (setup: boolean | undefined, record: Recommendation) => (
+          <Space size={2}>
+            {setup && <Tag color="gold">狙击</Tag>}
+            {record.is_extreme_shrink && <Tag color="cyan">极缩</Tag>}
+            {record.is_negative_day && <Tag color="blue">阴线</Tag>}
+          </Space>
+        )
       },
       { 
-        title: '市场状态', 
-        dataIndex: 'market_regime', 
-        key: 'market_regime', 
-        width: 90, 
-        render: (regime: string) => {
-          if (!regime) return '-'
-          const colorMap: Record<string, string> = {
-            'Attack': 'red',
-            'Defense': 'blue',
-            'Balance': 'default'
-          }
-          const textMap: Record<string, string> = {
-            'Attack': '进攻',
-            'Defense': '防守',
-            'Balance': '震荡'
-          }
-          return <Tag color={colorMap[regime] || 'default'}>{textMap[regime] || regime}</Tag>
-        }
-      },
-      { 
-        title: '驱动概念', 
-        dataIndex: 'concept_trend', 
-        key: 'concept_trend', 
+        title: '行业板块', 
+        dataIndex: 'industry', 
+        key: 'industry', 
         width: 120, 
         ellipsis: true,
-        render: (concept: string, record: Recommendation) => {
-          const conceptName = concept || record.sector_trend || '-'
-          if (conceptName === '-') return '-'
-          
-          // 显示驱动概念徽章，hover时显示资金流信息
-          const inflow = record.tag_total_inflow
-          const avgPct = record.tag_avg_pct
-          
-          return (
-            <Tooltip 
-              title={
-                <div>
-                  <div>概念: {conceptName}</div>
-                  {inflow !== undefined && <div>板块资金流入: {inflow > 0 ? '+' : ''}{(inflow / 10000).toFixed(2)}亿元</div>}
-                  {avgPct !== undefined && <div>板块平均涨幅: {avgPct > 0 ? '+' : ''}{avgPct.toFixed(2)}%</div>}
-                </div>
-              }
-            >
-              <Tag color="blue">{conceptName}</Tag>
-            </Tooltip>
-          )
-        }
-      },
-      {
-        title: '弹性',
-        key: 'elasticity',
-        width: 80,
-        render: (_: any, record: Recommendation) => {
-          const is20cm = record.is_star_market || record.is_gem
-          if (is20cm) {
-            return <Tag color="purple">20cm</Tag>
-          }
-          return '-'
-        }
-      },
-      { 
-        title: '共振分', 
-        dataIndex: 'resonance_score', 
-        key: 'resonance_score', 
-        width: 90, 
-        render: (score: number | undefined) => {
-          if (score === undefined || score === null) return '-'
-          return <Tag color={score > 0 ? 'green' : score < 0 ? 'red' : 'default'}>{score > 0 ? '+' : ''}{score.toFixed(0)}</Tag>
-        }
+        render: (industry: string) => <Tag color="blue">{industry || '未知'}</Tag>
       },
       { title: '核心理由', dataIndex: 'reason_tags', key: 'reason_tags', width: 200, ellipsis: true },
       { title: '止损价', dataIndex: 'stop_loss_price', key: 'stop_loss_price', width: 90, render: (price: number) => `¥${price.toFixed(2)}` }
@@ -817,30 +759,30 @@ const ModelK: React.FC = () => {
         <Row gutter={[16, 8]}>
           {/* 筛选漏斗 - v6.0重构版 */}
           <Col xs={24} md={12}>
-            <div style={{ fontWeight: 'bold', marginBottom: '8px' }}>📊 筛选漏斗 <span style={{ fontSize: '11px', color: '#999', fontWeight: 'normal' }}>v6.0</span></div>
+            <div style={{ fontWeight: 'bold', marginBottom: '8px' }}>📊 筛选漏斗 <span style={{ fontSize: '11px', color: '#999', fontWeight: 'normal' }}>T10 Protocol</span></div>
             {funnelData && (
               <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center', fontSize: '12px' }}>
                 <Tooltip title="全市场活跃肥羊">
                   <Tag color="blue">全市场 {funnelData.total}</Tag>
                 </Tooltip>
                 <span>→</span>
-                <Tooltip title="Filter Layer: SQL层筛选(ST/新股/市值/RPS)">
-                  <Tag color="cyan">Filter {funnelData.L0_pass || funnelData.L1_pass}</Tag>
+                <Tooltip title="Layer 1: 板块锚定 + 基本面排雷">
+                  <Tag color="cyan">Battlefield {funnelData.L1_pass}</Tag>
                 </Tooltip>
                 <span>→</span>
-                <Tooltip title="Feature Layer: 因子提取(技术/资金/概念)">
-                  <Tag color="geekblue">Feature {funnelData.L1_pass}</Tag>
+                <Tooltip title="Layer 2: 股性基因 (涨停基因/流动性)">
+                  <Tag color="geekblue">Active Gene {funnelData.L2_pass}</Tag>
                 </Tooltip>
                 <span>→</span>
-                <Tooltip title="Score + Validate: 多因子评分+启动验证">
-                  <Tag color="orange">Score {funnelData.L2_pass}</Tag>
+                <Tooltip title="Layer 3: 狙击形态 (极致缩量/MA支撑)">
+                  <Tag color="orange">Sniper Setup {funnelData.L3_pass}</Tag>
                 </Tooltip>
                 <span>→</span>
-                <Tooltip title="Final Filter: 涌幅/概念共振/量比筛选">
-                  <Tag color="purple">Final {funnelData.L3_pass || funnelData.final}</Tag>
+                <Tooltip title="Layer 4: 筹码评分排序">
+                  <Tag color="purple">Scoring {funnelData.L4_pass || funnelData.final}</Tag>
                 </Tooltip>
                 <span>→</span>
-                <Tooltip title="符合AI评分+启动质量门槛">
+                <Tooltip title="最终推荐">
                   <Tag color="green">优选 {funnelData.final}</Tag>
                 </Tooltip>
               </div>
@@ -1203,7 +1145,7 @@ const ModelK: React.FC = () => {
           模型老K为您服务
         </h1>
         <p style={{ marginTop: '8px', color: '#666', fontSize: '13px' }}>
-          v6.0重构版 | 因子正交化 | Z-Score标准化 | 动态权重 {paramsLoaded && <span style={{ color: '#52c41a' }}>✓ 参数已同步</span>}
+          T10 结构狙击者 v1.0 | 4层漏斗策略 | 纯L1数据驱动 | 极致缩量狙击 {paramsLoaded && <span style={{ color: '#52c41a' }}>✓ 参数已同步</span>}
         </p>
       </div>
       <Row gutter={24}>
@@ -1223,99 +1165,77 @@ const ModelK: React.FC = () => {
             }
           >
             <Collapse defaultActiveKey={['basic']} ghost expandIconPosition="end">
-              {/* 基础筛选参数 */}
-              <Panel header={<span style={{ fontWeight: 'bold' }}>基础设置</span>} key="basic">
+              {/* 核心筛选参数 */}
+              <Panel header={<span style={{ fontWeight: 'bold' }}>核心参数 (T10)</span>} key="basic">
                 <Space direction="vertical" style={{ width: '100%' }} size="middle">
                   <div>
                     <div style={{ marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                      <span>最小市值 (亿元): {params.min_mv}</span>
+                      <span>极致缩量阈值: {params.vol_ratio_max}</span>
                     </div>
                     <Slider 
-                      value={params.min_mv} 
-                      onChange={(val) => setParams({ ...params, min_mv: val })} 
-                      min={10} 
-                      max={500} 
-                      marks={{ 10: '10', 100: '100', 500: '500' }} 
+                      value={params.vol_ratio_max} 
+                      onChange={(val) => setParams({ ...params, vol_ratio_max: val })} 
+                      min={0.4} 
+                      max={0.8} 
+                      step={0.05}
+                      marks={{ 0.4: '极', 0.6: '标', 0.8: '宽' }} 
                     />
                   </div>
 
                   <div>
                     <div style={{ marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                      <span>RPS强度 (250日): {params.rps_threshold}</span>
+                      <span>健康换手率: {params.turnover_min}% - {params.turnover_max}%</span>
                     </div>
                     <Slider 
-                      value={params.rps_threshold} 
-                      onChange={(val) => setParams({ ...params, rps_threshold: val })} 
-                      min={50} 
-                      max={95} 
-                      marks={{ 50: '50', 75: '75', 90: '90' }} 
+                      range
+                      value={[params.turnover_min || 2, params.turnover_max || 8]} 
+                      onChange={(val) => setParams({ ...params, turnover_min: val[0], turnover_max: val[1] })} 
+                      min={1} 
+                      max={15} 
+                      marks={{ 2: '2%', 8: '8%', 15: '15%' }} 
                     />
                   </div>
 
                   <div>
                     <div style={{ marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                      <span>倍量倍数: {params.vol_threshold}x</span>
+                      <span>最低AI评分: {params.min_score}</span>
                     </div>
                     <Slider 
-                      value={params.vol_threshold} 
-                      onChange={(val) => setParams({ ...params, vol_threshold: val })} 
-                      min={1.0} 
-                      max={3.0} 
-                      step={0.1} 
-                      marks={{ 1: '1x', 1.5: '1.5x', 2: '2x', 3: '3x' }} 
+                      value={params.min_score} 
+                      onChange={(val) => setParams({ ...params, min_score: val })} 
+                      min={40} 
+                      max={80} 
+                      step={5}
+                      marks={{ 40: '40', 60: '60', 80: '80' }} 
                     />
                   </div>
                 </Space>
               </Panel>
 
-              {/* 进阶策略参数 */}
-              <Panel header={<span style={{ fontWeight: 'bold' }}>进阶策略</span>} key="advanced">
+              {/* 策略开关 */}
+              <Panel header={<span style={{ fontWeight: 'bold' }}>策略开关</span>} key="advanced">
                 <Space direction="vertical" style={{ width: '100%' }} size="middle">
-                  <div>
-                    <div style={{ marginBottom: '4px', fontSize: '12px', display: 'flex', justifyContent: 'space-between' }}>
-                      <span>最低AI评分</span>
-                      <span style={{ color: '#1890ff' }}>{params.min_ai_score || 40}分</span>
-                    </div>
-                    <Slider 
-                      value={params.min_ai_score || 40} 
-                      onChange={(val) => setParams({ ...params, min_ai_score: val })} 
-                      min={30} max={70} step={5}
-                      marks={{ 30: '宽', 50: '严', 70: '极' }}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: '12px' }}>优先阴线低吸</span>
+                    <Switch 
+                      size="small"
+                      checked={params.prefer_negative_change !== false} 
+                      onChange={(checked) => setParams({ ...params, prefer_negative_change: checked })} 
                     />
                   </div>
 
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span style={{ fontSize: '12px' }}>主力净流入必须为正</span>
+                    <span style={{ fontSize: '12px' }}>必须板块多头</span>
                     <Switch 
                       size="small"
-                      checked={params.require_positive_inflow || false} 
-                      onChange={(checked) => setParams({ ...params, require_positive_inflow: checked })} 
-                    />
-                  </div>
-
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <Tooltip title="基于成交量、K线形态、资金流等多维度验证启动质量">
-                      <span style={{ fontSize: '12px', cursor: 'help' }}>启动质量验证 <QuestionCircleOutlined style={{ fontSize: '10px' }} /></span>
-                    </Tooltip>
-                    <Switch 
-                      size="small"
-                      checked={params.breakout_validation !== false} 
-                      onChange={(checked) => setParams({ ...params, breakout_validation: checked })} 
+                      checked={params.require_sector_bullish !== false} 
+                      onChange={(checked) => setParams({ ...params, require_sector_bullish: checked })} 
                     />
                   </div>
                   
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span style={{ fontSize: '12px' }}>优先创业板/科创板</span>
-                    <Switch 
-                      size="small"
-                      checked={params.prefer_20cm !== false} 
-                      onChange={(checked) => setParams({ ...params, prefer_20cm: checked })} 
-                    />
-                  </div>
-
                   <Divider style={{ margin: '4px 0' }} />
                   <div style={{ fontSize: '11px', color: '#999' }}>
-                    * 更多参数(换手、涨幅)已根据市场状态自动适配
+                    * T10模型仅使用L1量价数据，专注主升浪缩量回踩。
                   </div>
                 </Space>
               </Panel>
@@ -1401,9 +1321,9 @@ const ModelK: React.FC = () => {
                   ) : funnelData && ((funnelData.total !== undefined && funnelData.total > 0) || (funnelData.L1_pass !== undefined && funnelData.L1_pass > 0)) ? (
                     <div style={{ fontSize: '13px', minWidth: '300px' }}>
                       <div style={{ marginBottom: '10px', fontWeight: 'bold', color: '#52c41a' }}>
-                        ✅ 筛选完成 - v6.0 漏斗详情
+                        ✅ 筛选完成 - T10 漏斗详情
                       </div>
-                      {/* 漏斗流程图 - v6.0 Pipeline */}
+                      {/* 漏斗流程图 - T10 Pipeline */}
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
                         {funnelData.total !== undefined && (
                           <div style={{ display: 'flex', alignItems: 'center', padding: '4px 0' }}>
@@ -1413,74 +1333,54 @@ const ModelK: React.FC = () => {
                             </div>
                           </div>
                         )}
-                        {(funnelData.L0_pass !== undefined || funnelData.L1_pass !== undefined) && (
+                        {funnelData.L1_pass !== undefined && (
                           <>
-                            <div style={{ textAlign: 'center', color: '#ccc', fontSize: '10px' }}>↓ Filter Layer: SQL层筛选</div>
+                            <div style={{ textAlign: 'center', color: '#ccc', fontSize: '10px' }}>↓ Battlefield: 板块+基本面</div>
                             <div style={{ display: 'flex', alignItems: 'center', padding: '4px 0' }}>
-                              <div style={{ width: '100px', fontSize: '12px' }}>② Filter</div>
-                              <Tooltip title="SQL层筛选: 排除ST/新股/涨停/市值(10-1000亿)/RPS≥50">
+                              <div style={{ width: '100px', fontSize: '12px' }}>② Layer 1</div>
+                              <Tooltip title="板块MA20向上 + 剔除ST/退市/新股">
                                 <QuestionCircleOutlined style={{ fontSize: '10px', color: '#999', marginLeft: '4px' }} />
                               </Tooltip>
                               <div style={{ flex: 1, background: '#e6fffb', borderRadius: '4px', padding: '2px 8px', textAlign: 'right' }}>
-                                <strong style={{ color: '#13c2c2' }}>{(funnelData.L0_pass || funnelData.L1_pass || 0).toLocaleString()}</strong> 只
-                                <span style={{ fontSize: '10px', color: '#999', marginLeft: '4px' }}>
-                                  ({(funnelData.total || 0) > 0 ? (((funnelData.L0_pass || funnelData.L1_pass || 0) / (funnelData.total || 1)) * 100).toFixed(1) : 0}%)
-                                </span>
-                              </div>
-                            </div>
-                          </>
-                        )}
-                        {funnelData.L1_pass !== undefined && (
-                          <>
-                            <div style={{ textAlign: 'center', color: '#ccc', fontSize: '10px' }}>↓ Feature Layer: 因子提取</div>
-                            <div style={{ display: 'flex', alignItems: 'center', padding: '4px 0' }}>
-                              <div style={{ width: '100px', fontSize: '12px' }}>③ Feature</div>
-                              <Tooltip title="因子提取: 技术因子/资金因子/概念因子独立计算">
-                                <QuestionCircleOutlined style={{ fontSize: '10px', color: '#999', marginLeft: '4px' }} />
-                              </Tooltip>
-                              <div style={{ flex: 1, background: '#f6ffed', borderRadius: '4px', padding: '2px 8px', textAlign: 'right' }}>
-                                <strong style={{ color: '#52c41a' }}>{(funnelData.L1_pass || 0).toLocaleString()}</strong> 只
+                                <strong style={{ color: '#13c2c2' }}>{(funnelData.L1_pass || 0).toLocaleString()}</strong> 只
                               </div>
                             </div>
                           </>
                         )}
                         {funnelData.L2_pass !== undefined && (
                           <>
-                            <div style={{ textAlign: 'center', color: '#ccc', fontSize: '10px' }}>↓ Score + Validate: 评分+验证</div>
+                            <div style={{ textAlign: 'center', color: '#ccc', fontSize: '10px' }}>↓ Active Gene: 股性基因</div>
                             <div style={{ display: 'flex', alignItems: 'center', padding: '4px 0' }}>
-                              <div style={{ width: '100px', fontSize: '12px' }}>④ Score</div>
-                              <Tooltip title="Z-Score标准化 + 动态权重 + 启动质量验证(扣分制)">
+                              <div style={{ width: '100px', fontSize: '12px' }}>③ Layer 2</div>
+                              <Tooltip title="20日内有涨停或>6%大阳线 + 流动性门槛">
                                 <QuestionCircleOutlined style={{ fontSize: '10px', color: '#999', marginLeft: '4px' }} />
                               </Tooltip>
-                              <div style={{ flex: 1, background: '#fffbe6', borderRadius: '4px', padding: '2px 8px', textAlign: 'right' }}>
-                                <strong style={{ color: '#faad14' }}>{funnelData.L2_pass || 0}</strong> 只
-                                <span style={{ fontSize: '10px', color: '#999', marginLeft: '4px' }}>
-                                  ({(funnelData.L1_pass || 0) > 0 ? (((funnelData.L2_pass || 0) / (funnelData.L1_pass || 1)) * 100).toFixed(1) : 0}%)
-                                </span>
+                              <div style={{ flex: 1, background: '#f6ffed', borderRadius: '4px', padding: '2px 8px', textAlign: 'right' }}>
+                                <strong style={{ color: '#52c41a' }}>{(funnelData.L2_pass || 0).toLocaleString()}</strong> 只
                               </div>
                             </div>
                           </>
                         )}
-                        {(funnelData.L3_pass !== undefined || funnelData.final !== undefined) && (
+                        {funnelData.L3_pass !== undefined && (
                           <>
-                            <div style={{ textAlign: 'center', color: '#ccc', fontSize: '10px' }}>↓ Final Filter: 最终筛选</div>
+                            <div style={{ textAlign: 'center', color: '#ccc', fontSize: '10px' }}>↓ Sniper Setup: 狙击形态</div>
                             <div style={{ display: 'flex', alignItems: 'center', padding: '4px 0' }}>
-                              <div style={{ width: '100px', fontSize: '12px' }}>⑤ Final</div>
-                              <Tooltip title="最终筛选: 涨幅、概念共振、量比、换手率筛选">
+                              <div style={{ width: '100px', fontSize: '12px' }}>④ Layer 3</div>
+                              <Tooltip title="极致缩量(<0.6) + 黄金坑(-3%~1%) + MA20支撑">
                                 <QuestionCircleOutlined style={{ fontSize: '10px', color: '#999', marginLeft: '4px' }} />
                               </Tooltip>
-                              <div style={{ flex: 1, background: '#f9f0ff', borderRadius: '4px', padding: '2px 8px', textAlign: 'right' }}>
-                                <strong style={{ color: '#722ed1' }}>{funnelData.L3_pass || funnelData.final || 0}</strong> 只
+                              <div style={{ flex: 1, background: '#fffbe6', borderRadius: '4px', padding: '2px 8px', textAlign: 'right' }}>
+                                <strong style={{ color: '#faad14' }}>{funnelData.L3_pass || 0}</strong> 只
                               </div>
                             </div>
                           </>
                         )}
                         {funnelData.final !== undefined && (
                           <>
-                            <div style={{ textAlign: 'center', color: '#ccc', fontSize: '10px' }}>↓ AI评分 + 质量门槛</div>
+                            <div style={{ textAlign: 'center', color: '#ccc', fontSize: '10px' }}>↓ Scoring: 综合评分排序</div>
                             <div style={{ display: 'flex', alignItems: 'center', padding: '4px 0' }}>
-                              <div style={{ width: '100px', fontSize: '12px' }}>⑥ 优选推荐</div>
-                              <Tooltip title="AI评分≥50，启动质量≥55，TopN限制">
+                              <div style={{ width: '100px', fontSize: '12px' }}>⑤ 优选推荐</div>
+                              <Tooltip title="量比/换手/RPS综合评分 + 阴线低吸加分">
                                 <QuestionCircleOutlined style={{ fontSize: '10px', color: '#999', marginLeft: '4px' }} />
                               </Tooltip>
                               <div style={{ flex: 1, background: '#fff1f0', borderRadius: '4px', padding: '2px 8px', textAlign: 'right' }}>

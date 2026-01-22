@@ -57,7 +57,7 @@ class TradeDateAdapter:
             cls._trade_calendar_cache = trade_cal
             cls._cache_date = today
             
-            logger.info(f"交易日历已更新，共 {len(trade_cal)} 个交易日")
+            logger.debug(f"交易日历已更新，共 {len(trade_cal)} 个交易日")
             return trade_cal
             
         except Exception as e:
