@@ -1,0 +1,27 @@
+# 核心框架
+fastapi
+uvicorn[standard]
+python-multipart
+pandas
+
+# 数据库
+duckdb
+
+# 配置与工具
+python-dotenv
+pydantic
+pydantic-settings
+
+# 日期与日历
+chinesecalendar
+arrow
+
+# 安全
+passlib
+bcrypt==4.0.1
+python-jose[cryptography]
+
+# 数据源
+tushare
+tenacity
+apscheduler
