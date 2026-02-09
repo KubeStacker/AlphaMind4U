@@ -56,6 +56,9 @@ export const triggerBacktest = () => apiClient.post('/strategy/backtest');
 /** 获取验证结果 */
 export const getBacktestResults = (date) => apiClient.get('/strategy/backtest/results', { params: { date } });
 
+/** 获取科创50回测结果 */
+export const getStar50Backtest = () => apiClient.get('/strategy/backtest/star50');
+
 /**
  * 获取后端状态 (此端点需在后端实现)
  *

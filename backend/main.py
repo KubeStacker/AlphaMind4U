@@ -56,6 +56,44 @@ async def read_root():
 
 from core.calendar import trading_calendar
 
+@app.get("/system/trigger_star50", tags=["System"])
+def trigger_star50():
+    """ 触发科创50策略回测 """
+    from strategy.recommend.plugins.backtest_star50 import run_backtest
+    res = run_backtest()
+    return {"status": "success" if res else "failed", "data": res}
+
+@app.get("/system/migrate_db", tags=["System"])
+def migrate_db():
+    """ 数据库结构迁移 """
+    from db.connection import get_db_connection
+    try:
+        with get_db_connection() as con:
+            con.execute("ALTER TABLE strategy_recommendations ADD COLUMN p1_return DOUBLE;")
+            con.execute("ALTER TABLE strategy_recommendations ADD COLUMN p3_return DOUBLE;")
+        return {"status": "success", "message": "Columns added."}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.get("/system/verify_p5", tags=["System"])
+def verify_p5():
+    """ 强制计算指定日期的收益率 """
+    from strategy.recommend import get_plugin
+    from db.connection import fetch_df
+    recommend_date = "2026-02-04"
+    rec_query = f"SELECT ts_code FROM strategy_recommendations WHERE recommend_date = '{recommend_date}'"
+    recs = fetch_df(rec_query)
+    date_query = f"SELECT DISTINCT trade_date FROM daily_price WHERE trade_date >= '{recommend_date}' ORDER BY trade_date ASC LIMIT 15"
+    dates_df = fetch_df(date_query)
+    
+    backtester = get_plugin("backtester")
+    res = backtester.calculate_returns_for_date(recommend_date)
+    return {
+        "recs_found": len(recs),
+        "trading_dates_found": [str(d) for d in dates_df['trade_date'].tolist()],
+        "updated_count": res
+    }
+
 @app.get("/system/status", tags=["System"])
 def get_system_status():
     """ 返回当前系统和市场的状态 """
@@ -64,3 +102,30 @@ def get_system_status():
         "market_status": "TRADING" if is_trading else "CLOSED",
         "timestamp": datetime.datetime.now()
     }
+
+@app.get("/system/db_check", tags=["System"])
+def db_check():
+    """ 分析历史极端日的行情特征 """
+    from db.connection import fetch_df
+    try:
+        # 分析 20250407, 20250903, 20251121
+        panic_dates = ['2025-04-07', '2025-09-03', '2025-11-21']
+        # 注意：由于 daily_price 是按 trade_date, ts_code 存储的，我们需要聚合查询
+        query = f"""
+        SELECT 
+            trade_date,
+            COUNT(*) as total_stocks,
+            SUM(CASE WHEN pct_chg > 0 THEN 1 ELSE 0 END) as up_count,
+            SUM(CASE WHEN pct_chg < -9.8 THEN 1 ELSE 0 END) as limit_downs,
+            MEDIAN(pct_chg) as median_ret
+        FROM daily_price 
+        WHERE trade_date IN ('2025-04-07', '2025-09-03', '2025-11-21')
+        GROUP BY trade_date
+        ORDER BY trade_date
+        """
+        analysis = fetch_df(query).to_dict('records')
+        return {
+            "panic_days_pathology": analysis
+        }
+    except Exception as e:
+        return {"error": str(e)}

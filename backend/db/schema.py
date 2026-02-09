@@ -133,6 +133,8 @@ CREATE TABLE IF NOT EXISTS strategy_recommendations (
     score           DOUBLE,
     strategy_name   VARCHAR(50),
     filters_used    JSON,
+    p1_return       DOUBLE,
+    p3_return       DOUBLE,
     p5_return       DOUBLE,
     p10_return      DOUBLE,
     PRIMARY KEY (recommend_date, ts_code, strategy_name)
@@ -218,39 +220,21 @@ CREATE TABLE IF NOT EXISTS mainline_scores (
 
 """
 
-
 ALL_TABLES_SQL = [
-
     "CREATE SEQUENCE IF NOT EXISTS users_id_seq START 1;",
-
     CREATE_USERS_TABLE_SQL,
-
     CREATE_STOCK_BASIC_TABLE_SQL,
-
     CREATE_DAILY_PRICE_TABLE_SQL,
-
     "CREATE INDEX IF NOT EXISTS idx_daily_price_tscode ON daily_price (ts_code);",
-
     "CREATE INDEX IF NOT EXISTS idx_daily_price_date ON daily_price (trade_date);",
-
     CREATE_STOCK_CONCEPTS_TABLE_SQL,
-
     CREATE_STOCK_CONCEPT_DETAILS_TABLE_SQL,
-
     "CREATE INDEX IF NOT EXISTS idx_concept_details_tscode ON stock_concept_details (ts_code);",
-
     CREATE_STOCK_FINANCIALS_TABLE_SQL,
-
     CREATE_STOCK_MONEYFLOW_TABLE_SQL,
-
     "CREATE INDEX IF NOT EXISTS idx_moneyflow_date ON stock_moneyflow (trade_date);",
-
     CREATE_STRATEGY_RECOMMENDATIONS_TABLE_SQL,
-
     CREATE_MARKET_INDEX_TABLE_SQL,
-
     CREATE_MARKET_SENTIMENT_TABLE_SQL,
-
     CREATE_MAINLINE_SCORES_TABLE_SQL
-
 ]

@@ -13,6 +13,9 @@ class Settings(BaseSettings):
     # Tushare API Token, 从 .env 文件中读取
     # 访问 https://tushare.pro 注册以获取
     tushare_token: str = "YOUR_TUSHARE_TOKEN_HERE"
+    
+    # 数据源配置: 'tushare' 或 'akshare'
+    data_source: str = "tushare"
 
     # model_config 用于指定 .env 文件的位置
     # 在这个配置中，它会查找项目根目录下的 .env 文件

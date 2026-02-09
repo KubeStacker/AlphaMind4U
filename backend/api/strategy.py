@@ -4,7 +4,8 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from strategy.mainline import mainline_analyst
 from strategy.sentiment import sentiment_analyst
-from strategy.plugins import run_recommendation, get_plugin
+from strategy.recommend import run_recommendation, get_plugin
+from strategy.recommend.plugins.backtest_star50 import run_backtest as run_star50_backtest
 
 router = APIRouter(
     prefix="/strategy",
@@ -18,6 +19,16 @@ class StrategyParams(BaseModel):
     target_date: str | None = None
     concept: str | None = None
     strategy_id: str | None = None
+
+@router.get("/backtest/star50")
+def get_star50_backtest():
+    """ 
+    获取或计算科创50情绪策略回测结果 
+    """
+    result = run_star50_backtest()
+    if result:
+        return result
+    return {"status": "error", "message": "Backtest failed"}
 
 @router.get("/recommendations")
 def get_recommendations(params: StrategyParams = Depends()):

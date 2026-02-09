@@ -1,15 +1,21 @@
 <template>
   <div class="space-y-4 md:space-y-6 animate-in fade-in duration-500 max-w-6xl mx-auto pb-8">
-    <!-- 市场情绪总览 -->
+    <!-- Market Sentiment Overview -->
     <div class="bg-business-dark p-4 rounded-2xl shadow-lg border border-business-light w-full">
-      <div class="flex items-center justify-between mb-2">
+      <div class="flex flex-col sm:flex-row sm:items-center justify-between mb-4 gap-3">
         <div class="flex items-center space-x-2">
           <div class="w-1.5 h-4 bg-business-warning rounded-full"></div>
           <h2 class="text-sm font-bold text-slate-400">市场情绪趋势</h2>
         </div>
-        <div class="flex items-center space-x-2 text-[10px]">
-           <span class="px-2 py-0.5 bg-red-500/20 text-red-400 rounded">85+ 沸腾/止盈</span>
-           <span class="px-2 py-0.5 bg-blue-500/20 text-blue-400 rounded">25- 冰点/潜伏</span>
+        <div class="flex flex-wrap items-center gap-2 text-[10px]">
+           <button @click="handleOpenBacktest" class="flex items-center space-x-1 px-3 py-1 bg-business-accent/20 text-business-accent rounded hover:bg-business-accent hover:text-white transition-colors border border-business-accent/30">
+              <PresentationChartLineIcon class="w-3 h-3" />
+              <span>历史验证</span>
+           </button>
+           <div class="flex items-center space-x-2">
+             <span class="px-2 py-0.5 bg-red-500/20 text-red-400 rounded">85+ 沸腾/止盈</span>
+             <span class="px-2 py-0.5 bg-blue-500/20 text-blue-400 rounded">25- 冰点/潜伏</span>
+           </div>
         </div>
       </div>
       <div class="h-40 w-full">
@@ -70,24 +76,26 @@
 
     <!-- 策略控制中心 (列表显示) -->
     <div id="strategy-control-center" class="bg-business-dark rounded-2xl shadow-business border border-business-light overflow-hidden mx-2 md:mx-0">
-      <div class="p-4 md:p-5 border-b border-business-light bg-slate-900/20 flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div class="p-4 md:p-5 border-b border-business-light bg-slate-900/20 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div class="flex items-center space-x-3">
           <div class="w-1 h-6 bg-business-accent rounded-full"></div>
           <h2 class="text-base font-bold text-white">智能策略推荐</h2>
         </div>
         
-        <div class="flex items-center space-x-2">
-          <input v-model="filterDate" type="date" class="bg-business-darker border border-business-light rounded-lg px-2 py-1.5 text-xs font-bold text-white outline-none focus:border-business-accent w-32" />
-          <select v-model="selectedConcept" class="bg-business-darker border border-business-light rounded-lg px-2 py-1.5 text-xs font-bold text-business-highlight outline-none focus:border-business-accent appearance-none min-w-[100px]">
+        <div class="flex flex-wrap items-center gap-2">
+          <input v-model="filterDate" type="date" class="bg-business-darker border border-business-light rounded-lg px-2 py-1.5 text-xs font-bold text-white outline-none focus:border-business-accent w-28 sm:w-32" />
+          <select v-model="selectedConcept" class="bg-business-darker border border-business-light rounded-lg px-2 py-1.5 text-xs font-bold text-business-highlight outline-none focus:border-business-accent appearance-none min-w-[80px] sm:min-w-[100px]">
             <option :value="null">全市场</option>
             <option v-for="c in hotConcepts" :key="c" :value="c">{{ c }}</option>
           </select>
-          <button @click="handleFetch" class="h-8 px-4 bg-business-accent text-white rounded-lg text-[10px] font-bold uppercase tracking-wider hover:brightness-110 transition-all active:scale-95 shrink-0 shadow-lg shadow-business-accent/20">
-            获取推荐
-          </button>
-          <button @click="handleBacktest" :disabled="backtesting" class="h-8 px-4 bg-business-success text-white rounded-lg text-[10px] font-bold uppercase tracking-wider hover:brightness-110 transition-all active:scale-95 shrink-0 shadow-lg shadow-business-success/20">
-            {{ backtesting ? '分析中' : '收益验证' }}
-          </button>
+          <div class="flex items-center gap-2 w-full sm:w-auto mt-2 sm:mt-0">
+            <button @click="handleFetch" class="flex-1 sm:flex-none h-8 px-3 sm:px-4 bg-business-accent text-white rounded-lg text-[10px] font-bold uppercase tracking-wider hover:brightness-110 transition-all active:scale-95 shadow-lg shadow-business-accent/20">
+              获取推荐
+            </button>
+            <button @click="handleBacktest" :disabled="backtesting" class="flex-1 sm:flex-none h-8 px-3 sm:px-4 bg-business-success text-white rounded-lg text-[10px] font-bold uppercase tracking-wider hover:brightness-110 transition-all active:scale-95 shadow-lg shadow-business-success/20">
+              {{ backtesting ? '分析中' : '收益验证' }}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -149,16 +157,84 @@
         </div>
       </div>
     </div>
+
+    <!-- Backtest Modal -->
+    <Dialog :open="showBacktestModal" @close="showBacktestModal = false" class="relative z-50">
+      <div class="fixed inset-0 bg-business-darker/90 backdrop-blur-sm" />
+      <div class="fixed inset-0 flex items-center justify-center p-2 sm:p-4">
+        <DialogPanel class="w-full max-w-4xl rounded-2xl bg-business-dark border border-business-light p-4 sm:p-6 shadow-2xl overflow-hidden flex flex-col max-h-[95vh] sm:max-h-[90vh]">
+          <div class="flex justify-between items-start sm:items-center mb-4 sm:mb-6 shrink-0">
+             <div class="flex items-center space-x-3">
+                <div class="w-1.5 h-6 bg-business-accent rounded-full shadow-[0_0_8px_rgba(56,189,248,0.5)]"></div>
+                <div>
+                   <DialogTitle class="text-base sm:text-xl font-bold text-white tracking-tight">科创50情绪策略验证</DialogTitle>
+                   <p class="text-[9px] sm:text-[10px] text-slate-500 font-mono mt-0.5">CAPITAL: ¥100k | BENCHMARK: STAR50</p>
+                </div>
+             </div>
+             <button @click="showBacktestModal = false" class="p-1.5 text-slate-500 hover:text-white rounded-full hover:bg-white/10 transition-colors">
+                <span class="sr-only">Close</span>
+                <svg class="w-5 h-5 sm:w-6 sm:h-6" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+             </button>
+          </div>
+
+          <div v-if="backtestLoading" class="flex-1 flex flex-col items-center justify-center space-y-4 min-h-[300px]">
+             <div class="w-10 h-10 border-4 border-business-light border-t-business-accent rounded-full animate-spin"></div>
+             <div class="text-[10px] font-bold text-slate-500 uppercase tracking-widest animate-pulse">Running Simulation...</div>
+          </div>
+
+          <div v-else class="flex-1 flex flex-col overflow-hidden">
+             <!-- KPI Panel -->
+             <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 sm:gap-3 mb-4 sm:mb-6 shrink-0">
+                <div class="bg-slate-900/50 p-2 sm:p-3 rounded-xl border border-business-light/30 flex flex-col items-center">
+                   <span class="text-[8px] sm:text-[9px] text-slate-500 font-bold uppercase tracking-widest mb-1">当前总资产</span>
+                   <span class="text-sm sm:text-lg font-bold font-mono text-business-highlight">{{ backtestMetrics.final_value }}</span>
+                </div>
+                <div class="bg-slate-900/50 p-2 sm:p-3 rounded-xl border border-business-light/30 flex flex-col items-center">
+                   <span class="text-[8px] sm:text-[9px] text-slate-500 font-bold uppercase tracking-widest mb-1">策略总收益</span>
+                   <span class="text-sm sm:text-lg font-bold font-mono" :class="parseFloat(backtestMetrics.total_return) >= 0 ? 'text-business-success' : 'text-business-danger'">{{ backtestMetrics.total_return }}</span>
+                </div>
+                <div class="bg-slate-900/50 p-2 sm:p-3 rounded-xl border border-business-light/30 flex flex-col items-center">
+                   <span class="text-[8px] sm:text-[9px] text-slate-500 font-bold uppercase tracking-widest mb-1">最大回撤</span>
+                   <span class="text-sm sm:text-lg font-bold font-mono text-white">{{ backtestMetrics.max_drawdown }}</span>
+                </div>
+                <div class="bg-slate-900/50 p-2 sm:p-3 rounded-xl border border-business-light/30 flex flex-col items-center">
+                   <span class="text-[8px] sm:text-[9px] text-slate-500 font-bold uppercase tracking-widest mb-1">胜率</span>
+                   <span class="text-sm sm:text-lg font-bold font-mono text-amber-500">{{ backtestMetrics.win_rate }}</span>
+                </div>
+                <div class="bg-slate-900/50 p-2 sm:p-3 rounded-xl border border-business-light/30 flex flex-col items-center col-span-2 sm:col-span-1">
+                   <span class="text-[8px] sm:text-[9px] text-slate-500 font-bold uppercase tracking-widest mb-1">基准收益</span>
+                   <span class="text-sm sm:text-lg font-bold font-mono text-slate-400">{{ backtestMetrics.benchmark_return }}</span>
+                </div>
+             </div>
+
+             <!-- Chart -->
+             <div class="flex-1 min-h-[250px] sm:min-h-0 relative bg-slate-900/20 rounded-xl border border-business-light/20 p-2">
+                <v-chart :option="backtestOption" autoresize />
+             </div>
+             
+             <div class="mt-3 sm:mt-4 shrink-0 flex flex-col sm:flex-row sm:items-center justify-between text-[8px] sm:text-[10px] text-slate-500 px-1 gap-2">
+                <div class="flex space-x-4">
+                   <span class="flex items-center"><span class="w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full bg-business-success mr-1.5"></span> Buy (100% / 50%)</span>
+                   <span class="flex items-center"><span class="w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full bg-business-danger mr-1.5"></span> Sell / Stop</span>
+                </div>
+                <div class="italic opacity-50">Parameters: Fee 0.15% (Trade at Close)</div>
+             </div>
+          </div>
+        </DialogPanel>
+      </div>
+    </Dialog>
   </div>
 </template>
 
 <script setup>
 import { ref, onMounted, reactive, computed } from 'vue';
-import { getRecommendations, getHotConcepts, triggerBacktest, getBacktestResults, getMainlineHistory, getMarketSentiment } from '@/services/api';
+import { Dialog, DialogPanel, DialogTitle } from '@headlessui/vue';
+import { getRecommendations, getHotConcepts, triggerBacktest, getBacktestResults, getMainlineHistory, getMarketSentiment, getStar50Backtest } from '@/services/api';
 import { 
   ArrowTopRightOnSquareIcon, 
   ChatBubbleLeftRightIcon,
-  InboxIcon
+  InboxIcon,
+  PresentationChartLineIcon
 } from '@heroicons/vue/20/solid'
 
 const loading = ref(false);
@@ -175,21 +251,119 @@ const backtesting = ref(false);
 const marketStatus = ref({ text: 'STANDBY', color: 'text-slate-500' });
 const isTooltipLocked = ref(false);
 
+// Backtest Modal State
+const showBacktestModal = ref(false);
+const backtestLoading = ref(false);
+const backtestMetrics = ref({
+  total_return: '--',
+  max_drawdown: '--',
+  win_rate: '--',
+  benchmark_return: '--',
+  final_value: '--'
+});
+const backtestOption = ref({});
+
+const handleOpenBacktest = async () => {
+  showBacktestModal.value = true;
+  if (backtestOption.value.series && backtestOption.value.series.length > 0) return; 
+
+  backtestLoading.value = true;
+  try {
+    const res = await getStar50Backtest();
+    const data = res.data;
+    if (!data || !data.metrics) return;
+
+    backtestMetrics.value = data.metrics;
+    
+    const dates = data.curves.map(c => c.trade_date);
+    const stratVals = data.curves.map(c => c.strategy_nav);
+    const benchVals = data.curves.map(c => c.benchmark_nav);
+    const positions = data.curves.map(c => ({
+       value: c.strategy_nav,
+       position: c.position,
+       date: c.trade_date
+    }));
+
+    const markPoints = [];
+    let lastPos = 0;
+    data.curves.forEach((c, i) => {
+        if (c.position > lastPos && c.position > 0) {
+           markPoints.push({ name: 'Buy', coord: [i, c.strategy_nav], value: 'B', itemStyle: { color: '#ef4444' } });
+        } else if (c.position < lastPos) {
+           markPoints.push({ name: 'Sell', coord: [i, c.strategy_nav], value: 'S', itemStyle: { color: '#10b981' }, symbolRotate: 180, symbolOffset: [0, 10] });
+        }
+        lastPos = c.position;
+    });
+
+    backtestOption.value = {
+      backgroundColor: 'transparent',
+      tooltip: { 
+         trigger: 'axis',
+         axisPointer: { type: 'cross' },
+         backgroundColor: 'rgba(15, 23, 42, 0.95)',
+         borderColor: '#334155',
+         textStyle: { color: '#cbd5e1' },
+         formatter: (params) => {
+            let html = `<div class="font-bold border-b border-slate-700 pb-1 mb-1">${params[0].name}</div>`;
+            params.forEach(p => {
+               const val = p.value.toLocaleString('zh-CN', { style: 'currency', currency: 'CNY' });
+               html += `<div class="flex justify-between w-48"><span style="color:${p.color}">${p.seriesName}</span> <span class="font-bold text-white">${val}</span></div>`;
+            });
+            const posItem = positions.find(p => p.date === params[0].name);
+            if (posItem) {
+               html += `<div class="mt-1 pt-1 border-t border-slate-700 flex justify-between"><span class="text-slate-400">模拟持仓</span> <span class="font-bold text-business-highlight">${posItem.position * 100}%</span></div>`;
+            }
+            return html;
+         }
+      },
+      legend: { textStyle: { color: '#94a3b8' }, top: 0 },
+      grid: { top: 40, left: 20, right: 20, bottom: 30, containLabel: true },
+      xAxis: { type: 'category', data: dates, axisLabel: { color: '#64748b', fontSize: 10 } },
+      yAxis: { 
+        type: 'value', 
+        scale: true, 
+        splitLine: { lineStyle: { color: '#334155', type: 'dashed' } }, 
+        axisLabel: { 
+          color: '#64748b', 
+          fontSize: 9,
+          formatter: (v) => (v / 10000).toFixed(1) + 'w' 
+        } 
+      },
+      series: [
+        {
+          name: '情绪增强策略',
+          type: 'line',
+          data: stratVals,
+          smooth: true,
+          lineStyle: { width: 3, color: '#f43f5e', shadowBlur: 10, shadowColor: 'rgba(244, 63, 94, 0.3)' },
+          areaStyle: { 
+            opacity: 0.1, 
+            color: {
+              type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
+              colorStops: [{ offset: 0, color: '#f43f5e' }, { offset: 1, color: 'transparent' }]
+            }
+          },
+          markPoint: { symbol: 'pin', symbolSize: 20, data: markPoints, label: { fontSize: 8, fontWeight: 'bold' } }
+        },
+        {
+          name: '上证指数基准',
+          type: 'line',
+          data: benchVals,
+          showSymbol: false,
+          lineStyle: { width: 1.5, type: 'dashed', color: '#94a3b8' }
+        }
+      ]
+    };
+
+  } catch (e) {
+    console.error("Backtest Error", e);
+  } finally {
+    backtestLoading.value = false;
+  }
+};
+
 const marketSentimentChartOption = ref({
   grid: { top: 40, left: 40, right: 40, bottom: 45, containLabel: true },
-  toolbox: {
-    right: 40,
-    top: 0,
-    feature: {
-      dataZoom: {
-        yAxisIndex: 'none',
-        title: { zoom: '区域缩放', back: '缩放还原' }
-      },
-      restore: { title: '重置' }
-    },
-    iconStyle: { borderColor: '#64748b' },
-    emphasis: { iconStyle: { borderColor: '#f59e0b' } }
-  },
   tooltip: { 
     trigger: 'axis', 
     axisPointer: { type: 'cross' },
@@ -335,6 +509,7 @@ const fetchMainlineHistory = async () => {
     
     mainlineChartOption.value = {
       backgroundColor: 'transparent',
+      grid: { top: 40, left: 10, right: 10, bottom: 60, containLabel: true },
       tooltip: {
         trigger: 'axis',
         enterable: true,
@@ -387,7 +562,7 @@ const fetchMainlineHistory = async () => {
               '<span class="ml-2 text-[9px] text-slate-500">(点击锁定)</span>';
 
            let html = `<div class="font-bold text-slate-200 text-xs mb-2 border-b border-slate-700 pb-1 flex justify-between items-center">
-                         <span>${date} 核心主线</span>
+                         <span class="truncate mr-2">${date} 核心主线</span>
                          ${lockHint}
                        </div>`;
            
@@ -401,7 +576,7 @@ const fetchMainlineHistory = async () => {
                    if (dataNode.top_stocks.length > 0) {
                        stocksHtml = dataNode.top_stocks.map(s => `
                            <div style='display:flex;justify-content:space-between;align-items:center;line-height:1.4;'>
-                               <span style='overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100px;'>${s.name}</span>
+                               <span style='overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:80px;'>${s.name}</span>
                                <span style='color:#ef4444;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-weight:600;margin-left:8px;'>+${(s.pct_chg || 0).toFixed(1)}%</span>
                            </div>
                        `).join('');
@@ -415,10 +590,10 @@ const fetchMainlineHistory = async () => {
                }
                
                html += `
-                 <div class="mb-4 last:mb-0">
-                   <div class="flex justify-between items-center mb-1.5 px-1">
-                     <span class="font-bold text-business-highlight text-xs">${concept}</span>
-                     <span class="text-[10px] text-slate-400 font-mono bg-slate-800 px-1.5 py-0.5 rounded">强度: ${score}</span>
+                 <div class="mb-3 last:mb-0">
+                   <div class="flex justify-between items-center mb-1 px-1">
+                     <span class="font-bold text-business-highlight text-[11px] truncate mr-2">${concept}</span>
+                     <span class="text-[9px] text-slate-400 font-mono bg-slate-800 px-1 py-0.5 rounded shrink-0">强度: ${score}</span>
                    </div>
                    <div class="bg-slate-900/50 rounded-lg p-2 border border-slate-700/30 shadow-inner">
                      <div class="text-[10px] font-medium text-slate-200">
@@ -429,7 +604,7 @@ const fetchMainlineHistory = async () => {
                `;
            });
            
-           return `<div style="max-height:300px; overflow-y:auto; padding-right:4px; min-width:180px;">${html}</div>`;
+           return `<div style="max-height:280px; overflow-y:auto; padding-right:4px; min-width:160px; max-width:240px;">${html}</div>`;
         }
       },
       legend: {
@@ -487,14 +662,14 @@ const fetchMarketSentiment = async () => {
       const signal = details.signal;
       const val = item.value;
       
-      if (signal === 'BUY') {
+      if (signal && signal.includes('BUY')) {
         markPoints.push({
           name: '买入',
           coord: [i, val],
           value: '买',
           itemStyle: { color: '#ef4444', shadowBlur: 10, shadowColor: '#ef4444' }
         });
-      } else if (signal === 'SELL') {
+      } else if (signal && signal.includes('SELL')) {
         markPoints.push({
           name: '卖出',
           coord: [i, val],
@@ -525,7 +700,9 @@ const fetchMarketSentiment = async () => {
               const val = typeof p.value === 'object' ? p.value.value : p.value;
               const details = p.data?.details || {};
               const signal = details.signal || 'HOLD';
-              const signalMap = { 'BUY': '红色买入', 'SELL': '绿色卖出', 'STAY_OUT': '空仓避险', 'WATCH': '冰点观望', 'HOLD': '继续持仓' };
+              
+              // 优先使用数据项中的 label (中文)
+              const displayLabel = p.data?.label || details.label || signal;
               
               html += `<div class="mb-2 border-b border-slate-700 pb-1 flex justify-between">
                         <span class="text-slate-400">${p.name} 指标</span>
@@ -534,25 +711,41 @@ const fetchMarketSentiment = async () => {
               
               html += `<div class="mb-2 px-2 py-1 bg-slate-800 rounded flex justify-between items-center">
                         <span class="text-[10px] text-slate-500">操作建议</span>
-                        <span class="font-bold ${signal === 'BUY' ? 'text-rose-500' : signal === 'SELL' ? 'text-emerald-500' : 'text-slate-300'}">${signalMap[signal]}</span>
+                        <span class="font-bold ${signal.includes('BUY') ? 'text-rose-500' : signal.includes('SELL') ? 'text-emerald-500' : 'text-slate-300'}">${displayLabel}</span>
                       </div>`;
 
               if (details.factors) {
                 const f = details.factors;
                 html += `<div class="grid grid-cols-2 gap-x-2 gap-y-1 mb-3 text-[10px] text-slate-500">
-                          <div>赚钱效应: <span class="text-slate-300">${f.breadth}</span></div>
+                          <div>赚钱效应: <span class="text-slate-300">${f.breadth}%</span></div>
+                          <div>中位数涨幅: <span class="${f.median_chg > 0 ? 'text-rose-400' : 'text-emerald-400'}">${f.median_chg}%</span></div>
+                          <div>指数涨幅: <span class="text-slate-300">${f.index_chg}%</span></div>
                           <div>净涨停: <span class="text-slate-300">${f.limit}</span></div>
                           <div>炸板压制: <span class="text-slate-300">${f.failure}</span></div>
-                          <div>量能: <span class="text-slate-300">${f.vol}</span></div>
+                          <div>量能共振: <span class="text-slate-300">${f.vol}</span></div>
                         </div>`;
               }
               
               if (details.metrics) {
                 const m = details.metrics;
-                html += `<div class="mt-2 text-[10px] text-slate-400 border-t border-slate-800 pt-2">
-                          <div class="flex justify-between"><span>涨停/跌停:</span> <span>${m.limit_ups} / ${m.limit_downs}</span></div>
-                          <div class="flex justify-between"><span>炸板率:</span> <span class="${m.fail_rate > 30 ? 'text-amber-500' : ''}">${m.fail_rate}%</span></div>
-                        </div>`;
+                html += `<div class="mt-2 text-[10px] text-slate-400 border-t border-slate-800 pt-2 space-y-1">
+                          <div class="flex justify-between items-center bg-blue-500/10 px-2 py-1 rounded mb-2">
+                            <span class="text-blue-400 font-bold">操盘策略:</span> 
+                            <span class="text-white font-bold ml-2">${m.advice || '全市场择优'}</span>
+                          </div>
+                          <div class="flex justify-between"><span>评分动量:</span> <span class="${m.score_delta > 0 ? 'text-rose-400' : 'text-emerald-400'}">${m.score_delta}</span></div>`;
+                
+                if (m.is_decoupling) {
+                  html += `<div class="flex justify-between items-center bg-rose-500/10 px-1 rounded"><span class="text-rose-400 font-bold">剪刀差进攻:</span> <span class="text-rose-400">TRUE</span></div>`;
+                }
+                if (m.is_suppressed) {
+                  html += `<div class="flex justify-between items-center bg-amber-500/10 px-1 rounded"><span class="text-amber-400 font-bold">主力压盘:</span> <span class="text-amber-400">TRUE</span></div>`;
+                }
+
+                if (m.limit_ups !== undefined) {
+                   html += `<div class="flex justify-between"><span>涨停/跌停:</span> <span>${m.limit_ups} / ${m.limit_downs}</span></div>`;
+                }
+                html += `</div>`;
               }
             }
           });
@@ -577,6 +770,7 @@ const fetchMarketSentiment = async () => {
           showSymbol: false,
           data: data.sentiment.map(item => ({
             value: item.value,
+            label: item.label,
             details: item.details
           })),
           lineStyle: { color: '#f59e0b', width: 3 },

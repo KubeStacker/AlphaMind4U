@@ -1,27 +1,33 @@
-# /backend/strategy/plugins/hot_concept.py
+# /backend/strategy/mainline/analyst.py
 
 import pandas as pd
 import numpy as np
 import logging
 from db.connection import fetch_df, fetch_df_read_only, get_db_connection
-from strategy.config import CONCEPT_MAPPING, CATEGORY_WEIGHTS
+from .config import CONCEPT_MAPPING, CATEGORY_WEIGHTS
 
 logger = logging.getLogger(__name__)
 
 class MainlineAnalyst:
     """
     主线分析器 (Mainline Analyst)
-    基于板块共识与资金热度识别市场核心主线
+    功能：基于板块共识与资金热度，识别市场的核心主线板块。
+    核心逻辑：
+    1. 统计各概念板块的涨停数、平均涨幅、成交额等数据。
+    2. 计算多维评分 (Score)，包括涨停强度、板块广度、资金热度。
+    3. 引入"行业共识"算法，解决一只股票对应多个概念时的归属问题，将资金聚焦到最核心的主线。
     """
     def __init__(self, concept_mapping=None, category_weights=None):
+        # 概念映射表，定义了"大板块"包含哪些"子概念"
         self.concept_mapping = concept_mapping if concept_mapping else CONCEPT_MAPPING
-        # 如果未传入权重，默认使用全局配置
+        # 板块权重配置，用于在多重概念冲突时决定优先归属
         self.category_weights = category_weights if category_weights else CATEGORY_WEIGHTS
 
     def _get_mapped_concept(self, original_concept: str) -> str:
         """
         [DEPRECATED in V9] 以前是针对单一概念名进行映射。
         现在改用 _get_stock_primary_sector 进行多维共识判定。
+        保留此方法用于向后兼容或初步筛选。
         """
         best_category = original_concept
         max_score = 0.0
@@ -51,6 +57,21 @@ class MainlineAnalyst:
     def _identify_stock_sectors(self, df_concepts: pd.DataFrame) -> pd.DataFrame:
         """
         [V9 核心算法] 基于概念共识的股票行业聚类。
+        
+        背景：一只股票可能同时属于"光伏"、"HJT电池"、"半导体"等多个概念。
+        目标：确定该股票当前最核心的"主行业" (Primary Sector)。
+        
+        算法逻辑：
+        1. 输入：股票及其所属的所有概念列表。
+        2. 打分：遍历每个概念，如果它属于某个配置的大板块 (Sector)，则根据关键词匹配度和板块权重进行打分。
+        3. 聚合：将同一股票在同一 Sector 下的所有得分累加。
+           例如：协鑫集成
+           - 概念"光伏概念" -> 归属 Sector "新能源" (得分 2)
+           - 概念"太阳能"   -> 归属 Sector "新能源" (得分 3)
+           - 概念"集成电路" -> 归属 Sector "半导体" (得分 2)
+           - 结果：新能源(5) > 半导体(2)，故主行业判定为"新能源"。
+        4. 决策：取得分最高的 Sector 作为该股票的 Primary Sector。
+        
         输入：包含 ts_code, concept_name 的 DataFrame
         输出：ts_code, primary_sector 的映射表
         """
@@ -81,8 +102,6 @@ class MainlineAnalyst:
         df_merged = df_concepts.merge(df_scores, on='concept_name')
         
         # 3. 聚合：计算每只股票在每个 Sector 下的累积得分
-        # 协鑫集成会在“新能源”下累积：光伏(2)+太阳能(3)+新能源(3) = 8分
-        # 会在“半导体”下累积：集成(2) = 2分 -> 自动归类为新能源
         df_stock_sector = df_merged.groupby(['ts_code', 'sector'])['score'].sum().reset_index()
         
         # 4. 取最高分作为主行业
@@ -92,11 +111,23 @@ class MainlineAnalyst:
         return df_primary[['ts_code', 'primary_sector']]
 
     def analyze(self, days=3, limit=5, trade_date: str = None):
-        # 1. 先获取最近的 N 个交易日 (排除非交易日)
+        """
+        主线分析入口函数。
+        
+        参数:
+        - days: 分析的时间窗口 (默认最近 3 个交易日，用于寻找近期日期，实际计算通常聚焦于单日或短期窗口)。
+        - limit: 返回排名靠前的主线数量。
+        - trade_date: 指定分析日期。
+        
+        返回:
+        - 主线分析结果列表，包含板块名、评分、涨停数、龙头股等。
+        """
+        # 1. 确定分析的时间范围 (Min Date, Max Date)
         if trade_date:
             min_date = trade_date
             max_date = trade_date
         else:
+            # 如果未指定，自动查找最近有数据的 N 个交易日
             date_query = "SELECT trade_date FROM daily_price GROUP BY trade_date HAVING COUNT(*) > 1000 ORDER BY trade_date DESC LIMIT ?"
             try:
                 dates_df = fetch_df(date_query, params=[days])
@@ -111,6 +142,7 @@ class MainlineAnalyst:
 
         try:
             # 2. 获取期间板块聚合数据
+            # 统计维度：平均涨幅、成交额、个股数、涨停数、上涨数、强势股数(>5%)
             query = """
             SELECT 
                 c.concept_name, d.trade_date,
@@ -129,17 +161,20 @@ class MainlineAnalyst:
             df = fetch_df(query, params=[min_date, max_date])
             if df.empty: return []
 
-            # 优化：映射缓存 (V9: 这里依然保留对 concept 名的初步分类用于初步筛选)
+            # 优化：初步映射 (Mapping)
+            # 先将原始概念名 (concept_name) 映射到大类 (mapped_name)
             unique_concepts = df['concept_name'].unique()
             mapping_dict = {c: self._get_mapped_concept(c) for c in unique_concepts}
             df['mapped_name'] = df['concept_name'].map(mapping_dict)
             
-            # V8 因子计算：引入共振过滤 (Resonance Filter)
-            df['lu_ratio'] = df['limit_ups'] / df['stock_count']
-            df['breadth'] = df['up_count'] / df['stock_count']
-            df['strong_ratio'] = df['strong_count'] / df['stock_count']
+            # 3. V8 因子计算：引入共振过滤 (Resonance Filter)
+            df['lu_ratio'] = df['limit_ups'] / df['stock_count']       # 涨停比率
+            df['breadth'] = df['up_count'] / df['stock_count']         # 上涨广度
+            df['strong_ratio'] = df['strong_count'] / df['stock_count'] # 强势股比率
             
-            # 核心评分公式
+            # 核心评分公式 (Daily Score Formula)
+            # 权重：涨停比率(60) > 广度(20) > 平均涨幅(2) > 成交额对数(0.5)
+            # 逻辑：主线必须有极强的赚钱效应 (涨停潮)
             df['daily_score'] = (
                 df['avg_ret'] * 2.0 + 
                 df['lu_ratio'] * 60.0 + 
@@ -147,11 +182,11 @@ class MainlineAnalyst:
                 np.log(df['total_amt'] + 1) * 0.5
             )
 
-            # 惩罚因子：放宽阈值，适应弱势市场
+            # 惩罚因子：如果没有普涨 (breadth < 10%) 且缺乏强势股，大幅降低得分，适应弱势市场。
             mask_weak_resonance = (df['breadth'] < 0.1) & (df['strong_ratio'] < 0.03)
             df.loc[mask_weak_resonance, 'daily_score'] *= 0.3
 
-            # 聚合到 mapped_name
+            # 4. 聚合到 mapped_name (大类板块)
             mainlines_agg = df.groupby('mapped_name').agg({
                 'daily_score': 'mean',
                 'limit_ups': 'sum',
@@ -176,17 +211,14 @@ class MainlineAnalyst:
             df_stock_sectors = self._identify_stock_sectors(stock_df_raw)
             stock_df = stock_df_raw.merge(df_stock_sectors, on='ts_code')
             
-            # 过滤：仅保留属于对应主线的股票 (且主行业判定一致)
-            # 这样如果协鑫集成在“集成电路”概念下被搜到，但它的 primary_sector 是“新能源”，
-            # 那么它在展示“半导体”主线时会被过滤掉，而在展示“新能源”主线时会被包含。
-            
+            # 5. 生成最终结果
             results = []
             for _, row in mainlines_agg.iterrows():
                 name = row['mapped_name']
                 score = round(row['daily_score'], 2)
                 lu_sum = int(row['limit_ups'])
                 
-                # 获取该主线的 Top 3 股票 (必须通过行业共识校验)
+                # 获取该主线的 Top 3 股票 (必须通过行业共识校验：primary_sector 必须等于当前主线名)
                 m_stocks = stock_df[stock_df['primary_sector'] == name].nlargest(3, 'pct_chg')
                 top_stocks = [
                     {"name": r['stock_name'], "pct_chg": round(float(r['pct_chg']), 2)} 
@@ -210,6 +242,7 @@ class MainlineAnalyst:
     def save_results(self, trade_date: str):
         """
         执行指定日期的分析并将结果持久化到数据库。
+        表：mainline_scores
         """
         try:
             # 1. 获取分析结果
@@ -243,6 +276,14 @@ class MainlineAnalyst:
             logger.error(f"持久化主线数据失败: {e}")
 
     def get_history(self, days=30):
+        """
+        获取历史主线演变数据，用于前端可视化展示。
+        逻辑：
+        1. 获取最近 N 天的数据。
+        2. 计算每天各板块的得分。
+        3. 筛选出全周期内最活跃的 Top 8 主线。
+        4. 生成时间序列数据，展示这些主线的分数变化。
+        """
         # 1. 先获取最近的 N 个交易日 (排除非交易日)
         # 避免参数化查询在某些 DuckDB 版本下的潜在问题，且 days 是受控的 int
         date_query = f"SELECT trade_date FROM daily_price GROUP BY trade_date HAVING COUNT(*) > 1000 ORDER BY trade_date DESC LIMIT {int(days)}"
@@ -258,7 +299,7 @@ class MainlineAnalyst:
             min_date = recent_dates[0].strftime('%Y-%m-%d')
             max_date = recent_dates[-1].strftime('%Y-%m-%d')
             
-            # 2. 获取期间板块聚合数据 (修复：1000阈值应用于全市场，概念聚合仅需 >= 5)
+            # 2. 获取期间板块聚合数据
             query = f"""
             WITH ValidDates AS (
                 SELECT trade_date 
@@ -328,7 +369,7 @@ class MainlineAnalyst:
             df_ranked['rnk'] = df_ranked.groupby('trade_date')['score'].rank(method='first', ascending=False)
             df_top10 = df_ranked[df_ranked['rnk'] <= 10].sort_values('trade_date')
             
-            # 时间轴处理 (基于 Top 10 出现的日期，或者是全量日期？建议使用全量日期避免断档)
+            # 时间轴处理
             unique_dates = sorted(df_full_agg['trade_date'].unique())
             dates = [pd.to_datetime(d).strftime('%m-%d') for d in unique_dates]
             
@@ -361,7 +402,6 @@ class MainlineAnalyst:
             df_stock_sectors = self._identify_stock_sectors(stock_df_raw)
             stock_df = stock_df_raw.merge(df_stock_sectors, on='ts_code')
             
-            # --- 修复：不再强行去重 ---
             # 允许一只标的出现在多个相关板块中，但其主行业必须与判定的一致
             top_stocks_map = {}
             
@@ -380,7 +420,7 @@ class MainlineAnalyst:
                 top_stocks_map[f"{d_str}_{d_sector}"] = stocks_list
             
             
-
+            # 3. 组装返回数据
             series_data = []
             current_best_concept = "混沌"
             current_best_score = 0
@@ -398,7 +438,7 @@ class MainlineAnalyst:
                     if not row.empty:
                         val = round(float(row['score'].values[0]), 2)
                         lu_sum = int(row['limit_ups'].iloc[0])
-                        # 更新最新日期的最强主线判断 (这里依然可以用全量数据来判断，或者仅当它是top10时？建议全量)
+                        # 更新最新日期的最强主线判断
                         if d_obj == unique_dates[-1] and val > current_best_score:
                             current_best_score = val
                             current_best_concept = c

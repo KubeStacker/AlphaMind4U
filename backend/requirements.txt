@@ -23,5 +23,6 @@ python-jose[cryptography]
 
 # 数据源
 tushare
+akshare
 tenacity
 apscheduler

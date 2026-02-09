@@ -1,8 +1,13 @@
-# /backend/strategy/config.py
+# /backend/strategy/mainline/config.py
 
 """
 Strategy configuration for sector mapping and weights.
 Used across mainline detection, sentiment analysis, and recommendation plugins.
+
+主线分析配置文件
+配置内容：
+1. CONCEPT_MAPPING: 概念映射表，将细分概念归类为大板块。
+2. CATEGORY_WEIGHTS: 板块权重表，用于在多重概念冲突时确定主行业归属。
 """
 
 # 统一的概念映射配置 (按照优先级排序，越细分、越新的题材越靠前)
@@ -20,6 +25,7 @@ CONCEPT_MAPPING = {
 }
 
 # 优化：板块权重配置 (用于解决多重概念冲突，权重高者优先)
+# 例如：某个概念同时匹配"新能源"(2.0)和"电力"(1.0)，则归属为"新能源"
 CATEGORY_WEIGHTS = {
     "低空经济": 3.0,
     "人工智能": 3.0,

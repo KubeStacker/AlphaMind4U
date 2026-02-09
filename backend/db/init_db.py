@@ -1,17 +1,18 @@
 # /backend/db/init_db.py
 
 import os
-from db.connection import get_db_connection
+from db.connection import get_db_connection, DATABASE_PATH
 from db.schema import ALL_TABLES_SQL
 
 def initialize_database():
     """
     初始化数据库。如果数据库文件不存在，则创建它，并根据 schema.py 中的定义创建所有表。
     """
-    # 确保 'data' 目录存在
-    if not os.path.exists('data'):
-        os.makedirs('data')
-        print("创建 'data' 目录。")
+    # 确保数据库所在目录存在
+    db_dir = os.path.dirname(DATABASE_PATH)
+    if not os.path.exists(db_dir):
+        os.makedirs(db_dir)
+        print(f"创建 '{db_dir}' 目录。")
     
     print("正在连接数据库并初始化表结构...")
     try:

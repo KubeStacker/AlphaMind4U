@@ -1,20 +1,28 @@
-# /backend/strategy/plugins/alpha_momentum.py
+# /backend/strategy/recommend/plugins/alpha_momentum.py
 
 import pandas as pd
 import numpy as np
 import logging
 import math
 from db.connection import fetch_df, get_db_connection
-from strategy.config import CONCEPT_MAPPING, CATEGORY_WEIGHTS
-from strategy.plugins.base import BaseStrategyPlugin
+from strategy.mainline.config import CONCEPT_MAPPING, CATEGORY_WEIGHTS
+from strategy.recommend.plugins.base import BaseStrategyPlugin
 from strategy.mainline import MainlineAnalyst
 
 logger = logging.getLogger(__name__)
 
 class AlphaMomentumStrategy(BaseStrategyPlugin):
     """
-    Alpha 动量增强选股插件
-    基于 RPS (Relative Price Strength) 和 Sharpe Ratio 进行综合评分
+    Alpha 动量增强选股插件 (Alpha Momentum Strategy)
+    
+    核心逻辑：
+    结合"价格动量 (Momentum)"和"业绩稳定性 (Sharpe)"进行选股，聚焦于强势主线中的龙头标的。
+    
+    选股因子：
+    1. RPS (Relative Price Strength): 股价相对强度，要求年线(250日) RPS > 90 或月线(20日) RPS > 85。
+    2. Sharpe Ratio: 60日夏普比率，衡量收益风险比，优先选择稳健上涨的个股。
+    3. Bias (乖离率): 限制 20日乖离率在 -2% 到 10% 之间，避免追高。
+    4. Sector Alignment: 必须属于当前市场的主线板块。
     """
     def __init__(self, concept_mapping=None, category_weights=None):
         self.concept_mapping = concept_mapping if concept_mapping else CONCEPT_MAPPING
@@ -29,7 +37,11 @@ class AlphaMomentumStrategy(BaseStrategyPlugin):
 
     def run(self, target_date=None, concept=None, **kwargs):
         """
-        实现插件化的推荐逻辑
+        执行选股流程
+        
+        参数:
+        - target_date: 选股日期 (默认最新)
+        - concept: 指定主线板块 (如果为空，则自动计算当日最强主线)
         """
         # 1. 确定日期
         if not target_date:
@@ -60,7 +72,10 @@ class AlphaMomentumStrategy(BaseStrategyPlugin):
         }
 
     def _get_stock_primary_sectors(self, ts_codes: list) -> pd.DataFrame:
-        """ 基于多维概念共识算法判定股票的主行业 """
+        """ 
+        基于多维概念共识算法判定股票的主行业 
+        (复用 MainlineAnalyst 的逻辑，确保归类一致性)
+        """
         if not ts_codes: return pd.DataFrame(columns=['ts_code', 'primary_sector'])
         
         query = f"SELECT ts_code, concept_name FROM stock_concept_details WHERE ts_code IN {str(tuple(ts_codes)).replace(',)', ')')}"
@@ -93,8 +108,12 @@ class AlphaMomentumStrategy(BaseStrategyPlugin):
         return df_primary[['ts_code', 'primary_sector']]
 
     def recommend(self, target_date, concept=None):
+        """
+        核心推荐算法实现
+        """
         target_date_str = str(target_date)
         
+        # SQL 查询：计算基础因子 (RPS, MA, Volatility)
         query = """
         WITH Analysis AS (
             SELECT 
@@ -117,6 +136,7 @@ class AlphaMomentumStrategy(BaseStrategyPlugin):
         
         final_query = query.replace("CAST(? AS DATE) - INTERVAL 90 DAY", f"CAST('{target_date_str}' AS DATE) - INTERVAL 90 DAY")
         
+        # 概念过滤逻辑
         if concept:
             keywords = self.concept_mapping.get(concept, [concept])
             like_clauses = " OR ".join(["concept_name LIKE ?"] * len(keywords))
@@ -138,6 +158,7 @@ class AlphaMomentumStrategy(BaseStrategyPlugin):
             if df.empty: return []
 
             ts_codes = df['ts_code'].tolist()
+            # 再次确认主行业归属
             df_sectors = self._get_stock_primary_sectors(ts_codes)
             df = df.merge(df_sectors, on='ts_code', how='left')
             
@@ -148,9 +169,14 @@ class AlphaMomentumStrategy(BaseStrategyPlugin):
             sqrt_250 = math.sqrt(250)
             
             for _, row in df.iterrows():
+                # 计算年化夏普比率
                 sharpe = (row['avg_ret_60'] / row['vol_60']) * sqrt_250 if row['vol_60'] > 0 else 0
+                
+                # 综合打分公式
                 score = 0
+                # 过滤条件：RPS 极强 (Top 10%) 且 乖离率适中 (不追高)
                 if row['rps_250'] > 90 and -2 <= row['bias_20'] <= 10:
+                    # 评分权重：Sharpe (稳定性) > RPS (爆发力)
                     score = row['rps_250'] * 0.6 + sharpe * 10
                 
                 if score > 0:
@@ -164,6 +190,7 @@ class AlphaMomentumStrategy(BaseStrategyPlugin):
                         "sharpe": round(sharpe, 2)
                     })
             
+            # 返回得分最高的 Top 12
             return sorted(results, key=lambda x: x['score'], reverse=True)[:12]
         except Exception as e:
             logger.error(f"Alpha recommendation error: {e}")

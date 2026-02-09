@@ -113,6 +113,19 @@ def execute_db_query(query: DBQuery):
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"查询执行失败: {e}")
 
+class SyncIndexParams(BaseModel):
+    ts_code: str
+    years: int = 1
+
+@router.post("/etl/sync/index", status_code=202)
+async def trigger_sync_index(params: SyncIndexParams, background_tasks: BackgroundTasks):
+    """ 手动触发指定指数同步 """
+    await acquire_sync_lock()
+    def task():
+        release_sync_lock(sync_engine.sync_market_index, ts_code=params.ts_code, years=params.years)
+    background_tasks.add_task(task)
+    return {"message": f"指数 {params.ts_code} 同步任务已启动"}
+
 @router.post("/etl/sync/daily", status_code=202)
 async def trigger_granular_daily_sync(params: SyncDailyParams, background_tasks: BackgroundTasks):
     """
