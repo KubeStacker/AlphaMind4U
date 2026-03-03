@@ -11,19 +11,6 @@ NC='\033[0m' # No Color
 
 echo -e "${GREEN}=== 开始初始化基础软件环境 ===${NC}"
 
-if false ; then
-    # 设置主机名
-    hostnamectl set-hostname cvm
-
-    # 设置zsh和oh-my-zsh
-    apt update
-    apt install zsh
-    sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"
-
-    # 订阅clash
-    git clone --branch master --depth 1 https://gh-proxy.org/https://github.com/nelvko/clash-for-linux-install.git && cd clash-for-linux-install && bash install.sh
-fi 
-
 if ! command -v gemini &> /dev/null; then
     echo "未检测到gemini，正在尝试安装..."  
     # 安装node

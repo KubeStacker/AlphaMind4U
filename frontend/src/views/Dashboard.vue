@@ -8,17 +8,42 @@
           <h2 class="text-sm font-bold text-slate-400">市场情绪趋势</h2>
         </div>
         <div class="flex flex-wrap items-center gap-2 text-[10px]">
-           <button @click="handleOpenBacktest" class="flex items-center space-x-1 px-3 py-1 bg-business-accent/20 text-business-accent rounded hover:bg-business-accent hover:text-white transition-colors border border-business-accent/30">
-              <PresentationChartLineIcon class="w-3 h-3" />
-              <span>历史验证</span>
-           </button>
-           <div class="flex items-center space-x-2">
-             <span class="px-2 py-0.5 bg-red-500/20 text-red-400 rounded">85+ 沸腾/止盈</span>
-             <span class="px-2 py-0.5 bg-blue-500/20 text-blue-400 rounded">25- 冰点/潜伏</span>
-           </div>
+            <button
+              @click="openBacktestModal"
+              class="px-2 py-0.5 bg-business-accent/20 text-business-accent rounded border border-business-accent/30 hover:bg-business-accent hover:text-white transition"
+            >
+              查看回测结果
+            </button>
+            <button
+              @click="handleSyncSentiment"
+              :disabled="syncingSentiment"
+              class="px-2 py-0.5 rounded border transition"
+              :class="syncingSentiment ? 'bg-emerald-200 text-emerald-900 border-emerald-200' : 'bg-emerald-800/40 text-emerald-300 border-emerald-700 hover:bg-emerald-700 hover:text-white'"
+            >
+              {{ syncingSentiment ? '同步中...' : '同步情绪' }}
+            </button>
+            <button
+              @click="handlePreviewSentiment"
+              :disabled="predictingSentiment"
+              class="px-2 py-0.5 rounded border transition"
+              :class="predictingSentiment ? 'bg-amber-200 text-amber-900 border-amber-200' : 'bg-amber-800/40 text-amber-300 border-amber-700 hover:bg-amber-700 hover:text-white'"
+            >
+              {{ predictingSentiment ? '预测中...' : '预测情绪' }}
+            </button>
+            <button
+              @click="minimalTooltipMode = !minimalTooltipMode"
+              class="px-2 py-0.5 rounded border transition"
+              :class="minimalTooltipMode ? 'bg-slate-200 text-slate-900 border-slate-200' : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'"
+            >
+              {{ minimalTooltipMode ? '极简模式: 开' : '极简模式: 关' }}
+            </button>
+            <div class="flex items-center space-x-2">
+              <span class="px-2 py-0.5 bg-red-500/20 text-red-400 rounded">85+ 沸腾/止盈</span>
+              <span class="px-2 py-0.5 bg-blue-500/20 text-blue-400 rounded">25- 冰点/潜伏</span>
+            </div>
         </div>
       </div>
-      <div class="h-40 w-full">
+      <div class="h-52 sm:h-40 w-full">
         <v-chart :option="marketSentimentChartOption" autoresize />
       </div>
     </div>
@@ -31,13 +56,18 @@
           <div class="flex items-center space-x-3">
             <div class="w-1 h-4 bg-business-highlight rounded-full"></div>
             <h2 class="text-sm font-bold text-white uppercase tracking-wider">核心主线演变趋势</h2>
+            <div v-if="currentMainline.name" class="px-2 py-1 rounded bg-business-highlight/10 border border-business-highlight/30">
+              <span class="text-[10px] text-business-highlight font-bold">
+                {{ currentMainline.name }} {{ currentMainline.score ? `(${currentMainline.score})` : '' }}
+              </span>
+            </div>
           </div>
           <div class="flex items-center space-x-2">
             <button @click="isTooltipLocked = false" v-if="isTooltipLocked" class="text-[9px] font-bold text-business-accent bg-business-accent/10 px-2 py-0.5 rounded border border-business-accent/20 transition-all hover:bg-business-accent hover:text-white">解锁</button>
             <span class="text-[9px] text-slate-500 font-medium bg-slate-800/50 px-2 py-1 rounded border border-slate-700">点击锁定浮窗</span>
           </div>
         </div>
-        <div class="h-80 w-full relative">
+        <div class="h-64 sm:h-80 w-full relative">
           <v-chart v-if="!loadingTrend && mainlineChartOption.series.length > 0" :option="mainlineChartOption" autoresize @click="handleChartClick" />
           <div v-if="loadingTrend" class="absolute inset-0 flex items-center justify-center">
              <div class="w-8 h-8 border-2 border-business-highlight border-t-transparent rounded-full animate-spin"></div>
@@ -67,298 +97,424 @@
           <div class="w-1 h-4 bg-business-accent rounded-full"></div>
           <h2 class="text-sm font-bold text-white uppercase tracking-wider">题材热力分布</h2>
         </div>
-        <div class="flex-1 min-h-[300px]">
-          <v-chart :option="hotConceptsChartOption" autoresize @click="handlePieClick" />
-        </div>
-        <p class="text-center text-[9px] text-slate-500 font-medium mt-4 italic">点击板块切片可自动筛选下方推荐</p>
-      </div>
-    </div>
-
-    <!-- 策略控制中心 (列表显示) -->
-    <div id="strategy-control-center" class="bg-business-dark rounded-2xl shadow-business border border-business-light overflow-hidden mx-2 md:mx-0">
-      <div class="p-4 md:p-5 border-b border-business-light bg-slate-900/20 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-        <div class="flex items-center space-x-3">
-          <div class="w-1 h-6 bg-business-accent rounded-full"></div>
-          <h2 class="text-base font-bold text-white">智能策略推荐</h2>
-        </div>
-        
-        <div class="flex flex-wrap items-center gap-2">
-          <input v-model="filterDate" type="date" class="bg-business-darker border border-business-light rounded-lg px-2 py-1.5 text-xs font-bold text-white outline-none focus:border-business-accent w-28 sm:w-32" />
-          <select v-model="selectedConcept" class="bg-business-darker border border-business-light rounded-lg px-2 py-1.5 text-xs font-bold text-business-highlight outline-none focus:border-business-accent appearance-none min-w-[80px] sm:min-w-[100px]">
-            <option :value="null">全市场</option>
-            <option v-for="c in hotConcepts" :key="c" :value="c">{{ c }}</option>
-          </select>
-          <div class="flex items-center gap-2 w-full sm:w-auto mt-2 sm:mt-0">
-            <button @click="handleFetch" class="flex-1 sm:flex-none h-8 px-3 sm:px-4 bg-business-accent text-white rounded-lg text-[10px] font-bold uppercase tracking-wider hover:brightness-110 transition-all active:scale-95 shadow-lg shadow-business-accent/20">
-              获取推荐
-            </button>
-            <button @click="handleBacktest" :disabled="backtesting" class="flex-1 sm:flex-none h-8 px-3 sm:px-4 bg-business-success text-white rounded-lg text-[10px] font-bold uppercase tracking-wider hover:brightness-110 transition-all active:scale-95 shadow-lg shadow-business-success/20">
-              {{ backtesting ? '分析中' : '收益验证' }}
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <div class="overflow-x-auto">
-        <table class="w-full text-left border-collapse min-w-[700px]">
-          <thead>
-            <tr class="text-slate-500 text-[10px] font-bold uppercase tracking-widest border-b border-business-light bg-slate-900/40">
-              <th class="px-5 py-3">资产标识</th>
-              <th class="px-5 py-3">板块</th>
-              <th class="px-5 py-3 text-center">评分</th>
-              <th class="px-5 py-3 text-right">5日表现</th>
-              <th class="px-5 py-3 text-right">10日表现</th>
-              <th class="px-5 py-3 text-center">状态</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-business-light/20">
-            <tr v-for="stock in recommendations" :key="stock.ts_code" class="group hover:bg-white/5 transition-all">
-              <td class="px-5 py-4">
-                <a :href="`http://stockpage.10jqka.com.cn/${stock.ts_code.split('.')[0]}`" target="_blank" class="text-white font-bold text-sm hover:text-business-highlight flex items-center">
-                  {{ stock.name }}
-                  <ArrowTopRightOnSquareIcon class="w-3 h-3 ml-1 opacity-0 group-hover:opacity-100 transition-all" />
-                </a>
-                <div class="text-[9px] text-slate-500 font-medium">{{ stock.ts_code }}</div>
-              </td>
-              <td class="px-5 py-4">
-                <span class="px-2 py-0.5 bg-slate-800 text-slate-400 rounded-md text-[9px] font-bold border border-slate-700">
-                  {{ stock.industry }}
-                </span>
-              </td>
-              <td class="px-5 py-4 text-center">
-                <span class="text-sm font-bold text-business-highlight">{{ stock.score }}</span>
-              </td>
-              <td class="px-5 py-4 text-right font-bold text-xs tabular-nums" :class="getPriceColor(stock.p5_return)">
-                {{ formatPrice(stock.p5_return) }}
-              </td>
-              <td class="px-5 py-4 text-right font-bold text-xs tabular-nums" :class="getPriceColor(stock.p10_return)">
-                {{ formatPrice(stock.p10_return) }}
-              </td>
-              <td class="px-5 py-4 text-center">
-                <div v-if="stock.p5_return !== undefined" class="flex items-center justify-center space-x-1">
-                  <div class="w-1 h-1 rounded-full" :class="stock.p5_return !== null ? 'bg-business-success' : 'bg-slate-600'"></div>
-                  <span class="text-[9px] font-bold" :class="stock.p5_return !== null ? 'text-business-success' : 'text-slate-600'">
-                    {{ stock.p5_return !== null ? 'OK' : 'PEND' }}
-                  </span>
-                </div>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-        
-        <div v-if="loading" class="p-12 flex flex-col items-center justify-center space-y-3">
-          <div class="w-6 h-6 border-2 border-business-light border-t-business-accent rounded-full animate-spin"></div>
-          <span class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Processing...</span>
-        </div>
-
-        <div v-if="!loading && recommendations.length === 0" class="p-12 flex flex-col items-center justify-center text-slate-500 space-y-2">
-          <InboxIcon class="w-10 h-10 opacity-20" />
-          <p class="text-xs font-bold uppercase tracking-widest">暂无符合条件的筛选结果</p>
+        <div class="flex-1 min-h-[240px] sm:min-h-[300px]">
+          <v-chart :option="hotConceptsChartOption" autoresize />
         </div>
       </div>
     </div>
 
-    <!-- Backtest Modal -->
-    <Dialog :open="showBacktestModal" @close="showBacktestModal = false" class="relative z-50">
-      <div class="fixed inset-0 bg-business-darker/90 backdrop-blur-sm" />
-      <div class="fixed inset-0 flex items-center justify-center p-2 sm:p-4">
-        <DialogPanel class="w-full max-w-4xl rounded-2xl bg-business-dark border border-business-light p-4 sm:p-6 shadow-2xl overflow-hidden flex flex-col max-h-[95vh] sm:max-h-[90vh]">
-          <div class="flex justify-between items-start sm:items-center mb-4 sm:mb-6 shrink-0">
-             <div class="flex items-center space-x-3">
-                <div class="w-1.5 h-6 bg-business-accent rounded-full shadow-[0_0_8px_rgba(56,189,248,0.5)]"></div>
-                <div>
-                   <DialogTitle class="text-base sm:text-xl font-bold text-white tracking-tight">科创50情绪策略验证</DialogTitle>
-                   <p class="text-[9px] sm:text-[10px] text-slate-500 font-mono mt-0.5">CAPITAL: ¥100k | BENCHMARK: STAR50</p>
-                </div>
-             </div>
-             <button @click="showBacktestModal = false" class="p-1.5 text-slate-500 hover:text-white rounded-full hover:bg-white/10 transition-colors">
-                <span class="sr-only">Close</span>
-                <svg class="w-5 h-5 sm:w-6 sm:h-6" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
-             </button>
+    <div v-if="tradingBrief.action" class="px-2 md:px-0">
+      <div class="bg-business-dark p-4 rounded-2xl shadow-lg border border-business-light">
+        <div class="flex items-center justify-between gap-2 mb-2">
+          <h3 class="text-xs font-bold text-slate-200 tracking-wide">最新交易日简报</h3>
+          <span class="text-[10px] text-slate-400">{{ tradingBrief.tradeDate || '-' }}</span>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+          <div class="rounded border border-slate-700/60 bg-slate-900/40 px-3 py-2">
+            <span class="text-slate-500">市场状态</span>
+            <p class="text-slate-200 font-semibold mt-0.5">{{ tradingBrief.regime || '-' }}</p>
           </div>
-
-          <div v-if="backtestLoading" class="flex-1 flex flex-col items-center justify-center space-y-4 min-h-[300px]">
-             <div class="w-10 h-10 border-4 border-business-light border-t-business-accent rounded-full animate-spin"></div>
-             <div class="text-[10px] font-bold text-slate-500 uppercase tracking-widest animate-pulse">Running Simulation...</div>
+          <div class="rounded border border-slate-700/60 bg-slate-900/40 px-3 py-2">
+            <span class="text-slate-500">情绪评分</span>
+            <p class="text-slate-200 font-semibold mt-0.5">{{ tradingBrief.scoreText || '-' }}</p>
           </div>
-
-          <div v-else class="flex-1 flex flex-col overflow-hidden">
-             <!-- KPI Panel -->
-             <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 sm:gap-3 mb-4 sm:mb-6 shrink-0">
-                <div class="bg-slate-900/50 p-2 sm:p-3 rounded-xl border border-business-light/30 flex flex-col items-center">
-                   <span class="text-[8px] sm:text-[9px] text-slate-500 font-bold uppercase tracking-widest mb-1">当前总资产</span>
-                   <span class="text-sm sm:text-lg font-bold font-mono text-business-highlight">{{ backtestMetrics.final_value }}</span>
-                </div>
-                <div class="bg-slate-900/50 p-2 sm:p-3 rounded-xl border border-business-light/30 flex flex-col items-center">
-                   <span class="text-[8px] sm:text-[9px] text-slate-500 font-bold uppercase tracking-widest mb-1">策略总收益</span>
-                   <span class="text-sm sm:text-lg font-bold font-mono" :class="parseFloat(backtestMetrics.total_return) >= 0 ? 'text-business-success' : 'text-business-danger'">{{ backtestMetrics.total_return }}</span>
-                </div>
-                <div class="bg-slate-900/50 p-2 sm:p-3 rounded-xl border border-business-light/30 flex flex-col items-center">
-                   <span class="text-[8px] sm:text-[9px] text-slate-500 font-bold uppercase tracking-widest mb-1">最大回撤</span>
-                   <span class="text-sm sm:text-lg font-bold font-mono text-white">{{ backtestMetrics.max_drawdown }}</span>
-                </div>
-                <div class="bg-slate-900/50 p-2 sm:p-3 rounded-xl border border-business-light/30 flex flex-col items-center">
-                   <span class="text-[8px] sm:text-[9px] text-slate-500 font-bold uppercase tracking-widest mb-1">胜率</span>
-                   <span class="text-sm sm:text-lg font-bold font-mono text-amber-500">{{ backtestMetrics.win_rate }}</span>
-                </div>
-                <div class="bg-slate-900/50 p-2 sm:p-3 rounded-xl border border-business-light/30 flex flex-col items-center col-span-2 sm:col-span-1">
-                   <span class="text-[8px] sm:text-[9px] text-slate-500 font-bold uppercase tracking-widest mb-1">基准收益</span>
-                   <span class="text-sm sm:text-lg font-bold font-mono text-slate-400">{{ backtestMetrics.benchmark_return }}</span>
-                </div>
-             </div>
-
-             <!-- Chart -->
-             <div class="flex-1 min-h-[250px] sm:min-h-0 relative bg-slate-900/20 rounded-xl border border-business-light/20 p-2">
-                <v-chart :option="backtestOption" autoresize />
-             </div>
-             
-             <div class="mt-3 sm:mt-4 shrink-0 flex flex-col sm:flex-row sm:items-center justify-between text-[8px] sm:text-[10px] text-slate-500 px-1 gap-2">
-                <div class="flex space-x-4">
-                   <span class="flex items-center"><span class="w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full bg-business-success mr-1.5"></span> Buy (100% / 50%)</span>
-                   <span class="flex items-center"><span class="w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full bg-business-danger mr-1.5"></span> Sell / Stop</span>
-                </div>
-                <div class="italic opacity-50">Parameters: Fee 0.15% (Trade at Close)</div>
-             </div>
+          <div class="rounded border border-slate-700/60 bg-slate-900/40 px-3 py-2">
+            <span class="text-slate-500">策略置信度</span>
+            <p class="text-slate-200 font-semibold mt-0.5">{{ tradingBrief.confidence || '-' }}</p>
           </div>
-        </DialogPanel>
+          <div class="rounded border border-slate-700/60 bg-slate-900/40 px-3 py-2 sm:col-span-2">
+            <span class="text-slate-500">主线</span>
+            <p class="text-slate-200 font-semibold mt-0.5">{{ tradingBrief.mainline || '-' }}</p>
+          </div>
+        </div>
+        <div class="mt-2 rounded border border-amber-700/40 bg-amber-500/10 px-3 py-2">
+          <span class="text-[11px] text-amber-300">执行建议</span>
+          <p class="text-xs text-amber-100 mt-0.5 leading-relaxed">{{ tradingBrief.action }}</p>
+        </div>
       </div>
-    </Dialog>
+    </div>
+
+    <div v-if="sentimentPreview || previewError" class="px-2 md:px-0">
+      <div class="bg-business-dark p-4 rounded-2xl shadow-lg border border-business-light">
+        <div class="flex items-center justify-between gap-2 mb-2">
+          <h3 class="text-xs font-bold text-slate-200 tracking-wide">盘中情绪预测</h3>
+          <span class="text-[10px] text-slate-400">{{ sentimentPreview?.as_of || '-' }}</span>
+        </div>
+        <div v-if="previewError" class="rounded border border-red-700/40 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+          {{ previewError }}
+        </div>
+        <div v-else-if="sentimentPreview" class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+          <div class="rounded border border-slate-700/60 bg-slate-900/40 px-3 py-2">
+            <span class="text-slate-500">预测交易日</span>
+            <p class="text-slate-200 font-semibold mt-0.5">{{ sentimentPreview.predicted_trade_date || '-' }}</p>
+          </div>
+          <div class="rounded border border-slate-700/60 bg-slate-900/40 px-3 py-2">
+            <span class="text-slate-500">预测评分</span>
+            <p class="text-slate-200 font-semibold mt-0.5">{{ fmt(sentimentPreview.projected_score, 1) }}</p>
+          </div>
+          <div class="rounded border border-slate-700/60 bg-slate-900/40 px-3 py-2">
+            <span class="text-slate-500">沪深300 涨跌幅</span>
+            <p class="text-slate-200 font-semibold mt-0.5">{{ fmt(sentimentPreview.index_pct_chg, 3, '%') }}</p>
+          </div>
+          <div class="rounded border border-slate-700/60 bg-slate-900/40 px-3 py-2">
+            <span class="text-slate-500">科创50 涨跌幅</span>
+            <p class="text-slate-200 font-semibold mt-0.5">{{ fmt(sentimentPreview.star50_pct_chg, 3, '%') }}</p>
+          </div>
+          <div class="rounded border border-amber-700/40 bg-amber-500/10 px-3 py-2 sm:col-span-2">
+            <span class="text-[11px] text-amber-300">预测策略</span>
+            <p class="text-xs text-amber-100 mt-0.5 leading-relaxed">
+              {{ sentimentPreview.plan?.next_day_strategy || '-' }}
+            </p>
+          </div>
+          <div v-if="marketSuggestion" class="rounded border border-sky-700/40 bg-sky-500/10 px-3 py-2 sm:col-span-2">
+            <span class="text-[11px] text-sky-300">统一市场建议（预览）</span>
+            <div class="grid grid-cols-2 gap-x-2 gap-y-1 mt-1 text-sky-100">
+              <div>动作: {{ marketSuggestion.action || '-' }}</div>
+              <div>仓位: {{ fmt((Number(marketSuggestion.target_position) || 0) * 100, 0, '%') }}</div>
+              <div>置信度: {{ fmt(marketSuggestion.confidence, 1) }}</div>
+              <div>主线: {{ marketSuggestion.rationale?.top_mainline || '-' }}</div>
+              <div>止损: {{ fmt(marketSuggestion.risk_controls?.stop_loss_pct, 1, '%') }}</div>
+              <div>止盈: {{ fmt(marketSuggestion.risk_controls?.take_profit_pct, 1, '%') }}</div>
+            </div>
+          </div>
+          <div v-else-if="suggestionError" class="rounded border border-red-700/40 bg-red-500/10 px-3 py-2 text-xs text-red-300 sm:col-span-2">
+            建议生成失败: {{ suggestionError }}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div
+      v-if="showBacktestModal"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      @click.self="showBacktestModal = false"
+    >
+      <div class="w-full max-w-md rounded-xl border border-slate-700 bg-slate-900 p-4 shadow-2xl">
+        <div class="mb-3 flex items-center justify-between">
+          <h3 class="text-sm font-bold text-slate-200">情绪策略回测结果</h3>
+          <button class="text-slate-400 hover:text-white" @click="showBacktestModal = false">关闭</button>
+        </div>
+        <div v-if="loadingBacktest" class="py-8 text-center text-slate-400 text-sm">回测结果加载中...</div>
+        <div v-else-if="backtestError" class="py-8 text-center text-red-400 text-sm">{{ backtestError }}</div>
+        <div v-else-if="backtestData" class="space-y-2 text-xs">
+          <div class="grid grid-cols-2 gap-2 text-slate-300">
+            <div class="rounded bg-slate-800 p-2">总收益: <span class="font-bold text-white">{{ backtestData.metrics?.total_return || '-' }}</span></div>
+            <div class="rounded bg-slate-800 p-2">年化: <span class="font-bold text-white">{{ backtestData.metrics?.annual_return || '-' }}</span></div>
+            <div class="rounded bg-slate-800 p-2">回撤: <span class="font-bold text-white">{{ backtestData.metrics?.max_drawdown || '-' }}</span></div>
+            <div class="rounded bg-slate-800 p-2">胜率: <span class="font-bold text-white">{{ backtestData.metrics?.win_rate || '-' }}</span></div>
+            <div class="rounded bg-slate-800 p-2">夏普: <span class="font-bold text-white">{{ backtestData.metrics?.sharpe || '-' }}</span></div>
+            <div class="rounded bg-slate-800 p-2">基准: <span class="font-bold text-white">{{ backtestData.metrics?.benchmark_return || '-' }}</span></div>
+          </div>
+          <div class="rounded bg-slate-800 p-2 text-slate-400">
+            参数: leverage={{ backtestData.policy?.leverage ?? '-' }}, trend_floor={{ backtestData.policy?.trend_floor_pos ?? '-' }}
+          </div>
+          <div class="text-[11px] text-slate-500">生成时间: {{ backtestData.generated_at || '-' }}</div>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, reactive, computed } from 'vue';
-import { Dialog, DialogPanel, DialogTitle } from '@headlessui/vue';
-import { getRecommendations, getHotConcepts, triggerBacktest, getBacktestResults, getMainlineHistory, getMarketSentiment, getStar50Backtest } from '@/services/api';
-import { 
-  ArrowTopRightOnSquareIcon, 
-  ChatBubbleLeftRightIcon,
-  InboxIcon,
-  PresentationChartLineIcon
-} from '@heroicons/vue/20/solid'
+import { ref, onMounted, onBeforeUnmount } from 'vue';
+import { getMainlineHistory, getMarketSentiment, getSentimentPreview, getMarketSuggestion, getBacktestResult, syncSentiment, getTasksStatus } from '@/services/api';
+import { ChatBubbleLeftRightIcon } from '@heroicons/vue/20/solid'
 
-const loading = ref(false);
 const loadingTrend = ref(false);
-const recommendations = ref([]);
-const hotConcepts = ref([]);
-const selectedConcept = ref(null);
-const filterDate = ref(null);
-const currentRecDate = ref('');
-const macroSentiment = ref('');
 const strategyConclusion = ref('');
 const trendAnalysis = ref('');
-const backtesting = ref(false);
-const marketStatus = ref({ text: 'STANDBY', color: 'text-slate-500' });
 const isTooltipLocked = ref(false);
-
-// Backtest Modal State
 const showBacktestModal = ref(false);
-const backtestLoading = ref(false);
-const backtestMetrics = ref({
-  total_return: '--',
-  max_drawdown: '--',
-  win_rate: '--',
-  benchmark_return: '--',
-  final_value: '--'
+const loadingBacktest = ref(false);
+const backtestError = ref('');
+const backtestData = ref(null);
+const minimalTooltipMode = ref(false);
+const isMobile = ref(false);
+const syncingSentiment = ref(false);
+const predictingSentiment = ref(false);
+const sentimentPreview = ref(null);
+const previewError = ref('');
+const marketSuggestion = ref(null);
+const suggestionError = ref('');
+const currentMainline = ref({ name: '', score: 0, reason: '' });
+const latestSentiment = ref(null);
+const latestSentimentDate = ref('');
+const recentSentiments = ref([]);
+const tradingBrief = ref({
+  tradeDate: '',
+  regime: '',
+  scoreText: '',
+  confidence: '',
+  mainline: '',
+  action: ''
 });
-const backtestOption = ref({});
 
-const handleOpenBacktest = async () => {
-  showBacktestModal.value = true;
-  if (backtestOption.value.series && backtestOption.value.series.length > 0) return; 
+const classifyRegimeByMa5 = (ma5) => {
+  if (!Number.isFinite(ma5)) return '震荡';
+  if (ma5 >= 78) return '强势';
+  if (ma5 >= 62) return '偏强';
+  if (ma5 <= 30) return '弱势';
+  if (ma5 <= 42) return '偏弱';
+  return '震荡';
+};
 
-  backtestLoading.value = true;
+const getStableRegime = (ma5Series, confirmDays = 2) => {
+  if (!Array.isArray(ma5Series) || ma5Series.length === 0) return '震荡';
+  let stable = classifyRegimeByMa5(ma5Series[0]);
+  let candidate = stable;
+  let streak = 0;
+
+  for (let i = 1; i < ma5Series.length; i += 1) {
+    const raw = classifyRegimeByMa5(ma5Series[i]);
+    if (raw === stable) {
+      candidate = raw;
+      streak = 0;
+      continue;
+    }
+    if (raw === candidate) {
+      streak += 1;
+    } else {
+      candidate = raw;
+      streak = 1;
+    }
+    if (streak >= confirmDays) {
+      stable = candidate;
+      streak = 0;
+    }
+  }
+  return stable;
+};
+
+const toRegimeBaseConfidence = (regime) => {
+  if (regime === '强势') return 78;
+  if (regime === '偏强') return 66;
+  if (regime === '震荡') return 50;
+  if (regime === '偏弱') return 36;
+  return 26;
+};
+
+const calcStd = (arr) => {
+  if (!arr.length) return 0;
+  const mean = arr.reduce((a, b) => a + b, 0) / arr.length;
+  const variance = arr.reduce((a, b) => a + ((b - mean) ** 2), 0) / arr.length;
+  return Math.sqrt(variance);
+};
+
+const buildTradingBrief = () => {
+  const sentiment = latestSentiment.value;
+  const tradeDate = latestSentimentDate.value || '';
+  if (!sentiment || !tradeDate) {
+    tradingBrief.value = { tradeDate: '', regime: '', scoreText: '', confidence: '', mainline: '', action: '' };
+    return;
+  }
+
+  const score = Number(sentiment.value);
+  const details = sentiment.details || {};
+  const advice = details.metrics?.advice || '';
+  const topName = currentMainline.value?.name || '';
+  const topScore = Number(currentMainline.value?.score);
+  const metricsMa5 = Number(details.metrics?.score_ma5);
+
+  const tail = recentSentiments.value || [];
+  const scoreSeries = tail.map((x) => Number(x?.value)).filter((x) => Number.isFinite(x));
+  const latest5 = scoreSeries.slice(-5);
+  const prev5 = scoreSeries.slice(-6, -1);
+  const ma5 = Number.isFinite(metricsMa5)
+    ? metricsMa5
+    : (latest5.length ? latest5.reduce((a, b) => a + b, 0) / latest5.length : score);
+  const prevMa5 = prev5.length ? prev5.reduce((a, b) => a + b, 0) / prev5.length : ma5;
+  const maTrend = ma5 - prevMa5;
+
+  const ma5Series = [];
+  for (let i = 4; i < scoreSeries.length; i += 1) {
+    const w = scoreSeries.slice(i - 4, i + 1);
+    ma5Series.push(w.reduce((a, b) => a + b, 0) / w.length);
+  }
+  const deltaSeries = [];
+  for (let i = 1; i < ma5Series.length; i += 1) {
+    deltaSeries.push(ma5Series[i] - ma5Series[i - 1]);
+  }
+  const vol = calcStd(deltaSeries.slice(-8));
+  const recentPeak = ma5Series.length ? Math.max(...ma5Series.slice(-10)) : ma5;
+  const pullback = Number.isFinite(recentPeak) ? ma5 - recentPeak : 0;
+
+  const stableRegime = getStableRegime(ma5Series, 2);
+  const latestRawRegime = classifyRegimeByMa5(ma5);
+
+  let regime = stableRegime;
+  const mainlineStrong = Number.isFinite(topScore) && topScore >= 30;
+  const mainlineMid = Number.isFinite(topScore) && topScore >= 18;
+  const recovering = maTrend >= 1.8;
+  const weakening = maTrend <= -1.8;
+  const highVol = vol >= 3.2;
+  const pendingSwitch = stableRegime !== latestRawRegime;
+
+  let position = '20%-35%';
+  let attack = '仅做主线内回踩，不做情绪追涨';
+  let risk = '单笔亏损接近-3%减仓，盈利+8%分批止盈';
+
+  if (regime === '强势') {
+    position = (recovering && mainlineStrong) ? '60%-80%' : '50%-70%';
+    if (weakening || highVol) position = '45%-60%';
+    attack = '主线核心分歧低吸，次日冲高不追';
+    risk = '若 MA5 连续2日走弱或回撤扩大，先降20%仓位锁定收益';
+  } else if (regime === '偏强') {
+    position = (recovering && (mainlineStrong || mainlineMid)) ? '45%-65%' : '35%-55%';
+    if (weakening || highVol) position = '30%-45%';
+    attack = '优先主线中军和换手龙，分批加仓';
+    risk = '连续2日跌破计划买点则退出，避免被动扛单';
+  } else if (regime === '弱势') {
+    position = '0%-20%';
+    attack = '以观察为主，仅保留试错仓';
+    risk = '先活下来，等待 MA5 回到42以上再恢复进攻';
+  } else if (regime === '偏弱') {
+    position = '10%-30%';
+    attack = '轻仓快进快出，优先等主线确认后再加仓';
+    risk = '亏损单不过夜，盈利单分批落袋';
+  } else {
+    position = (recovering && mainlineStrong) ? '30%-45%' : '15%-30%';
+    attack = '只做赔率明确的回踩点，不做中位追高';
+    risk = '无优势日宁可空仓，降低无效交易';
+  }
+
+  let confidenceScore = toRegimeBaseConfidence(regime);
+  if (recovering) confidenceScore += 8;
+  if (weakening) confidenceScore -= 10;
+  if (mainlineStrong) confidenceScore += 8;
+  else if (mainlineMid) confidenceScore += 4;
+  if (highVol) confidenceScore -= 8;
+  if (pullback <= -6) confidenceScore -= 6;
+  if (pendingSwitch) confidenceScore -= 5;
+  confidenceScore = Math.max(5, Math.min(95, Math.round(confidenceScore)));
+
+  const confidenceText = `${confidenceScore}/100${highVol ? ' (波动偏大)' : ''}`;
+  const trendText = maTrend >= 1.5 ? '动能回升' : maTrend <= -1.5 ? '动能走弱' : '动能平稳';
+  const pendingText = stableRegime !== latestRawRegime ? `，原始分区=${latestRawRegime}(待确认)` : '';
+
+  const mainlinePart = topName
+    ? `主线聚焦 ${topName}${Number.isFinite(topScore) ? `(${topScore.toFixed(1)})` : ''}`
+    : '主线暂不清晰';
+  const advicePart = advice ? `执行上以「${advice}」为主` : '执行上保持纪律化交易';
+
+  tradingBrief.value = {
+    tradeDate,
+    regime: `${regime} (${trendText}${pendingText})`,
+    scoreText: Number.isFinite(ma5) ? `MA5 ${ma5.toFixed(1)} / 100` : '-',
+    confidence: confidenceText,
+    mainline: mainlinePart,
+    action: `建议仓位 ${position}；进攻: ${attack}；风控: ${risk}。按 2-5 个交易日节奏执行，避免因次日单点信号切换策略。${advicePart}。`
+  };
+};
+
+const waitForSentimentTaskDone = async (timeoutMs = 180000) => {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const res = await getTasksStatus();
+      const status = res.data || {};
+      const currentName = status.current_task?.name || '';
+      const isRunningSentiment = currentName.includes('市场情绪');
+      if (!isRunningSentiment) {
+        return;
+      }
+    } catch (e) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
+};
+
+const handleSyncSentiment = async () => {
+  if (syncingSentiment.value) return;
+  syncingSentiment.value = true;
   try {
-    const res = await getStar50Backtest();
-    const data = res.data;
-    if (!data || !data.metrics) return;
-
-    backtestMetrics.value = data.metrics;
-    
-    const dates = data.curves.map(c => c.trade_date);
-    const stratVals = data.curves.map(c => c.strategy_nav);
-    const benchVals = data.curves.map(c => c.benchmark_nav);
-    const positions = data.curves.map(c => ({
-       value: c.strategy_nav,
-       position: c.position,
-       date: c.trade_date
-    }));
-
-    const markPoints = [];
-    let lastPos = 0;
-    data.curves.forEach((c, i) => {
-        if (c.position > lastPos && c.position > 0) {
-           markPoints.push({ name: 'Buy', coord: [i, c.strategy_nav], value: 'B', itemStyle: { color: '#ef4444' } });
-        } else if (c.position < lastPos) {
-           markPoints.push({ name: 'Sell', coord: [i, c.strategy_nav], value: 'S', itemStyle: { color: '#10b981' }, symbolRotate: 180, symbolOffset: [0, 10] });
-        }
-        lastPos = c.position;
-    });
-
-    backtestOption.value = {
-      backgroundColor: 'transparent',
-      tooltip: { 
-         trigger: 'axis',
-         axisPointer: { type: 'cross' },
-         backgroundColor: 'rgba(15, 23, 42, 0.95)',
-         borderColor: '#334155',
-         textStyle: { color: '#cbd5e1' },
-         formatter: (params) => {
-            let html = `<div class="font-bold border-b border-slate-700 pb-1 mb-1">${params[0].name}</div>`;
-            params.forEach(p => {
-               const val = p.value.toLocaleString('zh-CN', { style: 'currency', currency: 'CNY' });
-               html += `<div class="flex justify-between w-48"><span style="color:${p.color}">${p.seriesName}</span> <span class="font-bold text-white">${val}</span></div>`;
-            });
-            const posItem = positions.find(p => p.date === params[0].name);
-            if (posItem) {
-               html += `<div class="mt-1 pt-1 border-t border-slate-700 flex justify-between"><span class="text-slate-400">模拟持仓</span> <span class="font-bold text-business-highlight">${posItem.position * 100}%</span></div>`;
-            }
-            return html;
-         }
-      },
-      legend: { textStyle: { color: '#94a3b8' }, top: 0 },
-      grid: { top: 40, left: 20, right: 20, bottom: 30, containLabel: true },
-      xAxis: { type: 'category', data: dates, axisLabel: { color: '#64748b', fontSize: 10 } },
-      yAxis: { 
-        type: 'value', 
-        scale: true, 
-        splitLine: { lineStyle: { color: '#334155', type: 'dashed' } }, 
-        axisLabel: { 
-          color: '#64748b', 
-          fontSize: 9,
-          formatter: (v) => (v / 10000).toFixed(1) + 'w' 
-        } 
-      },
-      series: [
-        {
-          name: '情绪增强策略',
-          type: 'line',
-          data: stratVals,
-          smooth: true,
-          lineStyle: { width: 3, color: '#f43f5e', shadowBlur: 10, shadowColor: 'rgba(244, 63, 94, 0.3)' },
-          areaStyle: { 
-            opacity: 0.1, 
-            color: {
-              type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
-              colorStops: [{ offset: 0, color: '#f43f5e' }, { offset: 1, color: 'transparent' }]
-            }
-          },
-          markPoint: { symbol: 'pin', symbolSize: 20, data: markPoints, label: { fontSize: 8, fontWeight: 'bold' } }
-        },
-        {
-          name: '上证指数基准',
-          type: 'line',
-          data: benchVals,
-          showSymbol: false,
-          lineStyle: { width: 1.5, type: 'dashed', color: '#94a3b8' }
-        }
-      ]
-    };
-
+    await syncSentiment(250, true);
+    await waitForSentimentTaskDone();
+    await fetchMarketSentiment();
   } catch (e) {
-    console.error("Backtest Error", e);
+    alert("同步情绪失败");
   } finally {
-    backtestLoading.value = false;
+    syncingSentiment.value = false;
+  }
+};
+
+const handlePreviewSentiment = async () => {
+  if (predictingSentiment.value) return;
+  predictingSentiment.value = true;
+  previewError.value = '';
+  suggestionError.value = '';
+  marketSuggestion.value = null;
+  try {
+    const res = await getSentimentPreview('dc');
+    if (res.data?.status !== 'success') {
+      throw new Error(res.data?.message || '盘中情绪预测失败');
+    }
+    sentimentPreview.value = res.data?.data || null;
+    try {
+      const sRes = await getMarketSuggestion({ use_preview: true, src: 'dc' });
+      if (sRes.data?.status === 'success') {
+        marketSuggestion.value = sRes.data?.data || null;
+      } else {
+        suggestionError.value = sRes.data?.message || '统一市场建议生成失败';
+      }
+    } catch (e) {
+      const detail = e?.response?.data?.detail;
+      suggestionError.value = detail || e?.message || '统一市场建议生成失败';
+    }
+  } catch (e) {
+    const detail = e?.response?.data?.detail;
+    previewError.value = detail || e?.message || '盘中情绪预测失败';
+    sentimentPreview.value = null;
+  } finally {
+    predictingSentiment.value = false;
+  }
+};
+
+const openBacktestModal = async () => {
+  showBacktestModal.value = true;
+  loadingBacktest.value = true;
+  backtestError.value = '';
+  backtestData.value = null;
+  try {
+    const res = await getBacktestResult(true);
+    if (res.data?.status !== 'success') {
+      backtestError.value = res.data?.message || '回测结果获取失败';
+      return;
+    }
+    backtestData.value = res.data?.data || null;
+  } catch (e) {
+    backtestError.value = '回测结果获取失败';
+  } finally {
+    loadingBacktest.value = false;
+  }
+};
+
+const fmt = (v, digits = 2, suffix = '') => {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return '-';
+  return `${n.toFixed(digits)}${suffix}`;
+};
+
+const fmtInt = (v) => {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return '-';
+  return `${Math.round(n)}`;
+};
+
+const fmtWithMissing = (v, missing, digits = 2, suffix = '') => {
+  if (missing) return '缺失';
+  return fmt(v, digits, suffix);
+};
+
+const fmtIntWithMissing = (v, missing) => {
+  if (missing) return '缺失';
+  return fmtInt(v);
+};
+
+const updateViewport = () => {
+  isMobile.value = window.innerWidth < 768;
+  if (isMobile.value) {
+    minimalTooltipMode.value = true;
   }
 };
 
@@ -412,26 +568,19 @@ const marketSentimentChartOption = ref({
       type: 'value', 
       name: '指数', 
       position: 'right',
-      show: false, // 隐藏坐标系
+      show: true,
       splitLine: { show: false }, 
-      axisLine: { show: false }, 
-      axisLabel: { show: false },
+      axisLine: { lineStyle: { color: '#64748b', opacity: 0.5 } },
+      axisLabel: { color: '#64748b', fontSize: 9 },
+      nameTextStyle: { color: '#64748b', fontSize: 9 },
       scale: true 
     }
   ],
   series: []
 });
 
-const handleChartClick = (params) => {
+const handleChartClick = () => {
   isTooltipLocked.value = !isTooltipLocked.value;
-};
-
-const handlePieClick = (params) => {
-  if (params.name) {
-    selectedConcept.value = params.name;
-    handleFetch();
-    document.getElementById('strategy-control-center')?.scrollIntoView({ behavior: 'smooth' });
-  }
 };
 
 const mainlineChartOption = ref({
@@ -487,6 +636,16 @@ const fetchMainlineHistory = async () => {
     } else {
       trendAnalysis.value = "当前周期内无明显主线推演结论。";
     }
+    if (analysis?.top_mainline) {
+      currentMainline.value = {
+        name: analysis.top_mainline.name || '',
+        score: analysis.top_mainline.score || 0,
+        reason: analysis.top_mainline.reason || ''
+      };
+    } else {
+      currentMainline.value = { name: '', score: 0, reason: '' };
+    }
+    buildTradingBrief();
     
     if (!dates || !series || dates.length === 0) {
       console.warn("Mainline History: No data returned", data);
@@ -647,9 +806,13 @@ const fetchMainlineHistory = async () => {
 const fetchMarketSentiment = async () => {
   try {
     const res = await getMarketSentiment(250); // 获取约1年交易日数据
-    const data = res.data; // { dates, sentiment, index }
+    const data = res.data.data; // { dates, sentiment, index }
     
     if (!data.dates || data.dates.length === 0) return;
+    latestSentimentDate.value = data.dates[data.dates.length - 1];
+    latestSentiment.value = data.sentiment[data.sentiment.length - 1] || null;
+    recentSentiments.value = data.sentiment.slice(-60);
+    buildTradingBrief();
     
     // 默认显示最近一个月 (约22个交易日)
     const totalPoints = data.dates.length;
@@ -689,24 +852,44 @@ const fetchMarketSentiment = async () => {
       }
     });
 
+    const indexSeries = data.dates.map((_, i) => {
+      const raw = data.index?.[i];
+      if (raw === null || raw === undefined || raw === '') return null;
+      const val = Number(raw);
+      return Number.isFinite(val) ? val : null;
+    });
+    const indexPctSeries = indexSeries.map((curr, i) => {
+      if (!Number.isFinite(curr) || i === 0 || !Number.isFinite(indexSeries[i - 1]) || indexSeries[i - 1] === 0) {
+        return null;
+      }
+      return ((curr - indexSeries[i - 1]) / indexSeries[i - 1]) * 100;
+    });
+
     marketSentimentChartOption.value = {
       ...marketSentimentChartOption.value,
       tooltip: {
         ...marketSentimentChartOption.value.tooltip,
         formatter: (params) => {
-          let html = `<div class="p-2 font-mono text-xs min-w-[180px]">`;
+          let html = `<div class="p-2 font-mono text-xs min-w-[220px]">`;
           params.forEach(p => {
             if (p.seriesName === '情绪评分') {
+              const compact = minimalTooltipMode.value || isMobile.value;
               const val = typeof p.value === 'object' ? p.value.value : p.value;
               const details = p.data?.details || {};
               const signal = details.signal || 'HOLD';
+              const f = details.factors || {};
+              const m = details.metrics || {};
+              const mf = details.missing?.factors || {};
+              const idx = Number.isFinite(p.dataIndex) ? p.dataIndex : -1;
+              const liveIndexChg = idx >= 0 ? indexPctSeries[idx] : null;
+              const indexChgDisplay = Number.isFinite(liveIndexChg) ? liveIndexChg : Number(f.index_chg);
               
               // 优先使用数据项中的 label (中文)
               const displayLabel = p.data?.label || details.label || signal;
               
               html += `<div class="mb-2 border-b border-slate-700 pb-1 flex justify-between">
                         <span class="text-slate-400">${p.name} 指标</span>
-                        <span class="font-bold text-amber-500 text-sm">${val}</span>
+                        <span class="font-bold text-amber-500 text-sm">${fmt(val, 1)}</span>
                       </div>`;
               
               html += `<div class="mb-2 px-2 py-1 bg-slate-800 rounded flex justify-between items-center">
@@ -714,39 +897,50 @@ const fetchMarketSentiment = async () => {
                         <span class="font-bold ${signal.includes('BUY') ? 'text-rose-500' : signal.includes('SELL') ? 'text-emerald-500' : 'text-slate-300'}">${displayLabel}</span>
                       </div>`;
 
-              if (details.factors) {
-                const f = details.factors;
-                html += `<div class="grid grid-cols-2 gap-x-2 gap-y-1 mb-3 text-[10px] text-slate-500">
-                          <div>赚钱效应: <span class="text-slate-300">${f.breadth}%</span></div>
-                          <div>中位数涨幅: <span class="${f.median_chg > 0 ? 'text-rose-400' : 'text-emerald-400'}">${f.median_chg}%</span></div>
-                          <div>指数涨幅: <span class="text-slate-300">${f.index_chg}%</span></div>
-                          <div>净涨停: <span class="text-slate-300">${f.limit}</span></div>
-                          <div>炸板压制: <span class="text-slate-300">${f.failure}</span></div>
-                          <div>量能共振: <span class="text-slate-300">${f.vol}</span></div>
+              if (compact) {
+                html += `<div class="text-[10px] text-slate-300 space-y-1">
+                          <div class="flex justify-between"><span class="text-slate-500">赚钱效应</span><span>${fmtWithMissing(f.breadth, mf.breadth, 1, '%')}</span></div>
+                          <div class="flex justify-between"><span class="text-slate-500">中位涨幅</span><span>${fmtWithMissing(f.median_chg, mf.median_chg, 1, '%')}</span></div>
+                          <div class="flex justify-between"><span class="text-slate-500">动量(v1/v2)</span><span>${fmt(m.v1, 1)} / ${fmt(m.v2, 1)}</span></div>
+                          <div class="flex justify-between"><span class="text-slate-500">策略</span><span>${m.advice || '等待机会'}</span></div>
                         </div>`;
+                return;
               }
-              
-              if (details.metrics) {
-                const m = details.metrics;
-                html += `<div class="mt-2 text-[10px] text-slate-400 border-t border-slate-800 pt-2 space-y-1">
-                          <div class="flex justify-between items-center bg-blue-500/10 px-2 py-1 rounded mb-2">
-                            <span class="text-blue-400 font-bold">操盘策略:</span> 
-                            <span class="text-white font-bold ml-2">${m.advice || '全市场择优'}</span>
-                          </div>
-                          <div class="flex justify-between"><span>评分动量:</span> <span class="${m.score_delta > 0 ? 'text-rose-400' : 'text-emerald-400'}">${m.score_delta}</span></div>`;
-                
-                if (m.is_decoupling) {
-                  html += `<div class="flex justify-between items-center bg-rose-500/10 px-1 rounded"><span class="text-rose-400 font-bold">剪刀差进攻:</span> <span class="text-rose-400">TRUE</span></div>`;
-                }
-                if (m.is_suppressed) {
-                  html += `<div class="flex justify-between items-center bg-amber-500/10 px-1 rounded"><span class="text-amber-400 font-bold">主力压盘:</span> <span class="text-amber-400">TRUE</span></div>`;
-                }
 
-                if (m.limit_ups !== undefined) {
-                   html += `<div class="flex justify-between"><span>涨停/跌停:</span> <span>${m.limit_ups} / ${m.limit_downs}</span></div>`;
-                }
-                html += `</div>`;
-              }
+              html += `<div class="text-[10px] space-y-2">
+                        <div class="rounded bg-slate-800/70 px-2 py-1">
+                          <div class="text-slate-500 mb-1">交易行为</div>
+                          <div class="grid grid-cols-2 gap-x-2 gap-y-1 text-slate-300">
+                            <div>涨停数: ${fmtIntWithMissing(f.limit, mf.limit)}</div>
+                            <div>炸板数: ${fmtIntWithMissing(f.failure, mf.failure)}</div>
+                            <div>涨跌停比: ${fmtWithMissing(f.limit_up_down_ratio, mf.limit_up_down_ratio, 2)}</div>
+                            <div>连板高度: ${fmtIntWithMissing(f.max_limit_up_streak, mf.max_limit_up_streak)}</div>
+                          </div>
+                        </div>
+                        <div class="rounded bg-slate-800/70 px-2 py-1">
+                          <div class="text-slate-500 mb-1">市场结构</div>
+                          <div class="grid grid-cols-2 gap-x-2 gap-y-1 text-slate-300">
+                            <div>赚钱效应: ${fmtWithMissing(f.breadth, mf.breadth, 1, '%')}</div>
+                            <div>中位涨幅: ${fmtWithMissing(f.median_chg, mf.median_chg, 1, '%')}</div>
+                            <div>新高/新低: ${fmtWithMissing(f.new_high_low_ratio, mf.new_high_low_ratio, 2)}</div>
+                            <div>量能活跃: ${fmtWithMissing(f.turnover_activity, mf.turnover_activity, 3)}</div>
+                          </div>
+                        </div>
+                        <div class="rounded bg-slate-800/70 px-2 py-1">
+                          <div class="text-slate-500 mb-1">波动预期</div>
+                          <div class="grid grid-cols-2 gap-x-2 gap-y-1 text-slate-300">
+                            <div>指数涨幅: ${fmtWithMissing(indexChgDisplay, mf.index_chg, 2, '%')}</div>
+                            <div>波动代理Z: ${fmtWithMissing(f.iv_proxy_z, mf.iv_proxy_z, 2)}</div>
+                          </div>
+                        </div>
+                      </div>`;
+
+              html += `<div class="mt-2 text-[10px] text-slate-400 border-t border-slate-800 pt-2 space-y-1">
+                        <div class="flex justify-between"><span>策略:</span><span class="text-slate-200">${m.advice || '等待机会'}</span></div>
+                        <div class="flex justify-between"><span>动量 v1:</span><span class="${Number(m.v1) > 0 ? 'text-rose-400' : 'text-emerald-400'}">${fmt(m.v1, 1)}</span></div>
+                        <div class="flex justify-between"><span>加速度 v2:</span><span class="${Number(m.v2) > 0 ? 'text-rose-400' : 'text-emerald-400'}">${fmt(m.v2, 1)}</span></div>
+                        <div class="flex justify-between"><span>情绪MA5:</span><span>${fmt(m.score_ma5, 1)}</span></div>
+                      </div>`;
             }
           });
           html += `</div>`;
@@ -760,7 +954,7 @@ const fetchMarketSentiment = async () => {
       yAxis: marketSentimentChartOption.value.yAxis,
       dataZoom: [
         { ...marketSentimentChartOption.value.dataZoom[0], startValue: startValue, endValue: totalPoints - 1 },
-        { ...marketSentimentChartOption.value.dataZoom[1], startValue: startValue, endValue: totalPoints - 1 }
+        { ...marketSentimentChartOption.value.dataZoom[1], startValue: startValue, endValue: totalPoints - 1, show: !isMobile.value }
       ],
       series: [
         {
@@ -808,10 +1002,12 @@ const fetchMarketSentiment = async () => {
           name: '上证指数',
           type: 'line',
           yAxisIndex: 1,
-          smooth: true,
+          smooth: false,
           showSymbol: false,
-          data: data.index,
-          lineStyle: { color: '#64748b', width: 1, type: 'dashed' }
+          connectNulls: true,
+          data: indexSeries,
+          z: 1,
+          lineStyle: { color: '#94a3b8', width: 2, type: 'solid', opacity: 0.9 }
         }
       ]
     };
@@ -820,79 +1016,15 @@ const fetchMarketSentiment = async () => {
   }
 };
 
-const handleFetch = async () => {
-  loading.value = true;
-  try {
-    const params = {};
-    if (filterDate.value) params.target_date = filterDate.value;
-    if (selectedConcept.value) params.concept = selectedConcept.value;
-    
-    const response = await getRecommendations(params);
-    if (response.data.status === 'success') {
-      const recData = response.data.data;
-      currentRecDate.value = response.data.date;
-      macroSentiment.value = response.data.macro_sentiment;
-      strategyConclusion.value = response.data.conclusion;
-      
-      if (!filterDate.value) {
-        filterDate.value = currentRecDate.value;
-      }
-      
-      const btRes = await getBacktestResults(currentRecDate.value);
-      const btMap = {};
-      if (btRes.data) btRes.data.forEach(r => { btMap[r.ts_code] = r; });
-      
-      recommendations.value = recData.map(item => ({
-        ...item,
-        p5_return: btMap[item.ts_code]?.p5_return ?? null,
-        p10_return: btMap[item.ts_code]?.p10_return ?? null
-      }));
-    }
-  } catch (error) {
-    console.error("Fetch Error", error);
-  } finally {
-    loading.value = false;
-  }
-};
-
-const handleBacktest = async () => {
-  backtesting.value = true;
-  try {
-    await triggerBacktest();
-    await handleFetch();
-    alert("表现验证已更新");
-  } catch (e) {
-    alert("更新失败");
-  } finally {
-    backtesting.value = false;
-  }
-};
-
-const formatPrice = (val) => {
-  if (val === null || val === undefined) return '--';
-  return (val > 0 ? '+' : '') + val.toFixed(2) + '%';
-};
-
-const getPriceColor = (val) => {
-  if (val === null || val === undefined) return 'text-slate-600';
-  return val >= 0 ? 'text-business-success' : 'text-business-danger';
-};
-
 onMounted(async () => {
-  try {
-    const hotRes = await getHotConcepts();
-    hotConcepts.value = hotRes.data;
-  } catch (e) {}
-  handleFetch();
+  updateViewport();
+  window.addEventListener('resize', updateViewport);
   fetchMainlineHistory();
   fetchMarketSentiment();
-  
-  const h = new Date().getHours();
-  if (h >= 9 && h < 15) {
-    marketStatus.value = { text: '正在交易', color: 'text-business-success' };
-  } else {
-    marketStatus.value = { text: '已休市', color: 'text-slate-500' };
-  }
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', updateViewport);
 });
 </script>
 

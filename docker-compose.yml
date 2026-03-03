@@ -30,7 +30,7 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       target: build-stage # 仅构建到安装依赖阶段
-    container_name: jarvis_frontend
+    container_name: jarvis-frontend
     restart: unless-stopped
     volumes:
       - ./frontend:/app

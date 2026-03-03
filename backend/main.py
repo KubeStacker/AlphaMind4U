@@ -1,14 +1,35 @@
 # /backend/main.py
 
+import logging
 import datetime
-from fastapi import FastAPI
+import asyncio
+from fastapi import FastAPI, BackgroundTasks
+import pytz
+
+# 配置全局日志 - 使用上海时区
+shanghai_tz = pytz.timezone('Asia/Shanghai')
+
+class ShanghaiTimeFormatter(logging.Formatter):
+    def formatTime(self, record, datefmt=None):
+        dt = datetime.datetime.fromtimestamp(record.created, tz=shanghai_tz)
+        if datefmt:
+            return dt.strftime(datefmt)
+        return dt.strftime('%Y-%m-%d %H:%M:%S')
+
+# 配置全局日志
+handler = logging.StreamHandler()
+handler.setFormatter(ShanghaiTimeFormatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+logging.root.addHandler(handler)
+logging.root.setLevel(logging.INFO)
+logging.getLogger('strategy.sentiment.analyst').setLevel(logging.WARNING)
+logger = logging.getLogger(__name__)
+
 from contextlib import asynccontextmanager
 from db.init_db import initialize_database
-from db.connection import close_connection
+from db.connection import close_connection, get_connection
 from api import admin
-from api import strategy
 from api import auth
-from core.scheduler import start_scheduler
+from etl.scheduler import start_scheduler
 
 # 定义 FastAPI 应用的生命周期事件
 @asynccontextmanager
@@ -17,20 +38,28 @@ async def lifespan(app: FastAPI):
     FastAPI 应用的生命周期管理器。
     在应用启动时执行数据库初始化。
     """
-    print("FastAPI 应用启动中...")
-    # 应用程序启动时执行的逻辑
+    logger.info("FastAPI 应用启动中...")
+    # 1. 初始化数据库
     initialize_database()
+    # 1.1 预热共享 DuckDB 连接（进程内单连接）
+    get_connection()
+    
+    # 2. 启动任务中心消费者 (处理顺序同步任务)
+    from api.admin import task_worker
+    asyncio.create_task(task_worker())
+    
+    # 3. 启动定时任务调度器
     try:
         start_scheduler()
     except Exception as e:
-        print(f"调度器启动失败: {e}")
+        logger.error(f"调度器启动失败: {e}")
         
-    print("FastAPI 应用启动完成。")
+    logger.info("FastAPI 应用启动完成。")
     yield
     # 应用程序关闭时执行的逻辑
-    print("正在关闭资源...")
+    logger.info("正在关闭资源...")
     close_connection()
-    print("FastAPI 应用关闭。")
+    logger.info("FastAPI 应用关闭。")
 
 # 创建 FastAPI 应用实例
 app = FastAPI(
@@ -42,10 +71,9 @@ app = FastAPI(
 
 # 注册 API 路由
 app.include_router(admin.router)
-app.include_router(strategy.router)
 app.include_router(auth.router)
 
-@app.get("/")
+@app.get("/", tags=["System"])
 async def read_root():
     """
     根路径接口，用于健康检查或返回基本信息。
@@ -54,45 +82,142 @@ async def read_root():
 
 # 可以在此处添加更多的中间件、事件处理器等
 
-from core.calendar import trading_calendar
-
-@app.get("/system/trigger_star50", tags=["System"])
-def trigger_star50():
-    """ 触发科创50策略回测 """
-    from strategy.recommend.plugins.backtest_star50 import run_backtest
-    res = run_backtest()
-    return {"status": "success" if res else "failed", "data": res}
+from etl.calendar import trading_calendar
 
 @app.get("/system/migrate_db", tags=["System"])
 def migrate_db():
-    """ 数据库结构迁移 """
+    return {"status": "ok", "message": "Database already up to date"}
+
+@app.get("/system/create_tables", tags=["System"])
+def create_missing_tables():
+    """创建缺失的数据库表"""
     from db.connection import get_db_connection
+    
+    tables_created = []
+    
+    with get_db_connection() as con:
+        # stock_income  
+        try:
+            con.execute("""
+            CREATE TABLE IF NOT EXISTS stock_income (
+                ts_code         VARCHAR(15) NOT NULL,
+                ann_date        DATE,
+                f_ann_date      DATE,
+                end_date        DATE NOT NULL,
+                report_type     INTEGER,
+                comp_type       INTEGER,
+                end_type        VARCHAR(10),
+                basic_eps       DOUBLE,
+                diluted_eps     DOUBLE,
+                total_revenue   DOUBLE,
+                revenue         DOUBLE,
+                int_income      DOUBLE,
+                prem_earned     DOUBLE,
+                comm_income     DOUBLE,
+                n_commis_income DOUBLE,
+                n_oth_income    DOUBLE,
+                n_oth_b_income  DOUBLE,
+                prem_income     DOUBLE,
+                total_cogs      DOUBLE,
+                oper_cost       DOUBLE,
+                int_exp         DOUBLE,
+                comm_exp        DOUBLE,
+                biz_tax_surchg  DOUBLE,
+                sell_exp        DOUBLE,
+                admin_exp       DOUBLE,
+                fin_exp         DOUBLE,
+                assets_impair_loss DOUBLE,
+                operate_profit  DOUBLE,
+                total_profit    DOUBLE,
+                income_tax      DOUBLE,
+                n_income        DOUBLE,
+                n_income_attr_p DOUBLE,
+                minority_gain   DOUBLE,
+                total_operate_income DOUBLE,
+                operate_exp     DOUBLE,
+                total_operate_cost DOUBLE,
+                PRIMARY KEY (ts_code, end_date, report_type)
+            )
+            """)
+            tables_created.append("stock_income")
+        except Exception as e:
+            pass
+        
+        # stock_fina_indicator
+        try:
+            con.execute("""
+            CREATE TABLE IF NOT EXISTS stock_fina_indicator (
+                ts_code VARCHAR(15) NOT NULL,
+                ann_date DATE,
+                end_date DATE NOT NULL,
+                eps DOUBLE,
+                eps_yoy DOUBLE,
+                bvps DOUBLE,
+                roe DOUBLE,
+                roe_yoy DOUBLE,
+                net_profit_margin DOUBLE,
+                net_profit_margin_yoy DOUBLE,
+                gross_profit_margin DOUBLE,
+                gross_profit_margin_yoy DOUBLE,
+                total_rev DOUBLE,
+                total_rev_yoy DOUBLE,
+                rev_ps DOUBLE,
+                profit DOUBLE,
+                profit_yoy DOUBLE,
+                profit_ps DOUBLE,
+                PRIMARY KEY (ts_code, end_date)
+            )
+            """)
+            tables_created.append("stock_fina_indicator")
+        except Exception as e:
+            pass
+    
+    return {"status": "success", "tables_created": tables_created}
+
+@app.get("/system/cleanup_tables", tags=["System"])
+def cleanup_unused_tables():
+    """清理未使用的数据库表"""
+    from db.connection import get_db_connection
+    
+    unused_tables = [
+        "stock_express",
+        "stock_financials", 
+        "corporate_actions",
+        "macro_events",
+        "margin_market",
+        "realtime_quotes",
+        "strategy_recommendations"
+    ]
+    
+    tables_dropped = []
+    
+    with get_db_connection() as con:
+        for table in unused_tables:
+            try:
+                con.execute(f"DROP TABLE IF EXISTS {table}")
+                tables_dropped.append(table)
+            except Exception as e:
+                pass
+    
+    return {"status": "success", "tables_dropped": tables_dropped}
+
+@app.get("/system/trigger_daily_sync", tags=["System"])
+def trigger_daily_sync():
+    """ 手动触发每日收盘同步 """
+    from etl.sync import sync_engine
     try:
-        with get_db_connection() as con:
-            con.execute("ALTER TABLE strategy_recommendations ADD COLUMN p1_return DOUBLE;")
-            con.execute("ALTER TABLE strategy_recommendations ADD COLUMN p3_return DOUBLE;")
-        return {"status": "success", "message": "Columns added."}
+        sync_engine.sync_daily_update()
+        return {"status": "success", "message": "Daily sync triggered and completed."}
     except Exception as e:
+        logger.error(f"Manual sync failed: {e}")
         return {"status": "error", "message": str(e)}
 
-@app.get("/system/verify_p5", tags=["System"])
-def verify_p5():
-    """ 强制计算指定日期的收益率 """
-    from strategy.recommend import get_plugin
-    from db.connection import fetch_df
-    recommend_date = "2026-02-04"
-    rec_query = f"SELECT ts_code FROM strategy_recommendations WHERE recommend_date = '{recommend_date}'"
-    recs = fetch_df(rec_query)
-    date_query = f"SELECT DISTINCT trade_date FROM daily_price WHERE trade_date >= '{recommend_date}' ORDER BY trade_date ASC LIMIT 15"
-    dates_df = fetch_df(date_query)
-    
-    backtester = get_plugin("backtester")
-    res = backtester.calculate_returns_for_date(recommend_date)
-    return {
-        "recs_found": len(recs),
-        "trading_dates_found": [str(d) for d in dates_df['trade_date'].tolist()],
-        "updated_count": res
-    }
+@app.get("/system/backfill_history", tags=["System"])
+async def backfill_history(background_tasks: BackgroundTasks, days: int = 3):
+    """ 异步补全历史数据 """
+    from etl.utils.backfill import safe_backfill
+    background_tasks.add_task(safe_backfill, days)
+    return {"status": "success", "message": f"Backfill for last {days} days started in background."}
 
 @app.get("/system/status", tags=["System"])
 def get_system_status():

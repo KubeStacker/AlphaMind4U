@@ -5,8 +5,8 @@ from contextlib import contextmanager
 import threading
 import logging
 import os
+import time
 
-# Configure logging
 logger = logging.getLogger(__name__)
 
 # 数据库文件路径: 确保指向项目根目录下的 data 目录
@@ -28,81 +28,103 @@ else:
         
     DATABASE_PATH = os.path.join(BASE_DIR, "data", "jarvis.duckdb")
 
-# 全局连接对象，使用 Singleton 模式
-_global_con = None
-_lock = threading.Lock()
+
+# 进程内共享连接与锁
+_DB_LOCK = threading.RLock()
+_SHARED_CONN = None
+
+
+def _is_recoverable_connection_error(err: Exception) -> bool:
+    msg = str(err)
+    return any(
+        s in msg for s in (
+            "Unique file handle conflict",
+            "already attached",
+            "Can't open a connection",
+            "Connection Error",
+            "database has been closed",
+        )
+    )
+
+
+def _open_shared_connection():
+    global _SHARED_CONN
+    if _SHARED_CONN is None:
+        _SHARED_CONN = duckdb.connect(database=DATABASE_PATH, read_only=False)
+        logger.info(f"DuckDB 共享连接已建立: {DATABASE_PATH}")
+    return _SHARED_CONN
+
+
+def _reset_shared_connection():
+    global _SHARED_CONN
+    if _SHARED_CONN is not None:
+        try:
+            _SHARED_CONN.close()
+        except Exception:
+            pass
+    _SHARED_CONN = None
 
 def get_connection(read_only=False):
-    """ 获取全局单例连接 """
-    global _global_con
-    if _global_con is not None:
-        return _global_con
-
-    with _lock:
-        if _global_con is None:
-            try:
-                # 核心优化：全应用统一使用一个读写连接
-                # DuckDB 内部会自动处理多线程读取的并发优化
-                _global_con = duckdb.connect(database=DATABASE_PATH, read_only=False)
-                # 针对分析型查询的优化配置
-                _global_con.execute("SET threads TO 4;") 
-                _global_con.execute("SET memory_limit = '2GB';")
-            except duckdb.IOException as e:
-                if "lock" in str(e).lower():
-                    logger.warning("检测到数据库被其他进程占用，回退到只读模式")
-                    return duckdb.connect(database=DATABASE_PATH, config={'access_mode': 'read_only'})
-                raise e
-    return _global_con
+    """
+    获取数据库连接（进程级共享）。
+    注意：为避免 DuckDB 文件句柄冲突，read_only 参数会被忽略，统一复用同一个读写连接。
+    """
+    with _DB_LOCK:
+        try:
+            return _open_shared_connection()
+        except Exception as e:
+            logger.warning(f"数据库连接失败: {e}")
+            _reset_shared_connection()
+            raise
 
 @contextmanager
 def get_db_connection(read_only=False):
     """
-    高性能上下文管理器。
-    使用 cursor() 实现线程级隔离，避免并发请求下的事务冲突。
+    数据库上下文（共享连接 + 串行执行）。
+    以锁保护整个上下文，确保多线程任务不会并发写同一连接。
     """
-    con = get_connection(read_only)
-    cursor = None
-    try:
-        # 使用 cursor 允许在同一个连接上并行执行多个查询
-        cursor = con.cursor()
-        yield cursor
-    finally:
-        if cursor:
-            cursor.close()
+    with _DB_LOCK:
+        con = get_connection(read_only=read_only)
+        yield con
 
-def fetch_df(sql_query: str, params=None) -> 'pd.DataFrame':
-    """
-    高性能数据查询接口，支持并发。
-    """
-    try:
-        with get_db_connection(read_only=True) as cursor:
-            return cursor.execute(sql_query, params).fetchdf()
-    except Exception as e:
-        if "lock" in str(e).lower() or "read-only" in str(e).lower():
-            # Fallback to a completely fresh read-only connection if global one fails
-            import pandas as pd
-            con = duckdb.connect(database=DATABASE_PATH, config={'access_mode': 'read_only'})
-            try:
-                return con.execute(sql_query, params).fetchdf()
-            finally:
-                con.close()
-        raise e
 
-def fetch_df_read_only(sql_query: str, params=None) -> 'pd.DataFrame':
-    return fetch_df(sql_query, params)
+def _query_df(sql_query: str, params=None):
+    with _DB_LOCK:
+        con = get_connection(read_only=False)
+        return con.execute(sql_query, params).fetchdf()
+
+def fetch_df(sql_query: str, params=None, max_retries=3, retry_delay=2) -> 'pd.DataFrame':
+    """
+    数据查询接口（共享连接 + 重试 + 自动重连）。
+    """
+    import pandas as pd
+    
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            return _query_df(sql_query, params)
+        except Exception as e:
+            last_error = e
+            logger.warning(f"数据库查询失败 (尝试 {attempt + 1}/{max_retries}): {e}")
+            if _is_recoverable_connection_error(e):
+                with _DB_LOCK:
+                    _reset_shared_connection()
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
+    
+    logger.error(f"数据库查询最终失败: {last_error}")
+    raise last_error
+
+def fetch_df_read_only(sql_query: str, params=None, max_retries=3, retry_delay=2) -> 'pd.DataFrame':
+    """只读查询接口（逻辑只读，底层复用共享连接）。"""
+    return fetch_df(sql_query, params=params, max_retries=max_retries, retry_delay=retry_delay)
 
 def close_connection():
-    """ 关闭全局数据库连接 """
-    global _global_con
-    with _lock:
-        if _global_con is not None:
-            _global_con.close()
-            _global_con = None
+    """关闭进程内共享连接。"""
+    with _DB_LOCK:
+        _reset_shared_connection()
+        logger.info("DuckDB 共享连接已关闭")
 
 def get_fresh_connection(read_only=False):
-    """ 
-    仅在必须开启独立事务或绕过全局单例时使用。
-    由于全局 RW 连接已占坑，此处通常只能以 read_only=True 开启。
-    """
-    return duckdb.connect(database=DATABASE_PATH, read_only=True)
-
+    """兼容旧接口：返回共享连接（不再创建新连接）。"""
+    return get_connection(read_only=read_only)

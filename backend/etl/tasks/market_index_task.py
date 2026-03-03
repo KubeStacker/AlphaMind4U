@@ -4,10 +4,14 @@ import arrow
 import pandas as pd
 
 class MarketIndexTask(BaseTask):
-    def sync(self, ts_code: str = '000001.SH', years: int = 1):
+    def sync(self, ts_code: str = '000001.SH', years: int = 0, days: int = 3):
         self.logger.info(f"同步市场指数 {ts_code}...")
-        end_date = arrow.now()
-        start_date = end_date.shift(years=-years).format("YYYYMMDD")
+        from etl.calendar import trading_calendar
+        end_date = arrow.get(trading_calendar.get_latest_sync_date())
+        if years > 0:
+            start_date = end_date.shift(years=-years).format("YYYYMMDD")
+        else:
+            start_date = end_date.shift(days=-days).format("YYYYMMDD")
         end_date_str = end_date.format("YYYYMMDD")
         
         try:

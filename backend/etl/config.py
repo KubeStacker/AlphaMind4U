@@ -5,20 +5,25 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     """
     应用配置类，用于加载和管理环境变量。
-    
-    Attributes:
-        tushare_token (str): Tushare 数据服务的 API Token。
     """
     
-    # Tushare API Token, 从 .env 文件中读取
-    # 访问 https://tushare.pro 注册以获取
-    tushare_token: str = "YOUR_TUSHARE_TOKEN_HERE"
+    # Tushare Token 类型: short 或 long
+    tushare_token_type: str = "long"
     
-    # 数据源配置: 'tushare' 或 'akshare'
-    data_source: str = "tushare"
-
+    # Short token (需要设置 _DataApi__token 和 _DataApi__http_url)
+    short_tushare_token: str = ""
+    
+    # Long token (标准token)
+    long_tushare_token: str = ""
+    
+    @property
+    def tushare_token(self) -> str:
+        """根据token类型返回对应的token"""
+        if self.tushare_token_type == "short":
+            return self.short_tushare_token
+        return self.long_tushare_token
+    
     # model_config 用于指定 .env 文件的位置
-    # 在这个配置中，它会查找项目根目录下的 .env 文件
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding='utf-8')
 
 # 创建一个全局可用的配置实例

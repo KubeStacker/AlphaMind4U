@@ -1,5 +1,5 @@
 <template>
-  <div class="min-h-screen bg-business-darker text-slate-200 font-sans pb-16 md:pb-0">
+  <div :class="[isSettingsPage ? 'bg-transparent' : 'min-h-screen bg-business-darker']" class="text-slate-200 font-sans pb-16 md:pb-0">
     <!-- 顶部导航栏 - 紧凑型 -->
     <header class="bg-business-dark/80 backdrop-blur-md border-b border-business-light sticky top-0 z-50 safe-top shadow-md">
       <nav class="container mx-auto px-4 flex justify-between items-center h-14">
@@ -83,7 +83,8 @@
 </template>
 
 <script setup>
-import { useRouter } from 'vue-router';
+import { computed } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
 import { Menu, MenuButton, MenuItems, MenuItem } from '@headlessui/vue'
 import { 
@@ -91,7 +92,11 @@ import {
   CircleStackIcon, ArrowRightOnRectangleIcon, ChartBarIcon, CommandLineIcon 
 } from '@heroicons/vue/20/solid'
 
+const route = useRoute();
 const router = useRouter();
 const authStore = useAuthStore();
+
+const isSettingsPage = computed(() => route.path.startsWith('/settings'));
+
 const handleLogout = () => { authStore.logout(); router.push({ name: 'login' }); };
 </script>

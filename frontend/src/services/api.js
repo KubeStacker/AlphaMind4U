@@ -34,40 +34,44 @@ export const getIntegrityReport = (startDate, endDate) => {
 };
 
 /**
- * 获取策略推荐
- * @param {Object} params - 包含 target_date, concept 等
- */
-export const getRecommendations = (params = {}) => {
-  return apiClient.get('/strategy/recommendations', { params });
-};
-
-/** 获取热门概念 */
-export const getHotConcepts = () => apiClient.get('/strategy/hot_concepts');
-
-/** 获取主线演变历史 */
-export const getMainlineHistory = (days = 30) => apiClient.get('/strategy/mainline_history', { params: { days } });
-
-/** 获取市场情绪历史 */
-export const getMarketSentiment = (days = 30) => apiClient.get('/strategy/market_sentiment', { params: { days } });
-
-/** 触发收益验证 */
-export const triggerBacktest = () => apiClient.post('/strategy/backtest');
-
-/** 获取验证结果 */
-export const getBacktestResults = (date) => apiClient.get('/strategy/backtest/results', { params: { date } });
-
-/** 获取科创50回测结果 */
-export const getStar50Backtest = () => apiClient.get('/strategy/backtest/star50');
-
-/**
- * 获取后端状态 (此端点需在后端实现)
- *
+ * 获取后端状态
  * @returns {Promise<Object>} e.g., { status: 'TRADING' | 'CLOSED' }
  */
 export const getSystemStatus = () => {
-    // 假设后端提供了一个 /status 接口来返回当前市场状态
     return apiClient.get('/system/status');
 };
+
+/** 触发特定日期的行情同步 */
+const triggerSyncTask = (payload) => apiClient.post('/admin/etl/sync', payload);
+
+/** 触发特定日期的行情同步 */
+export const syncDailyDate = (date) => {
+  if (date) {
+    return triggerSyncTask({ task: 'daily', start_date: date, end_date: date, years: 0, calc_factors: true });
+  }
+  return triggerSyncTask({ task: 'daily', years: 1, calc_factors: true });
+};
+
+/** 同步财务指标 */
+export const syncFinancials = (limit = 1000) => triggerSyncTask({ task: 'financials', limit });
+
+/** 同步财务指标(新) */
+export const syncFinaIndicator = (limit = 500) => triggerSyncTask({ task: 'fina_indicator', limit });
+
+/** 同步季度利润表 */
+export const syncQuarterlyIncome = (tsCode = null, startYear = 2020) => triggerSyncTask({ task: 'quarterly_income', ts_code: tsCode });
+
+/** 同步资金流向 */
+export const syncMoneyflow = (years = 1) => triggerSyncTask({ task: 'moneyflow', years });
+
+/** 同步市场指数 */
+export const syncMarketIndex = (tsCode = '000001.SH', years = 1) => triggerSyncTask({ task: 'index', ts_code: tsCode, years });
+
+/** 同步融资融券数据 */
+export const syncMargin = (days = 90) => triggerSyncTask({ task: 'margin', days });
+
+/** 获取后台任务执行状态 */
+export const getTasksStatus = () => apiClient.get('/admin/tasks/status');
 
 // --- 用户管理 ---
 export const listUsers = () => apiClient.get('/admin/users');
@@ -78,4 +82,24 @@ export const updatePassword = (userId, newPassword) => apiClient.put('/admin/use
 // --- 数据库查询 ---
 export const executeDBQuery = (sql) => apiClient.post('/admin/db/query', { sql });
 
-// ... 此处可以添加更多 API 调用
+// --- 数据统计 ---
+export const getTableStats = () => apiClient.post('/admin/db/query', {
+  sql: `SELECT COUNT(*) as cnt, 'stock_income' as tbl FROM stock_income 
+        UNION ALL SELECT COUNT(*), 'stock_fina_indicator' FROM stock_fina_indicator 
+        UNION ALL SELECT COUNT(*), 'stock_basic' FROM stock_basic
+        UNION ALL SELECT COUNT(*), 'daily_price' FROM daily_price
+        UNION ALL SELECT COUNT(*), 'stock_moneyflow' FROM stock_moneyflow`
+});
+
+// --- 市场数据 ---
+export const getMarketSentiment = (days = 30) => apiClient.get('/admin/market_sentiment', { params: { days } });
+export const getSentimentPreview = (src = 'dc') => apiClient.get('/admin/sentiment/preview', { params: { src } });
+export const getMarketSuggestion = (params = {}) => apiClient.get('/admin/market/suggestion', { params });
+export const syncSentiment = (days = 250, syncIndex = false) =>
+  apiClient.post('/admin/etl/sentiment', null, { params: { days, sync_index: syncIndex } });
+export const getBacktestResult = (optimize = true) => apiClient.get('/admin/backtest_result', { params: { optimize } });
+export const getMainlineHistory = (days = 30) => apiClient.get('/admin/mainline_history', { params: { days } });
+export const getMarginHeatmap = (days = 10, top_n = 30) => apiClient.get('/admin/margin_heatmap', { params: { days, top_n } });
+
+/** 校验数据准确性 */
+export const verifyDataAccuracy = (tsCode = "688256.SH") => apiClient.get('/admin/data_verify', { params: { ts_code: tsCode } });

@@ -3,6 +3,7 @@ fastapi
 uvicorn[standard]
 python-multipart
 pandas
+numpy
 
 # 数据库
 duckdb
@@ -15,6 +16,7 @@ pydantic-settings
 # 日期与日历
 chinesecalendar
 arrow
+pytz
 
 # 安全
 passlib
@@ -23,6 +25,5 @@ python-jose[cryptography]
 
 # 数据源
 tushare
-akshare
 tenacity
 apscheduler

@@ -4,23 +4,13 @@ import pandas as pd
 
 class DataProvider(ABC):
     """
-    数据源提供者抽象基类 (Tushare, Akshare)
+    数据源提供者抽象基类
     """
     
     @property
     @abstractmethod
     def provider_name(self) -> str:
         """ 数据源名称 """
-        pass
-
-    @property
-    @abstractmethod
-    def sync_mode(self) -> Literal["date", "ticker"]:
-        """
-        同步模式偏好:
-        - 'date': 按日期同步效率更高 (如 Tushare daily 接口)
-        - 'ticker': 按股票代码同步效率更高 (如 Akshare)
-        """
         pass
 
     @abstractmethod
@@ -42,9 +32,6 @@ class DataProvider(ABC):
     def daily(self, trade_date: str = None, ts_code: str = None, start_date: str = None, end_date: str = None) -> pd.DataFrame:
         """
         获取日线行情数据。
-        根据 sync_mode 不同，参数传递方式不同:
-        - mode='date': 必须传 trade_date
-        - mode='ticker': 必须传 ts_code, start_date, end_date
         """
         pass
     
@@ -71,6 +58,16 @@ class DataProvider(ABC):
     @abstractmethod
     def concept_detail(self, id: str) -> pd.DataFrame:
         """ 获取概念明细 """
+        pass
+
+    @abstractmethod
+    def ths_index(self, exchange: str = None, type: str = None) -> pd.DataFrame:
+        """ 获取同花顺概念指数 """
+        pass
+    
+    @abstractmethod
+    def ths_member(self, ts_code: str = None, con_code: str = None) -> pd.DataFrame:
+        """ 获取同花顺概念成分 """
         pass
     
     @abstractmethod
