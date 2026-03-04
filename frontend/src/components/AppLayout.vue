@@ -11,9 +11,11 @@
             <span class="text-sm font-bold tracking-tight text-white uppercase">Jarvis</span>
           </router-link>
           <div class="hidden md:flex ml-8 items-center space-x-1">
-            <router-link to="/" class="px-3 py-1.5 rounded-lg text-xs font-bold transition-all" 
-              active-class="bg-business-accent text-white"
-              inactive-class="text-slate-400 hover:text-white">
+            <router-link
+              to="/"
+              class="px-3 py-1.5 rounded-lg text-xs font-bold transition-all"
+              :class="isDashboardPage ? 'bg-business-accent text-white' : 'text-slate-400 hover:text-white'"
+            >
               仪表盘
             </router-link>
           </div>
@@ -69,7 +71,7 @@
     <!-- 底部导航 (移动端) - 极简 -->
     <div class="md:hidden fixed bottom-0 left-0 right-0 bg-business-dark/95 backdrop-blur-md border-t border-business-light safe-bottom z-50">
       <div class="flex justify-around items-center h-14">
-        <router-link to="/" class="flex flex-col items-center transition-all" active-class="text-business-highlight" inactive-class="text-slate-500">
+        <router-link to="/" class="flex flex-col items-center transition-all" :class="isDashboardPage ? 'text-business-highlight' : 'text-slate-500'">
           <ChartBarIcon class="w-5 h-5" />
           <span class="text-[9px] font-bold mt-0.5">仪表盘</span>
         </router-link>
@@ -97,6 +99,7 @@ const router = useRouter();
 const authStore = useAuthStore();
 
 const isSettingsPage = computed(() => route.path.startsWith('/settings'));
+const isDashboardPage = computed(() => route.name === 'dashboard');
 
 const handleLogout = () => { authStore.logout(); router.push({ name: 'login' }); };
 </script>
