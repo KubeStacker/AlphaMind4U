@@ -56,25 +56,22 @@ class TradingCalendar:
 
     def is_trading_time(self) -> bool:
         """
-        判断当前时间是否处于A股的交易时段。
+        判断当前时间是否处于A股的交易时段 (9:15 - 15:00, 北京时间)。
         """
-        now_dt = arrow.now()
+        # 统一使用上海时区判断交易时间
+        now_dt = arrow.now('Asia/Shanghai')
+        
         # 首先必须是交易日
         if not self.is_trading_day(now_dt.date()):
             return False
 
         now_time = now_dt.time()
         
-        # 定义交易时段
-        morning_session_start = time(9, 30)
-        morning_session_end = time(11, 30)
-        afternoon_session_start = time(13, 0)
-        afternoon_session_end = time(15, 0)
+        # 用户定义交易时段: 9:15 - 15:00 (北京时间)
+        start_time = time(9, 15)
+        end_time = time(15, 0)
         
-        is_morning_session = morning_session_start <= now_time <= morning_session_end
-        is_afternoon_session = afternoon_session_start <= now_time <= afternoon_session_end
-        
-        return is_morning_session or is_afternoon_session
+        return start_time <= now_time <= end_time
 
     def get_latest_sync_date(self) -> date:
         """

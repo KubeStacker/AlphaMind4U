@@ -14,9 +14,23 @@
             <router-link
               to="/"
               class="px-3 py-1.5 rounded-lg text-xs font-bold transition-all"
+              :class="isWatchlistPage ? 'bg-business-accent text-white' : 'text-slate-400 hover:text-white'"
+            >
+              盯盘
+            </router-link>
+            <router-link
+              to="/dashboard"
+              class="px-3 py-1.5 rounded-lg text-xs font-bold transition-all"
               :class="isDashboardPage ? 'bg-business-accent text-white' : 'text-slate-400 hover:text-white'"
             >
               仪表盘
+            </router-link>
+            <router-link
+              to="/falcon"
+              class="px-3 py-1.5 rounded-lg text-xs font-bold transition-all"
+              :class="isFalconPage ? 'bg-business-accent text-white' : 'text-slate-400 hover:text-white'"
+            >
+              猎鹰
             </router-link>
           </div>
         </div>
@@ -71,9 +85,17 @@
     <!-- 底部导航 (移动端) - 极简 -->
     <div class="md:hidden fixed bottom-0 left-0 right-0 bg-business-dark/95 backdrop-blur-md border-t border-business-light safe-bottom z-50">
       <div class="flex justify-around items-center h-14">
-        <router-link to="/" class="flex flex-col items-center transition-all" :class="isDashboardPage ? 'text-business-highlight' : 'text-slate-500'">
+        <router-link to="/" class="flex flex-col items-center transition-all" :class="isWatchlistPage ? 'text-business-highlight' : 'text-slate-500'">
+          <EyeIcon class="w-5 h-5" />
+          <span class="text-[9px] font-bold mt-0.5">盯盘</span>
+        </router-link>
+        <router-link to="/dashboard" class="flex flex-col items-center transition-all" :class="isDashboardPage ? 'text-business-highlight' : 'text-slate-500'">
           <ChartBarIcon class="w-5 h-5" />
           <span class="text-[9px] font-bold mt-0.5">仪表盘</span>
+        </router-link>
+        <router-link to="/falcon" class="flex flex-col items-center transition-all" :class="isFalconPage ? 'text-business-highlight' : 'text-slate-500'">
+          <CommandLineIcon class="w-5 h-5" />
+          <span class="text-[9px] font-bold mt-0.5">猎鹰</span>
         </router-link>
         <router-link to="/settings" class="flex flex-col items-center transition-all" active-class="text-business-highlight" inactive-class="text-slate-500">
           <Cog6ToothIcon class="w-5 h-5" />
@@ -91,7 +113,8 @@ import { useAuthStore } from '@/stores/auth';
 import { Menu, MenuButton, MenuItems, MenuItem } from '@headlessui/vue'
 import { 
   ChevronDownIcon, Cog6ToothIcon, UserGroupIcon, 
-  CircleStackIcon, ArrowRightOnRectangleIcon, ChartBarIcon, CommandLineIcon 
+  CircleStackIcon, ArrowRightOnRectangleIcon, ChartBarIcon, CommandLineIcon,
+  EyeIcon
 } from '@heroicons/vue/20/solid'
 
 const route = useRoute();
@@ -99,7 +122,9 @@ const router = useRouter();
 const authStore = useAuthStore();
 
 const isSettingsPage = computed(() => route.path.startsWith('/settings'));
+const isWatchlistPage = computed(() => route.name === 'watchlist');
 const isDashboardPage = computed(() => route.name === 'dashboard');
+const isFalconPage = computed(() => route.name === 'falcon');
 
 const handleLogout = () => { authStore.logout(); router.push({ name: 'login' }); };
 </script>

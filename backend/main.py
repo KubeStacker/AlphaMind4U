@@ -29,6 +29,7 @@ from db.init_db import initialize_database
 from db.connection import close_connection, get_connection
 from api import admin
 from api import auth
+from api import falcon
 from etl.scheduler import start_scheduler
 
 # 定义 FastAPI 应用的生命周期事件
@@ -72,6 +73,7 @@ app = FastAPI(
 # 注册 API 路由
 app.include_router(admin.router)
 app.include_router(auth.router)
+app.include_router(falcon.router)
 
 @app.get("/", tags=["System"])
 async def read_root():

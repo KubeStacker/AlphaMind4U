@@ -100,6 +100,27 @@ export const syncSentiment = (days = 250, syncIndex = false) =>
 export const getBacktestResult = (optimize = true) => apiClient.get('/admin/backtest_result', { params: { optimize } });
 export const getMainlineHistory = (days = 30) => apiClient.get('/admin/mainline_history', { params: { days } });
 export const getMarginHeatmap = (days = 10, top_n = 30) => apiClient.get('/admin/margin_heatmap', { params: { days, top_n } });
+export const getWatchlistRealtime = (codes, src = 'sina') =>
+  apiClient.get('/admin/watchlist/realtime', { params: { codes, src } });
+export const getFalconStrategies = () => apiClient.get('/falcon/strategies');
+export const getFalconLatestTradeDate = () => apiClient.get('/falcon/latest_trade_date');
+export const runFalcon = (payload) => apiClient.post('/falcon/run', payload);
+export const listFalconRuns = (strategyId = null, limit = 30) =>
+  apiClient.get('/falcon/runs', { params: { strategy_id: strategyId || undefined, limit } });
+export const listFalconDeletedRuns = (strategyId = null, limit = 30) =>
+  apiClient.get('/falcon/runs/deleted', { params: { strategy_id: strategyId || undefined, limit } });
+export const listFalconOps = (strategyId = null, limit = 20) =>
+  apiClient.get('/falcon/ops', { params: { strategy_id: strategyId || undefined, limit } });
+export const getFalconRunDetail = (runId) => apiClient.get(`/falcon/runs/${runId}`);
+export const getFalconScore = (strategyId, tradeDate) =>
+  apiClient.get('/falcon/score', { params: { strategy_id: strategyId, trade_date: tradeDate } });
+export const deleteFalconRun = (runId, hard = false) => apiClient.delete('/falcon/runs', { data: { run_id: runId, hard } });
+export const deleteFalconRunsByRange = (strategyId, startDate, endDate) =>
+  apiClient.post('/falcon/runs/delete_range', { strategy_id: strategyId, start_date: startDate, end_date: endDate });
+export const restoreFalconRun = (runId) => apiClient.post('/falcon/runs/restore', { run_id: runId });
+export const restoreFalconRunsBatch = (runIds) => apiClient.post('/falcon/runs/restore_batch', { run_ids: runIds });
+export const hardDeleteFalconRunsBatch = (runIds) => apiClient.post('/falcon/runs/hard_delete_batch', { run_ids: runIds });
+export const evolveFalcon = (strategyId) => apiClient.post('/falcon/evolve', { strategy_id: strategyId });
 
 /** 校验数据准确性 */
 export const verifyDataAccuracy = (tsCode = "688256.SH") => apiClient.get('/admin/data_verify', { params: { ts_code: tsCode } });

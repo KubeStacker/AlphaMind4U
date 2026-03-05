@@ -220,8 +220,105 @@ CREATE TABLE IF NOT EXISTS mainline_scores (
 
 """
 
+# -- Falcon 运行记录 --
+CREATE_FALCON_RUNS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS falcon_runs (
+    run_id BIGINT PRIMARY KEY DEFAULT nextval('falcon_runs_id_seq'),
+    strategy_id VARCHAR(80) NOT NULL,
+    strategy_version INTEGER NOT NULL,
+    trade_date DATE NOT NULL,
+    params_json JSON,
+    summary_json JSON,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    is_deleted BOOLEAN DEFAULT FALSE,
+    deleted_at TIMESTAMP,
+    deleted_by VARCHAR(120)
+);
+"""
+
+CREATE_FALCON_PICKS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS falcon_picks (
+    run_id BIGINT NOT NULL,
+    rank_no INTEGER NOT NULL,
+    strategy_id VARCHAR(80) NOT NULL,
+    trade_date DATE NOT NULL,
+    ts_code VARCHAR(20) NOT NULL,
+    name VARCHAR(80),
+    strategy_score DOUBLE,
+    confidence DOUBLE,
+    signal_label VARCHAR(40),
+    score_breakdown JSON,
+    is_deleted BOOLEAN DEFAULT FALSE,
+    PRIMARY KEY (run_id, rank_no)
+);
+"""
+
+CREATE_FALCON_EVAL_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS falcon_pick_eval (
+    run_id BIGINT NOT NULL,
+    strategy_id VARCHAR(80) NOT NULL,
+    trade_date DATE NOT NULL,
+    ts_code VARCHAR(20) NOT NULL,
+    ret_5d DOUBLE,
+    ret_10d DOUBLE,
+    hit_5d BOOLEAN,
+    hit_10d BOOLEAN,
+    PRIMARY KEY (run_id, ts_code)
+);
+"""
+
+CREATE_FALCON_STATE_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS falcon_strategy_state (
+    strategy_id VARCHAR(80) PRIMARY KEY,
+    version INTEGER NOT NULL,
+    params_json JSON,
+    note VARCHAR(200),
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+CREATE_FALCON_DAILY_SCORE_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS falcon_strategy_daily_score (
+    strategy_id VARCHAR(80) NOT NULL,
+    trade_date DATE NOT NULL,
+    score DOUBLE,
+    details JSON,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (strategy_id, trade_date)
+);
+"""
+
+CREATE_FALCON_EVOLUTION_LOG_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS falcon_evolution_log (
+    id BIGINT PRIMARY KEY DEFAULT nextval('falcon_runs_id_seq'),
+    strategy_id VARCHAR(80) NOT NULL,
+    prev_version INTEGER,
+    next_version INTEGER,
+    prev_params JSON,
+    next_params JSON,
+    score_before DOUBLE,
+    score_after DOUBLE,
+    promoted BOOLEAN,
+    details JSON,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+CREATE_FALCON_OP_LOG_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS falcon_op_log (
+    id BIGINT PRIMARY KEY DEFAULT nextval('falcon_runs_id_seq'),
+    strategy_id VARCHAR(80),
+    op_type VARCHAR(40) NOT NULL,
+    run_ids JSON,
+    detail JSON,
+    operator VARCHAR(120),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
 ALL_TABLES_SQL = [
     "CREATE SEQUENCE IF NOT EXISTS users_id_seq START 1;",
+    "CREATE SEQUENCE IF NOT EXISTS falcon_runs_id_seq START 1;",
     CREATE_USERS_TABLE_SQL,
     CREATE_STOCK_BASIC_TABLE_SQL,
     CREATE_DAILY_PRICE_TABLE_SQL,
@@ -236,5 +333,16 @@ ALL_TABLES_SQL = [
     CREATE_STRATEGY_RECOMMENDATIONS_TABLE_SQL,
     CREATE_MARKET_INDEX_TABLE_SQL,
     CREATE_MARKET_SENTIMENT_TABLE_SQL,
-    CREATE_MAINLINE_SCORES_TABLE_SQL
+    CREATE_MAINLINE_SCORES_TABLE_SQL,
+    CREATE_FALCON_RUNS_TABLE_SQL,
+    CREATE_FALCON_PICKS_TABLE_SQL,
+    CREATE_FALCON_EVAL_TABLE_SQL,
+    CREATE_FALCON_STATE_TABLE_SQL,
+    CREATE_FALCON_DAILY_SCORE_TABLE_SQL,
+    CREATE_FALCON_EVOLUTION_LOG_TABLE_SQL,
+    CREATE_FALCON_OP_LOG_TABLE_SQL,
+    "CREATE INDEX IF NOT EXISTS idx_falcon_runs_strategy_date ON falcon_runs (strategy_id, trade_date);",
+    "CREATE INDEX IF NOT EXISTS idx_falcon_picks_run ON falcon_picks (run_id);",
+    "CREATE INDEX IF NOT EXISTS idx_falcon_eval_run ON falcon_pick_eval (run_id);",
+    "CREATE INDEX IF NOT EXISTS idx_falcon_op_strategy_time ON falcon_op_log (strategy_id, created_at);",
 ]

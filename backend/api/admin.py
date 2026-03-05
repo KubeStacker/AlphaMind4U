@@ -6,11 +6,13 @@ import arrow
 import asyncio
 import time
 import logging
+import math
 
 from etl.sync import sync_engine
 from etl.utils.quality import quality_checker
 from db.connection import get_db_connection, fetch_df
 from passlib.context import CryptContext
+from etl.calendar import trading_calendar
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +117,208 @@ class PasswordChange(BaseModel):
 
 class DBQuery(BaseModel):
     sql: str
+
+
+def _safe_float(value):
+    try:
+        x = float(value)
+        if math.isnan(x) or math.isinf(x):
+            return None
+        return x
+    except Exception:
+        return None
+
+
+def _normalize_ts_code(raw_code: str) -> str:
+    code = (raw_code or "").strip().upper()
+    if not code:
+        return ""
+    if "." in code:
+        return code
+    if code.startswith(("6", "9")):
+        return f"{code}.SH"
+    return f"{code}.SZ"
+
+
+def _detect_kline_patterns(df):
+    if df is None or df.empty or len(df) < 5:
+        return []
+
+    records = []
+    for _, row in df.iterrows():
+        o = _safe_float(row.get("open"))
+        h = _safe_float(row.get("high"))
+        l = _safe_float(row.get("low"))
+        c = _safe_float(row.get("close"))
+        if None in (o, h, l, c):
+            continue
+        body = abs(c - o)
+        total = max(h - l, 1e-9)
+        up_shadow = h - max(c, o)
+        low_shadow = min(c, o) - l
+        records.append(
+            {
+                "open": o,
+                "high": h,
+                "low": l,
+                "close": c,
+                "body": body,
+                "range": total,
+                "up_shadow": up_shadow,
+                "low_shadow": low_shadow,
+                "bear": c < o,
+                "bull": c > o,
+                "doji": body / total < 0.1,
+            }
+        )
+
+    if len(records) < 5:
+        return []
+
+    pats = []
+    n = len(records)
+
+    # 1. 三只乌鸦 (Three Black Crows)
+    if n >= 3:
+        c1, c2, c3 = records[-3], records[-2], records[-1]
+        if (
+            c1["bear"] and c2["bear"] and c3["bear"]
+            and c1["close"] > c2["close"] > c3["close"]
+            and all(r["body"] / r["range"] > 0.4 for r in [c1, c2, c3])
+        ):
+            pats.append("三只乌鸦")
+
+    # 2. 红三兵 (Three White Soldiers)
+    if n >= 3:
+        c1, c2, c3 = records[-3], records[-2], records[-1]
+        if (
+            c1["bull"] and c2["bull"] and c3["bull"]
+            and c1["close"] < c2["close"] < c3["close"]
+            and all(r["body"] / r["range"] > 0.4 for r in [c1, c2, c3])
+        ):
+            pats.append("红三兵")
+
+    # 3. 顶/底分型
+    if n >= 3:
+        p1, p2, p3 = records[-3], records[-2], records[-1]
+        if p2["high"] > p1["high"] and p2["high"] > p3["high"] and p2["low"] > p1["low"] and p2["low"] > p3["low"]:
+            pats.append("顶分型")
+        if p2["low"] < p1["low"] and p2["low"] < p3["low"] and p2["high"] < p1["high"] and p2["high"] < p3["high"]:
+            pats.append("底分型")
+
+    # 4. 早晨之星 (Morning Star)
+    if n >= 3:
+        c1, c2, c3 = records[-3], records[-2], records[-1]
+        if c1["bear"] and c1["body"] / c1["range"] > 0.5 and c2["doji"] and c3["bull"] and c3["close"] > (c1["open"] + c1["close"]) / 2:
+            pats.append("早晨之星")
+
+    # 5. 黄昏之星 (Evening Star)
+    if n >= 3:
+        c1, c2, c3 = records[-3], records[-2], records[-1]
+        if c1["bull"] and c1["body"] / c1["range"] > 0.5 and c2["doji"] and c3["bear"] and c3["close"] < (c1["open"] + c1["close"]) / 2:
+            pats.append("黄昏之星")
+
+    # 6. 仙人指路 & 墓碑线
+    last = records[-1]
+    if last["up_shadow"] >= last["body"] * 2.5 and last["up_shadow"] / last["range"] > 0.5:
+        if last["bull"]: pats.append("仙人指路")
+        else: pats.append("墓碑线")
+
+    # 7. 金针探底 (Hammer)
+    if last["low_shadow"] >= last["body"] * 2.5 and last["low_shadow"] / last["range"] > 0.5:
+        pats.append("金针探底")
+
+    # 8. 大阳线 / 大阴线
+    if last["body"] / last["range"] > 0.8:
+        if last["bull"] and last["range"] / records[-2]["close"] > 0.04: pats.append("大阳线")
+        if last["bear"] and last["range"] / records[-2]["close"] > 0.04: pats.append("大阴线")
+
+    # 9. 老鸭头 (Simple MA version)
+    closes = [_safe_float(row.get("close")) for _, row in df.tail(25).iterrows()]
+    closes = [x for x in closes if x is not None]
+    if len(closes) >= 20:
+        ma5 = sum(closes[-5:]) / 5
+        ma10 = sum(closes[-10:]) / 10
+        ma20 = sum(closes[-20:]) / 20
+        if ma5 > ma10 > ma20 and closes[-1] > ma5:
+            pats.append("老鸭头")
+
+    uniq = []
+    for p in pats:
+        if p not in uniq: uniq.append(p)
+    return uniq[:3]
+
+
+def _get_single_day_analysis(df_slice):
+    if df_slice.empty or len(df_slice) < 5:
+        return {"patterns": [], "suggestion": "观望", "tone": "中性"}
+    
+    patterns = _detect_kline_patterns(df_slice)
+    latest = df_slice.iloc[-1]
+    pct = _safe_float(latest.get("pct_chg"))
+    
+    suggestion = "观望"
+    tone = "中性"
+    
+    bullish_pats = {"底分型", "早晨之星", "金针探底", "红三兵", "大阳线", "老鸭头"}
+    bearish_pats = {"顶分型", "黄昏之星", "墓碑线", "三只乌鸦", "大阴线"}
+    
+    p_set = set(patterns)
+    bull_hits = p_set.intersection(bullish_pats)
+    bear_hits = p_set.intersection(bearish_pats)
+    
+    if bull_hits:
+        suggestion = "回踩关注" if "老鸭头" in bull_hits else "择机试错"
+        tone = "看多"
+    elif bear_hits:
+        suggestion = "减仓避险" if "顶分型" in bear_hits else "谨慎持币"
+        tone = "看空"
+        
+    if pct is not None:
+        if pct >= 5: tone = "强力爆发"
+        elif pct <= -5: tone = "恐慌杀跌"
+        
+    return {
+        "patterns": patterns,
+        "suggestion": suggestion,
+        "tone": tone,
+        "date": str(latest.get("trade_date"))[:10]
+    }
+
+
+def _build_watch_analyse(ts_code: str):
+    hist = fetch_df(
+        """
+        SELECT trade_date, open, high, low, close, pct_chg, vol, amount
+        FROM daily_price
+        WHERE ts_code = ?
+        ORDER BY trade_date DESC
+        LIMIT 70
+        """,
+        (ts_code,),
+    )
+    if hist.empty:
+        return {"summary": "历史数据不足", "patterns": [], "suggestion": "观望", "history": []}
+
+    hist = hist.iloc[::-1].reset_index(drop=True)
+    
+    # 获取最近 10 天的分析
+    history = []
+    n = len(hist)
+    for i in range(min(10, n - 5)):
+        idx = n - i
+        day_analysis = _get_single_day_analysis(hist.iloc[:idx])
+        history.append(day_analysis)
+    
+    latest_analysis = history[0]
+    pat_txt = "、".join(latest_analysis["patterns"]) if latest_analysis["patterns"] else "无明显形态"
+    
+    return {
+        "summary": f"{latest_analysis['tone']} | 形态: {pat_txt}",
+        "patterns": latest_analysis["patterns"],
+        "suggestion": latest_analysis["suggestion"],
+        "history": history
+    }
 
 # --- API 接口 ---
 
@@ -913,3 +1117,105 @@ def verify_data_accuracy(ts_code: str = "688256.SH"):
         return {"status": "success", "data": convert(results), "ts_code": ts_code, "trade_dates": dates}
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+
+@router.get("/watchlist/realtime")
+def get_watchlist_realtime(codes: str, src: str = "sina"):
+    """
+    获取自选股实时行情（盘中刷新）。
+    - 仅在交易时段查询实时数据，非交易时段返回 no_refresh。
+    - 默认使用新浪源（src=sina）。
+    """
+    raw_codes = [c.strip() for c in (codes or "").split(",") if c.strip()]
+    norm_codes = [_normalize_ts_code(c) for c in raw_codes]
+    norm_codes = [c for c in norm_codes if c]
+    if not norm_codes:
+        raise HTTPException(status_code=400, detail="codes 不能为空，例如: 000001.SZ,600519.SH")
+
+    is_trading = trading_calendar.is_trading_time()
+    if not is_trading:
+        return {
+            "status": "success",
+            "refresh_mode": "no_refresh",
+            "is_trading_time": False,
+            "message": "当前非交易时段，已停止实时刷新",
+            "data": [],
+        }
+
+    quote_df = sync_engine.provider.realtime_quote(ts_code=",".join(norm_codes), src=src or "sina")
+    if quote_df is None or quote_df.empty:
+        return {
+            "status": "success",
+            "refresh_mode": "realtime",
+            "is_trading_time": True,
+            "message": "未获取到实时行情",
+            "data": [],
+        }
+
+    col_map = {str(c).lower(): c for c in quote_df.columns}
+    ts_col = col_map.get("ts_code")
+    if ts_col is None:
+        raise HTTPException(status_code=500, detail="实时行情缺少 ts_code 字段")
+
+    name_col = col_map.get("name")
+    price_col = col_map.get("price") or col_map.get("current") or col_map.get("close")
+    pre_close_col = col_map.get("pre_close") or col_map.get("yclose")
+    open_col = col_map.get("open")
+    high_col = col_map.get("high")
+    low_col = col_map.get("low")
+    pct_col = col_map.get("pct_chg") or col_map.get("pct_change") or col_map.get("changepercent")
+    vol_col = col_map.get("vol") or col_map.get("volume")
+    amount_col = col_map.get("amount") or col_map.get("turnover")
+
+    rows = []
+    for _, row in quote_df.iterrows():
+        ts_code = _normalize_ts_code(str(row.get(ts_col, "")))
+        if ts_code not in norm_codes:
+            continue
+
+        price = _safe_float(row.get(price_col)) if price_col else None
+        pre_close = _safe_float(row.get(pre_close_col)) if pre_close_col else None
+        open_val = _safe_float(row.get(open_col)) if open_col else None
+        high_val = _safe_float(row.get(high_col)) if high_col else None
+        low_val = _safe_float(row.get(low_col)) if low_col else None
+        
+        pct = _safe_float(row.get(pct_col)) if pct_col else None
+        diff = None
+        amplitude = None
+
+        if price is not None and pre_close is not None:
+            diff = price - pre_close
+            if pct is None and pre_close != 0:
+                pct = diff / pre_close * 100.0
+        
+        if high_val is not None and low_val is not None and pre_close and pre_close > 0:
+            amplitude = (high_val - low_val) / pre_close * 100.0
+
+        rows.append(
+            {
+                "ts_code": ts_code,
+                "name": str(row.get(name_col, "")) if name_col else "",
+                "price": price,
+                "pre_close": pre_close,
+                "open": open_val,
+                "high": high_val,
+                "low": low_val,
+                "pct": pct,
+                "diff": diff,
+                "amplitude": amplitude,
+                "vol": _safe_float(row.get(vol_col)) if vol_col else None,
+                "amount": _safe_float(row.get(amount_col)) if amount_col else None,
+                "analyze": _build_watch_analyse(ts_code),
+            }
+        )
+
+    idx_map = {c: i for i, c in enumerate(norm_codes)}
+    rows.sort(key=lambda x: idx_map.get(x.get("ts_code"), 10**9))
+
+    return {
+        "status": "success",
+        "refresh_mode": "realtime",
+        "is_trading_time": True,
+        "message": "ok",
+        "data": rows,
+    }

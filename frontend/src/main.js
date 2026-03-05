@@ -9,7 +9,7 @@ import './assets/main.css'
 import ECharts from 'vue-echarts'
 import { use } from "echarts/core";
 import { CanvasRenderer } from "echarts/renderers";
-import { HeatmapChart, BarChart, LineChart, PieChart } from "echarts/charts";
+import { HeatmapChart, BarChart, LineChart, PieChart, CandlestickChart } from "echarts/charts";
 import {
   TooltipComponent,
   VisualMapComponent,
@@ -30,6 +30,7 @@ use([
   BarChart,
   LineChart,
   PieChart,
+  CandlestickChart,
   CalendarComponent,
   GridComponent,
   LegendComponent,
