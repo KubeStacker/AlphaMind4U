@@ -100,8 +100,16 @@ export const syncSentiment = (days = 250, syncIndex = false) =>
 export const getBacktestResult = (optimize = true) => apiClient.get('/admin/backtest_result', { params: { optimize } });
 export const getMainlineHistory = (days = 30) => apiClient.get('/admin/mainline_history', { params: { days } });
 export const getMarginHeatmap = (days = 10, top_n = 30) => apiClient.get('/admin/margin_heatmap', { params: { days, top_n } });
-export const getWatchlistRealtime = (codes, src = 'sina') =>
-  apiClient.get('/admin/watchlist/realtime', { params: { codes, src } });
+export const getWatchlistRealtime = (codes, src = 'sina') => apiClient.get('/admin/watchlist/realtime', { params: { codes, src } });
+
+// 盯盘管理 (DB)
+export const listWatchlist = () => apiClient.get('/admin/watchlist');
+export const addToWatchlist = (stock) => apiClient.post('/admin/watchlist', stock);
+export const removeFromWatchlist = (ts_code) => apiClient.delete(`/admin/watchlist/${ts_code}`);
+
+// 股票日K (含两融)
+export const getStockKline = (ts_code, limit = 200) => apiClient.get(`/admin/stock/${ts_code}/kline`, { params: { limit } });
+export const searchStocks = (q, limit = 10) => apiClient.get('/admin/stock/search', { params: { q, limit } });
 export const getFalconStrategies = () => apiClient.get('/falcon/strategies');
 export const getFalconLatestTradeDate = () => apiClient.get('/falcon/latest_trade_date');
 export const runFalcon = (payload) => apiClient.post('/falcon/run', payload);

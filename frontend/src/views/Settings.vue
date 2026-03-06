@@ -5,7 +5,7 @@
       
       <!-- 紧凑型标签切换 -->
       <div v-if="visibleTabs.length > 0" class="flex bg-business-dark p-1 rounded-xl border border-business-light shadow-lg self-start">
-        <button v-for="tab in visibleTabs" :key="tab.id" @click="activeTab = tab.id"
+        <button v-for="tab in visibleTabs" :key="tab.id" @click="handleTabClick(tab.id)"
           :class="[activeTab === tab.id ? 'bg-business-accent text-white shadow-md' : 'text-slate-500 hover:text-slate-300', 'px-4 py-1.5 rounded-lg text-[11px] font-bold transition-all whitespace-nowrap']">
           {{ tab.name }}
         </button>
@@ -17,7 +17,7 @@
     </div>
 
     <!-- 用户管理 -->
-    <div v-show="activeTab === 'users'" class="space-y-4">
+    <div v-if="activeTab === 'users'" class="space-y-4">
       <div class="bg-business-dark rounded-2xl border border-business-light overflow-hidden shadow-business">
         <div class="p-4 border-b border-business-light flex justify-between items-center bg-slate-900/30">
           <div class="flex items-center space-x-2">
@@ -67,7 +67,7 @@
     </div>
 
     <!-- 数据同步 -->
-    <div v-show="activeTab === 'data' && authStore.isAdmin" class="space-y-6">
+    <div v-if="activeTab === 'data' && authStore.isAdmin" class="space-y-6">
       <!-- 任务执行监控 -->
       <div v-if="tasksStatus.current_task || tasksStatus.history.length > 0" class="bg-business-dark p-4 rounded-2xl border border-business-light shadow-business">
         <div class="flex items-center justify-between mb-4">
@@ -210,7 +210,7 @@
     </div>
 
     <!-- SQL 终端 -->
-    <div v-show="activeTab === 'db' && authStore.isAdmin" class="space-y-4">
+    <div v-if="activeTab === 'db' && authStore.isAdmin" class="space-y-4">
       <div class="bg-business-dark p-5 rounded-2xl border border-business-light shadow-business">
         <textarea v-model="sqlQuery" rows="4" class="w-full bg-business-darker border border-business-light rounded-xl px-4 py-3 text-xs font-mono text-business-highlight focus:outline-none focus:border-business-accent transition-all" placeholder="输入 SQL 指令..."></textarea>
         <div class="flex justify-between items-center mt-4">
@@ -289,7 +289,7 @@
 
 <script setup>
 import { ref, onMounted, onUnmounted, watch, reactive, computed } from 'vue';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { getIntegrityReport, listUsers, deleteUser, createUser, updatePassword, executeDBQuery, syncDailyDate, syncFinancials, syncMoneyflow, syncMarketIndex, syncMargin, getTasksStatus, getTableStats, syncFinaIndicator, syncQuarterlyIncome, verifyDataAccuracy } from '@/services/api';
 import { useAuthStore } from '@/stores/auth';
 import { Dialog, DialogPanel, DialogTitle } from '@headlessui/vue'
@@ -299,6 +299,7 @@ import {
 } from '@heroicons/vue/20/solid'
 
 const route = useRoute();
+const router = useRouter();
 const authStore = useAuthStore();
 const tabs = [
   { id: 'users', name: '用户管理', admin: true },
@@ -317,7 +318,23 @@ const resolveActiveTab = (requestedTab = null) => {
 const activeTab = ref(resolveActiveTab());
 
 watch(() => route.query.tab, (newTab) => {
-  activeTab.value = resolveActiveTab(newTab);
+  const resolved = resolveActiveTab(newTab);
+  if (activeTab.value !== resolved) {
+    activeTab.value = resolved;
+  }
+});
+
+watch(activeTab, (newTab) => {
+  if (route.query.tab !== newTab) {
+    const nextQuery = { ...route.query, tab: newTab };
+    router.replace({ query: nextQuery });
+  }
+  if (newTab === 'data') {
+    fetchTasksStatus();
+    fetchTableStats();
+  } else if (newTab === 'db') {
+    fetchDataIntegrity();
+  }
 });
 
 watch(visibleTabs, () => {
@@ -325,6 +342,11 @@ watch(visibleTabs, () => {
     activeTab.value = resolveActiveTab();
   }
 });
+
+const handleTabClick = (tabId) => {
+  if (!visibleTabs.value.some((t) => t.id === tabId)) return;
+  activeTab.value = tabId;
+};
 
 const users = ref([]);
 const integrityReports = ref({});
@@ -361,10 +383,13 @@ const handleVerifyData = async () => {
 onMounted(() => { 
   if (authStore.isAdmin) {
     fetchUsers();
-    fetchTableStats();
+    if (activeTab.value === 'data') {
+      fetchTableStats();
+      fetchTasksStatus();
+    } else if (activeTab.value === 'db') {
+      fetchDataIntegrity();
+    }
   }
-  fetchDataIntegrity(); 
-  fetchTasksStatus();
   statusTimer = setInterval(fetchTasksStatus, 3000);
 });
 

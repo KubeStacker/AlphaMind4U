@@ -196,6 +196,56 @@ CREATE TABLE IF NOT EXISTS market_sentiment (
 """
 
 
+# -- 融资融券表 (stock_margin) --
+
+CREATE_STOCK_MARGIN_TABLE_SQL = """
+
+CREATE TABLE IF NOT EXISTS stock_margin (
+
+    ts_code         VARCHAR(15) NOT NULL,
+
+    trade_date      DATE NOT NULL,
+
+    rzye            DOUBLE, -- 融资余额 (Financing Balance)
+
+    rzmre           DOUBLE, -- 融资买入额 (Financing Buy)
+
+    rzche           DOUBLE, -- 融资偿还额 (Financing Repayment)
+
+    rqye            DOUBLE, -- 融券余额 (Margin Short Balance)
+
+    rqmcl           DOUBLE, -- 融券卖出量 (Margin Short Sell)
+
+    rzrqye          DOUBLE, -- 融资融券余额 (Total Margin Balance)
+
+    rqyl            DOUBLE, -- 融券余量 (Margin Short Volume)
+
+    PRIMARY KEY (ts_code, trade_date)
+
+);
+
+"""
+
+
+# -- 盯盘自选表 (watchlist) --
+
+CREATE_WATCHLIST_TABLE_SQL = """
+
+CREATE TABLE IF NOT EXISTS watchlist (
+
+    ts_code         VARCHAR(15) PRIMARY KEY,
+
+    name            VARCHAR(50),
+
+    remark          VARCHAR(255),
+
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+
+);
+
+"""
+
+
 # -- 主线评分历史表 (mainline_scores) --
 
 CREATE_MAINLINE_SCORES_TABLE_SQL = """
@@ -333,8 +383,12 @@ ALL_TABLES_SQL = [
     CREATE_STRATEGY_RECOMMENDATIONS_TABLE_SQL,
     CREATE_MARKET_INDEX_TABLE_SQL,
     CREATE_MARKET_SENTIMENT_TABLE_SQL,
+    CREATE_STOCK_MARGIN_TABLE_SQL,
+    CREATE_WATCHLIST_TABLE_SQL,
     CREATE_MAINLINE_SCORES_TABLE_SQL,
     CREATE_FALCON_RUNS_TABLE_SQL,
+    "CREATE INDEX IF NOT EXISTS idx_stock_margin_date ON stock_margin (trade_date);",
+    "CREATE INDEX IF NOT EXISTS idx_stock_margin_tscode ON stock_margin (ts_code);",
     CREATE_FALCON_PICKS_TABLE_SQL,
     CREATE_FALCON_EVAL_TABLE_SQL,
     CREATE_FALCON_STATE_TABLE_SQL,

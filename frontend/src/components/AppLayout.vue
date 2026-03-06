@@ -47,17 +47,17 @@
                 <MenuItems class="absolute right-0 mt-2 w-44 origin-top-right divide-y divide-business-light rounded-xl bg-business-dark border border-business-light shadow-2xl focus:outline-none overflow-hidden">
                   <div class="p-1.5">
                     <MenuItem v-slot="{ active }">
-                      <router-link to="/settings?tab=users" :class="[active ? 'bg-business-accent text-white' : 'text-slate-300', 'group flex w-full items-center rounded-lg px-2.5 py-2 text-xs font-bold transition-colors']">
+                      <router-link :to="{ path: '/settings', query: { tab: 'users' } }" :class="[active ? 'bg-business-accent text-white' : 'text-slate-300', 'group flex w-full items-center rounded-lg px-2.5 py-2 text-xs font-bold transition-colors']">
                         <UserGroupIcon class="mr-2 h-4 w-4 opacity-70" /> 用户管理
                       </router-link>
                     </MenuItem>
                     <MenuItem v-if="authStore.isAdmin" v-slot="{ active }">
-                      <router-link to="/settings?tab=data" :class="[active ? 'bg-business-accent text-white' : 'text-slate-300', 'group flex w-full items-center rounded-lg px-2.5 py-2 text-xs font-bold transition-colors']">
+                      <router-link :to="{ path: '/settings', query: { tab: 'data' } }" :class="[active ? 'bg-business-accent text-white' : 'text-slate-300', 'group flex w-full items-center rounded-lg px-2.5 py-2 text-xs font-bold transition-colors']">
                         <CircleStackIcon class="mr-2 h-4 w-4 opacity-70" /> 数据管理
                       </router-link>
                     </MenuItem>
                     <MenuItem v-if="authStore.isAdmin" v-slot="{ active }">
-                      <router-link to="/settings?tab=db" :class="[active ? 'bg-business-accent text-white' : 'text-slate-300', 'group flex w-full items-center rounded-lg px-2.5 py-2 text-xs font-bold transition-colors']">
+                      <router-link :to="{ path: '/settings', query: { tab: 'db' } }" :class="[active ? 'bg-business-accent text-white' : 'text-slate-300', 'group flex w-full items-center rounded-lg px-2.5 py-2 text-xs font-bold transition-colors']">
                         <CommandLineIcon class="mr-2 h-4 w-4 opacity-70" /> SQL 控制台
                       </router-link>
                     </MenuItem>
@@ -97,7 +97,7 @@
           <CommandLineIcon class="w-5 h-5" />
           <span class="text-[9px] font-bold mt-0.5">猎鹰</span>
         </router-link>
-        <router-link to="/settings" class="flex flex-col items-center transition-all" active-class="text-business-highlight" inactive-class="text-slate-500">
+        <router-link to="/settings" class="flex flex-col items-center transition-all" :class="isSettingsPage ? 'text-business-highlight' : 'text-slate-500'">
           <Cog6ToothIcon class="w-5 h-5" />
           <span class="text-[9px] font-bold mt-0.5">设置</span>
         </router-link>

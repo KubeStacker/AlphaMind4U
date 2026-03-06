@@ -117,7 +117,7 @@
 
     <div
       v-if="klinePreviewVisible && selectedKlineTsCode"
-      class="fixed z-40 right-4 bottom-16 md:bottom-4 w-[calc(100vw-2rem)] max-w-4xl bg-business-dark border border-business-light rounded-2xl p-3 shadow-2xl"
+      class="fixed z-40 left-2 right-2 bottom-14 md:left-auto md:right-4 md:bottom-4 md:w-[70vw] md:max-w-3xl bg-business-dark border border-business-light rounded-2xl p-2.5 md:p-3 shadow-2xl max-h-[78vh] overflow-y-auto"
       @mouseenter="clearHideKlinePreview"
       @mouseleave="scheduleHideKlinePreview"
     >
@@ -126,11 +126,11 @@
           <h3 class="text-xs font-bold text-slate-200">K线分析（悬浮预览）</h3>
           <p class="text-[10px] text-slate-500 mt-1">{{ selectedKlineName || '-' }} · {{ selectedKlineTsCode }}</p>
         </div>
-        <div class="flex items-center gap-2">
-          <button @click="stepOlder" :disabled="!canStepOlder" class="px-2 py-1 rounded border border-slate-700 text-[10px] text-slate-300 hover:bg-slate-800 disabled:opacity-40">← 往前</button>
-          <button @click="stepNewer" :disabled="!canStepNewer" class="px-2 py-1 rounded border border-slate-700 text-[10px] text-slate-300 hover:bg-slate-800 disabled:opacity-40">往后 →</button>
-          <button @click="zoomIn" :disabled="klineWindowDays <= 20" class="px-2 py-1 rounded border border-slate-700 text-[10px] text-slate-300 hover:bg-slate-800 disabled:opacity-40">放大</button>
-          <button @click="zoomOut" :disabled="klineWindowDays >= 180" class="px-2 py-1 rounded border border-slate-700 text-[10px] text-slate-300 hover:bg-slate-800 disabled:opacity-40">缩小</button>
+        <div class="flex flex-wrap items-center gap-1.5 sm:gap-2">
+          <button @click="stepOlder" :disabled="!canStepOlder" class="px-1.5 sm:px-2 py-1 rounded border border-slate-700 text-[9px] sm:text-[10px] text-slate-300 hover:bg-slate-800 disabled:opacity-40">← 往前</button>
+          <button @click="stepNewer" :disabled="!canStepNewer" class="px-1.5 sm:px-2 py-1 rounded border border-slate-700 text-[9px] sm:text-[10px] text-slate-300 hover:bg-slate-800 disabled:opacity-40">往后 →</button>
+          <button @click="zoomIn" :disabled="klineWindowDays <= 20" class="px-1.5 sm:px-2 py-1 rounded border border-slate-700 text-[9px] sm:text-[10px] text-slate-300 hover:bg-slate-800 disabled:opacity-40">放大</button>
+          <button @click="zoomOut" :disabled="klineWindowDays >= 180" class="px-1.5 sm:px-2 py-1 rounded border border-slate-700 text-[9px] sm:text-[10px] text-slate-300 hover:bg-slate-800 disabled:opacity-40">缩小</button>
         </div>
       </div>
 
@@ -161,9 +161,9 @@
         </div>
       </div>
 
-      <div v-if="klineLoading" class="h-52 flex items-center justify-center text-slate-400 text-xs">K线加载中...</div>
+      <div v-if="klineLoading" class="h-[220px] sm:h-[280px] md:h-[340px] flex items-center justify-center text-slate-400 text-xs">K线加载中...</div>
       <div v-else-if="klineError" class="rounded border border-red-700/40 bg-red-500/10 px-3 py-2 text-xs text-red-300">{{ klineError }}</div>
-      <div v-else class="h-[460px]">
+      <div v-else class="h-[220px] sm:h-[280px] md:h-[340px] lg:h-[380px]">
         <v-chart :option="klineChartOption" autoresize />
       </div>
     </div>
@@ -332,6 +332,9 @@ import {
   restoreFalconRunsBatch,
   runFalcon,
 } from '@/services/api';
+import { useKlineChart } from '@/composables/useKlineChart';
+
+const { createKlineOption } = useKlineChart();
 
 const strategies = ref([]);
 const selectedStrategy = ref('');
@@ -416,89 +419,7 @@ const canStepOlder = computed(() => {
 const canStepNewer = computed(() => klineOffset.value > 0);
 
 const klineChartOption = computed(() => {
-  const rows = normalizedKlineRows.value;
-  const dates = rows.map((r) => r.trade_date);
-  const candle = rows.map((r) => [r.open, r.close, r.low, r.high]);
-  const vol = rows.map((r) => Number(r.vol) || 0);
-  const mf = rows.map((r) => Number(r.net_mf_vol) || 0);
-  const ma5 = rows.map((r) => Number(r.ma5) || null);
-  const ma10 = rows.map((r) => Number(r.ma10) || null);
-  const ma20 = rows.map((r) => Number(r.ma20) || null);
-  const ma60 = rows.map((r) => Number(r.ma60) || null);
-
-  return {
-    animation: false,
-    tooltip: {
-      trigger: 'axis',
-      axisPointer: { type: 'cross' },
-    },
-    legend: {
-      top: 4,
-      textStyle: { color: '#94a3b8', fontSize: 10 },
-      data: ['K线', 'MA5', 'MA10', 'MA20', 'MA60', '成交量', '资金流'],
-    },
-    grid: [
-      { left: 48, right: 22, top: 28, height: 220 },
-      { left: 48, right: 22, top: 266, height: 80 },
-      { left: 48, right: 22, top: 360, height: 80 },
-    ],
-    xAxis: [
-      { type: 'category', data: dates, scale: true, boundaryGap: false, axisLine: { lineStyle: { color: '#475569' } }, axisLabel: { color: '#64748b', fontSize: 10 }, splitLine: { show: false } },
-      { type: 'category', gridIndex: 1, data: dates, axisLabel: { show: false }, axisLine: { lineStyle: { color: '#475569' } }, splitLine: { show: false } },
-      { type: 'category', gridIndex: 2, data: dates, axisLabel: { color: '#64748b', fontSize: 10 }, axisLine: { lineStyle: { color: '#475569' } }, splitLine: { show: false } },
-    ],
-    yAxis: [
-      { scale: true, splitLine: { lineStyle: { color: 'rgba(100, 116, 139, 0.15)' } }, axisLabel: { color: '#64748b', fontSize: 10 } },
-      { gridIndex: 1, splitNumber: 2, axisLabel: { color: '#64748b', fontSize: 10 }, splitLine: { show: false } },
-      { gridIndex: 2, splitNumber: 2, axisLabel: { color: '#64748b', fontSize: 10 }, splitLine: { show: false } },
-    ],
-    dataZoom: [
-      { type: 'inside', xAxisIndex: [0, 1, 2], start: 0, end: 100 },
-      { type: 'slider', xAxisIndex: [0, 1, 2], bottom: 2, height: 16, borderColor: '#334155', textStyle: { color: '#64748b', fontSize: 10 } },
-    ],
-    series: [
-      {
-        name: 'K线',
-        type: 'candlestick',
-        data: candle,
-        itemStyle: {
-          color: '#ef4444',
-          color0: '#22c55e',
-          borderColor: '#ef4444',
-          borderColor0: '#22c55e',
-        },
-      },
-      { name: 'MA5', type: 'line', data: ma5, showSymbol: false, smooth: true, lineStyle: { width: 1.2, color: '#38bdf8' } },
-      { name: 'MA10', type: 'line', data: ma10, showSymbol: false, smooth: true, lineStyle: { width: 1.2, color: '#f59e0b' } },
-      { name: 'MA20', type: 'line', data: ma20, showSymbol: false, smooth: true, lineStyle: { width: 1.2, color: '#a78bfa' } },
-      { name: 'MA60', type: 'line', data: ma60, showSymbol: false, smooth: true, lineStyle: { width: 1.2, color: '#34d399' } },
-      {
-        name: '成交量',
-        type: 'bar',
-        xAxisIndex: 1,
-        yAxisIndex: 1,
-        data: vol,
-        itemStyle: {
-          color: (params) => {
-            const idx = params.dataIndex;
-            const row = rows[idx];
-            if (!row) return '#64748b';
-            return Number(row.close) >= Number(row.open) ? '#ef4444' : '#22c55e';
-          },
-        },
-      },
-      {
-        name: '资金流',
-        type: 'bar',
-        xAxisIndex: 2,
-        yAxisIndex: 2,
-        data: mf,
-        itemStyle: {
-          color: (params) => (Number(params.value) >= 0 ? '#0ea5e9' : '#f43f5e'),
-        },
-      },
-    ],
-  };
+  return createKlineOption(normalizedKlineRows.value, { showLegend: true, showDataZoom: true, marginType: 'mf' });
 });
 
 const initBase = async () => {

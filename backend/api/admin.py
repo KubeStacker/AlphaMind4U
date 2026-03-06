@@ -2,11 +2,13 @@
 
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
+from typing import Optional
 import arrow
 import asyncio
 import time
 import logging
 import math
+import json
 
 from etl.sync import sync_engine
 from etl.utils.quality import quality_checker
@@ -141,134 +143,46 @@ def _normalize_ts_code(raw_code: str) -> str:
 
 
 def _detect_kline_patterns(df):
+    """向量化K线形态识别 — 委托给 kline_patterns 引擎"""
     if df is None or df.empty or len(df) < 5:
         return []
 
-    records = []
-    for _, row in df.iterrows():
-        o = _safe_float(row.get("open"))
-        h = _safe_float(row.get("high"))
-        l = _safe_float(row.get("low"))
-        c = _safe_float(row.get("close"))
-        if None in (o, h, l, c):
-            continue
-        body = abs(c - o)
-        total = max(h - l, 1e-9)
-        up_shadow = h - max(c, o)
-        low_shadow = min(c, o) - l
-        records.append(
-            {
-                "open": o,
-                "high": h,
-                "low": l,
-                "close": c,
-                "body": body,
-                "range": total,
-                "up_shadow": up_shadow,
-                "low_shadow": low_shadow,
-                "bear": c < o,
-                "bull": c > o,
-                "doji": body / total < 0.1,
-            }
-        )
-
-    if len(records) < 5:
+    try:
+        from etl.utils.kline_patterns import detect_all_patterns, get_latest_signals
+        result_df = detect_all_patterns(df)
+        signals = get_latest_signals(result_df, min_confidence=0.5)
+        return [s['pattern'] for s in signals][:5]
+    except Exception as e:
+        logger.error(f"K线形态识别失败: {e}", exc_info=True)
         return []
-
-    pats = []
-    n = len(records)
-
-    # 1. 三只乌鸦 (Three Black Crows)
-    if n >= 3:
-        c1, c2, c3 = records[-3], records[-2], records[-1]
-        if (
-            c1["bear"] and c2["bear"] and c3["bear"]
-            and c1["close"] > c2["close"] > c3["close"]
-            and all(r["body"] / r["range"] > 0.4 for r in [c1, c2, c3])
-        ):
-            pats.append("三只乌鸦")
-
-    # 2. 红三兵 (Three White Soldiers)
-    if n >= 3:
-        c1, c2, c3 = records[-3], records[-2], records[-1]
-        if (
-            c1["bull"] and c2["bull"] and c3["bull"]
-            and c1["close"] < c2["close"] < c3["close"]
-            and all(r["body"] / r["range"] > 0.4 for r in [c1, c2, c3])
-        ):
-            pats.append("红三兵")
-
-    # 3. 顶/底分型
-    if n >= 3:
-        p1, p2, p3 = records[-3], records[-2], records[-1]
-        if p2["high"] > p1["high"] and p2["high"] > p3["high"] and p2["low"] > p1["low"] and p2["low"] > p3["low"]:
-            pats.append("顶分型")
-        if p2["low"] < p1["low"] and p2["low"] < p3["low"] and p2["high"] < p1["high"] and p2["high"] < p3["high"]:
-            pats.append("底分型")
-
-    # 4. 早晨之星 (Morning Star)
-    if n >= 3:
-        c1, c2, c3 = records[-3], records[-2], records[-1]
-        if c1["bear"] and c1["body"] / c1["range"] > 0.5 and c2["doji"] and c3["bull"] and c3["close"] > (c1["open"] + c1["close"]) / 2:
-            pats.append("早晨之星")
-
-    # 5. 黄昏之星 (Evening Star)
-    if n >= 3:
-        c1, c2, c3 = records[-3], records[-2], records[-1]
-        if c1["bull"] and c1["body"] / c1["range"] > 0.5 and c2["doji"] and c3["bear"] and c3["close"] < (c1["open"] + c1["close"]) / 2:
-            pats.append("黄昏之星")
-
-    # 6. 仙人指路 & 墓碑线
-    last = records[-1]
-    if last["up_shadow"] >= last["body"] * 2.5 and last["up_shadow"] / last["range"] > 0.5:
-        if last["bull"]: pats.append("仙人指路")
-        else: pats.append("墓碑线")
-
-    # 7. 金针探底 (Hammer)
-    if last["low_shadow"] >= last["body"] * 2.5 and last["low_shadow"] / last["range"] > 0.5:
-        pats.append("金针探底")
-
-    # 8. 大阳线 / 大阴线
-    if last["body"] / last["range"] > 0.8:
-        if last["bull"] and last["range"] / records[-2]["close"] > 0.04: pats.append("大阳线")
-        if last["bear"] and last["range"] / records[-2]["close"] > 0.04: pats.append("大阴线")
-
-    # 9. 老鸭头 (Simple MA version)
-    closes = [_safe_float(row.get("close")) for _, row in df.tail(25).iterrows()]
-    closes = [x for x in closes if x is not None]
-    if len(closes) >= 20:
-        ma5 = sum(closes[-5:]) / 5
-        ma10 = sum(closes[-10:]) / 10
-        ma20 = sum(closes[-20:]) / 20
-        if ma5 > ma10 > ma20 and closes[-1] > ma5:
-            pats.append("老鸭头")
-
-    uniq = []
-    for p in pats:
-        if p not in uniq: uniq.append(p)
-    return uniq[:3]
 
 
 def _get_single_day_analysis(df_slice):
     if df_slice.empty or len(df_slice) < 5:
         return {"patterns": [], "suggestion": "观望", "tone": "中性"}
     
-    patterns = _detect_kline_patterns(df_slice)
+    # 使用增强版识别器
+    recognizer = PatternRecognizer(df_slice)
+    patterns = recognizer.recognize()
+    
     latest = df_slice.iloc[-1]
     pct = _safe_float(latest.get("pct_chg"))
     
     suggestion = "观望"
     tone = "中性"
     
-    bullish_pats = {"底分型", "早晨之星", "金针探底", "红三兵", "大阳线", "老鸭头"}
-    bearish_pats = {"顶分型", "黄昏之星", "墓碑线", "三只乌鸦", "大阴线"}
+    bullish_pats = {"底分型", "早晨之星", "金针探底", "红三兵", "大阳线", "老鸭头",
+                     "放量突破", "仙人指路", "锤子线", "看涨吞没", "启明星",
+                     "上升三法", "量价齐升"}
+    bearish_pats = {"顶分型", "黄昏之星", "墓碑线", "三只乌鸦", "大阴线",
+                     "上吊线", "看跌吞没", "下降三法", "量价背离"}
     
     p_set = set(patterns)
     bull_hits = p_set.intersection(bullish_pats)
     bear_hits = p_set.intersection(bearish_pats)
     
     if bull_hits:
-        suggestion = "回踩关注" if "老鸭头" in bull_hits else "择机试错"
+        suggestion = "试错关注" if "老鸭头" in bull_hits or "放量突破" in bull_hits else "择机关注"
         tone = "看多"
     elif bear_hits:
         suggestion = "减仓避险" if "顶分型" in bear_hits else "谨慎持币"
@@ -287,37 +201,79 @@ def _get_single_day_analysis(df_slice):
 
 
 def _build_watch_analyse(ts_code: str):
+    """
+    站在机构研究员和游资大佬视角，结合收盘日线给出专业点评。
+    """
+    # 获取更多历史数据以计算均线
     hist = fetch_df(
         """
-        SELECT trade_date, open, high, low, close, pct_chg, vol, amount
+        SELECT trade_date, open, high, low, close, pct_chg, vol, amount, factors
         FROM daily_price
         WHERE ts_code = ?
         ORDER BY trade_date DESC
-        LIMIT 70
+        LIMIT 100
         """,
         (ts_code,),
     )
+    
     if hist.empty:
         return {"summary": "历史数据不足", "patterns": [], "suggestion": "观望", "history": []}
 
     hist = hist.iloc[::-1].reset_index(drop=True)
     
-    # 获取最近 10 天的分析
+    # 展开 factors
+    for idx, row in hist.iterrows():
+        if row['factors']:
+            try:
+                factors = json.loads(row['factors']) if isinstance(row['factors'], str) else row['factors']
+                for k, v in factors.items():
+                    hist.at[idx, k] = v
+            except: pass
+    
+    # 填充缺失均线 (如果SQL没算出来，手动补一下基础的)
+    for ma in [5, 10, 20, 60]:
+        col = f'ma{ma}'
+        if col not in hist.columns:
+            hist[col] = hist['close'].rolling(ma).mean()
+
+    # 获取融资数据 (如果有)
+    margin = fetch_df(
+        """
+        SELECT rzye, rzmre, rqye
+        FROM stock_margin
+        WHERE ts_code = ?
+        ORDER BY trade_date DESC
+        LIMIT 1
+        """,
+        (ts_code,),
+    )
+    if not margin.empty:
+        for col in margin.columns:
+            hist.at[len(hist)-1, col] = margin.iloc[0][col]
+
+    # 获取最近 10 天的简要形态历史 (前端点点)
     history = []
     n = len(hist)
-    for i in range(min(10, n - 5)):
+    history_window = max(1, min(10, n - 19))
+    for i in range(history_window):
         idx = n - i
         day_analysis = _get_single_day_analysis(hist.iloc[:idx])
         history.append(day_analysis)
     
-    latest_analysis = history[0]
-    pat_txt = "、".join(latest_analysis["patterns"]) if latest_analysis["patterns"] else "无明显形态"
+    # 生成专业点评 (最近 5 日)
+    recognizer = PatternRecognizer(hist)
+    latest_patterns = recognizer.recognize()
+    pro_commentary = get_professional_commentary(hist, latest_patterns)
+    pro_detail = get_professional_commentary_detailed(hist, latest_patterns)
+    
+    latest_analysis = history[0] if history else {"suggestion": "观望"}
     
     return {
-        "summary": f"{latest_analysis['tone']} | 形态: {pat_txt}",
-        "patterns": latest_analysis["patterns"],
+        "summary": pro_commentary,
+        "patterns": latest_patterns,
         "suggestion": latest_analysis["suggestion"],
-        "history": history
+        "history": history,
+        "detail": pro_detail
     }
 
 # --- API 接口 ---
@@ -1119,38 +1075,312 @@ def verify_data_accuracy(ts_code: str = "688256.SH"):
         return {"status": "error", "message": str(e)}
 
 
+from pydantic import BaseModel, Field
+from etl.utils.patterns import PatternRecognizer, get_professional_commentary, get_professional_commentary_detailed
+
+class WatchlistStock(BaseModel):
+    ts_code: str
+    name: Optional[str] = None
+    remark: Optional[str] = None
+
+@router.get("/watchlist")
+def list_watchlist():
+    """获取自选股列表"""
+    try:
+        df = fetch_df("SELECT * FROM watchlist ORDER BY created_at DESC")
+        return {"status": "success", "data": df.to_dict('records')}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/watchlist")
+def add_to_watchlist(stock: WatchlistStock):
+    """添加股票到自选"""
+    try:
+        ts_code = _normalize_ts_code(stock.ts_code)
+        if not ts_code:
+            raise HTTPException(status_code=400, detail="无效股票代码")
+        
+        # 尝试从 stock_basic 获取名称
+        if not stock.name:
+            basic = fetch_df("SELECT name FROM stock_basic WHERE ts_code = ?", (ts_code,))
+            if not basic.empty:
+                stock.name = basic.iloc[0]['name']
+
+        with get_db_connection() as con:
+            con.execute(
+                "INSERT OR REPLACE INTO watchlist (ts_code, name, remark) VALUES (?, ?, ?)",
+                (ts_code, stock.name, stock.remark)
+            )
+        return {"status": "success", "message": f"已添加 {ts_code}"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.delete("/watchlist/{ts_code}")
+def remove_from_watchlist(ts_code: str):
+    """从自选删除股票"""
+    try:
+        norm_code = _normalize_ts_code(ts_code)
+        with get_db_connection() as con:
+            con.execute("DELETE FROM watchlist WHERE ts_code = ?", (norm_code,))
+        return {"status": "success", "message": f"已从自选删除 {norm_code}"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/stock/search")
+def search_stocks(q: str, limit: int = 10):
+    """搜索股票，支持代码、名称、首字母"""
+    try:
+        if not q or len(q.strip()) < 1:
+            return {"status": "success", "data": []}
+
+        q = q.strip()
+        q_upper = q.upper()
+        try:
+            limit = int(limit)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="limit 必须为整数")
+        limit = max(1, min(limit, 50))
+
+        contains_pattern = f"%{q_upper}%"
+        prefix_pattern = f"{q_upper}%"
+
+        # 检查是否有pinyin字段
+        try:
+            pinyin_check = fetch_df("SELECT pinyin FROM stock_basic LIMIT 1")
+            has_pinyin = 'pinyin' in pinyin_check.columns
+        except:
+            has_pinyin = False
+
+        if has_pinyin:
+            query = """
+                SELECT ts_code, name FROM stock_basic 
+                WHERE UPPER(ts_code) LIKE ?
+                   OR UPPER(name) LIKE ?
+                   OR UPPER(pinyin) LIKE ?
+                   OR UPPER(pinyin_short) LIKE ?
+                ORDER BY 
+                    CASE WHEN UPPER(ts_code) = ? THEN 0
+                         WHEN UPPER(ts_code) LIKE ? THEN 1
+                         WHEN UPPER(name) LIKE ? THEN 2
+                         ELSE 3 END,
+                    ts_code
+                LIMIT ?
+            """
+            params = (
+                contains_pattern,
+                contains_pattern,
+                prefix_pattern,
+                prefix_pattern,
+                q_upper,
+                prefix_pattern,
+                prefix_pattern,
+                limit,
+            )
+        else:
+            query = """
+                SELECT ts_code, name FROM stock_basic 
+                WHERE UPPER(ts_code) LIKE ?
+                   OR UPPER(name) LIKE ?
+                ORDER BY 
+                    CASE WHEN UPPER(ts_code) = ? THEN 0
+                         WHEN UPPER(ts_code) LIKE ? THEN 1
+                         WHEN UPPER(name) LIKE ? THEN 2
+                         ELSE 3 END,
+                    ts_code
+                LIMIT ?
+            """
+            params = (
+                contains_pattern,
+                contains_pattern,
+                q_upper,
+                prefix_pattern,
+                prefix_pattern,
+                limit,
+            )
+
+        df = fetch_df(query, params)
+        
+        result = []
+        if not df.empty:
+            result = df.to_dict('records')
+        
+        return {"status": "success", "data": result}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/stock/{ts_code}/kline")
+def get_stock_kline(ts_code: str, limit: int = 200):
+    """获取股票日K线数据，包含均线、指标及融资融券"""
+    try:
+        norm_code = _normalize_ts_code(ts_code)
+        # 获取行情
+        df = fetch_df(
+            """
+            SELECT trade_date, open, high, low, close, vol, amount, factors
+            FROM daily_price
+            WHERE ts_code = ?
+            ORDER BY trade_date DESC
+            LIMIT ?
+            """,
+            (norm_code, limit),
+        )
+        if df.empty:
+            return {"status": "success", "data": []}
+        
+        df = df.iloc[::-1].reset_index(drop=True)
+        
+        # 获取两融数据
+        margin_df = fetch_df(
+            """
+            SELECT trade_date, rzye, rzmre, rqye
+            FROM stock_margin
+            WHERE ts_code = ?
+            ORDER BY trade_date DESC
+            LIMIT ?
+            """,
+            (norm_code, limit * 2), # 获取多一点以便对齐
+        )
+        
+        # 合并
+        if not margin_df.empty:
+            df = df.merge(margin_df, on='trade_date', how='left')
+        
+        # 获取主力资金数据
+        moneyflow_df = fetch_df(
+            """
+            SELECT trade_date, net_mf_vol
+            FROM stock_moneyflow
+            WHERE ts_code = ?
+            ORDER BY trade_date DESC
+            LIMIT ?
+            """,
+            (norm_code, limit * 2),
+        )
+        
+        # 合并主力资金
+        if not moneyflow_df.empty:
+            df = df.merge(moneyflow_df, on='trade_date', how='left')
+        
+        # 处理 factors (均线)，并处理 NaN 值
+        result = []
+        for _, row in df.iterrows():
+            item = row.to_dict()
+            if row.factors:
+                try:
+                    factors = json.loads(row.factors) if isinstance(row.factors, str) else row.factors
+                    item.update(factors)
+                except: pass
+            # 将 NaN 转换为 None (JSON null)
+            for k, v in item.items():
+                if isinstance(v, float) and (v != v):  # NaN check
+                    item[k] = None
+            result.append(item)
+
+        return {"status": "success", "data": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.get("/watchlist/realtime")
-def get_watchlist_realtime(codes: str, src: str = "sina"):
+def get_watchlist_realtime(codes: Optional[str] = None, src: str = "sina"):
     """
     获取自选股实时行情（盘中刷新）。
-    - 仅在交易时段查询实时数据，非交易时段返回 no_refresh。
-    - 默认使用新浪源（src=sina）。
+    - 盘中：获取实时行情
+    - 盘后：获取最近交易日收盘数据
+    - 如果未指定 codes，则从数据库加载。
     """
-    raw_codes = [c.strip() for c in (codes or "").split(",") if c.strip()]
-    norm_codes = [_normalize_ts_code(c) for c in raw_codes]
-    norm_codes = [c for c in norm_codes if c]
+    if codes:
+        raw_codes = [c.strip() for c in codes.split(",") if c.strip()]
+        norm_codes = [_normalize_ts_code(c) for c in raw_codes]
+        norm_codes = [c for c in norm_codes if c]
+    else:
+        db_watchlist = fetch_df("SELECT ts_code FROM watchlist")
+        norm_codes = db_watchlist['ts_code'].tolist() if not db_watchlist.empty else []
+
     if not norm_codes:
-        raise HTTPException(status_code=400, detail="codes 不能为空，例如: 000001.SZ,600519.SH")
+        return {"status": "success", "is_trading_time": False, "message": "自选股为空", "data": []}
 
     is_trading = trading_calendar.is_trading_time()
-    if not is_trading:
-        return {
-            "status": "success",
-            "refresh_mode": "no_refresh",
-            "is_trading_time": False,
-            "message": "当前非交易时段，已停止实时刷新",
-            "data": [],
-        }
+    rows = []
 
-    quote_df = sync_engine.provider.realtime_quote(ts_code=",".join(norm_codes), src=src or "sina")
-    if quote_df is None or quote_df.empty:
-        return {
-            "status": "success",
-            "refresh_mode": "realtime",
-            "is_trading_time": True,
-            "message": "未获取到实时行情",
-            "data": [],
-        }
+    if is_trading:
+        # 实时行情逻辑
+        quote_df = sync_engine.provider.realtime_quote(ts_code=",".join(norm_codes), src=src or "sina")
+        if quote_df is not None and not quote_df.empty:
+            col_map = {str(c).lower(): c for c in quote_df.columns}
+            price_col = col_map.get("price") or col_map.get("current") or col_map.get("close")
+            pre_close_col = col_map.get("pre_close") or col_map.get("yclose")
+            pct_col = col_map.get("pct_chg") or col_map.get("pct_change") or col_map.get("changepercent")
+            name_col = col_map.get("name")
+            vol_col = col_map.get("vol") or col_map.get("volume")
+            amount_col = col_map.get("amount") or col_map.get("turnover")
+
+            for _, row in quote_df.iterrows():
+                ts_code = _normalize_ts_code(str(row.get(col_map.get("ts_code", ""), "")))
+                if not ts_code: continue
+                
+                price = _safe_float(row.get(price_col)) if price_col else None
+                pre_close = _safe_float(row.get(pre_close_col)) if pre_close_col else None
+                pct = _safe_float(row.get(pct_col)) if pct_col else None
+                if price and pre_close and pct is None:
+                    pct = (price - pre_close) / pre_close * 100.0
+
+                rows.append({
+                    "ts_code": ts_code,
+                    "name": str(row.get(name_col, "")) if name_col else "",
+                    "price": price,
+                    "pre_close": pre_close,
+                    "pct": pct,
+                    "vol": _safe_float(row.get(vol_col)) if vol_col else None,
+                    "amount": _safe_float(row.get(amount_col)) if amount_col else None,
+                    "analyze": _build_watch_analyse(ts_code)
+                })
+    
+    # 如果实时没数据或非交易时段，补齐静态数据
+    processed_codes = {r['ts_code'] for r in rows}
+    remaining_codes = [c for c in norm_codes if c not in processed_codes]
+    
+    if remaining_codes:
+        placeholders = ','.join([f"'{c}'" for c in remaining_codes])
+        static_df = fetch_df(f"""
+            SELECT ts_code, close as price, pre_close, pct_chg as pct, vol, amount, trade_date
+            FROM daily_price
+            WHERE (ts_code, trade_date) IN (
+                SELECT ts_code, MAX(trade_date) FROM daily_price WHERE ts_code IN ({placeholders}) GROUP BY ts_code
+            )
+        """)
+        
+        # 补充名称
+        names_df = fetch_df(f"SELECT ts_code, name FROM stock_basic WHERE ts_code IN ({placeholders})")
+        name_map = dict(zip(names_df['ts_code'], names_df['name']))
+
+        for _, row in static_df.iterrows():
+            tc = row['ts_code']
+            rows.append({
+                "ts_code": tc,
+                "name": name_map.get(tc, tc),
+                "price": row['price'],
+                "pre_close": row['pre_close'],
+                "pct": row['pct'],
+                "vol": row['vol'],
+                "amount": row['amount'],
+                "analyze": _build_watch_analyse(tc)
+            })
+
+    # 排序
+    idx_map = {c: i for i, c in enumerate(norm_codes)}
+    rows.sort(key=lambda x: idx_map.get(x.get("ts_code"), 999))
+
+    return {
+        "status": "success",
+        "refresh_mode": "realtime" if is_trading else "static",
+        "is_trading_time": is_trading,
+        "message": "实时刷新中" if is_trading else "非交易时段，已展示最近收盘数据",
+        "data": rows,
+    }
 
     col_map = {str(c).lower(): c for c in quote_df.columns}
     ts_col = col_map.get("ts_code")
