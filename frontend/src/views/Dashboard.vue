@@ -196,17 +196,98 @@
         </div>
         <div v-if="loadingBacktest" class="py-8 text-center text-slate-400 text-sm">回测结果加载中...</div>
         <div v-else-if="backtestError" class="py-8 text-center text-red-400 text-sm">{{ backtestError }}</div>
-        <div v-else-if="backtestData" class="space-y-2 text-xs">
+        <div v-else-if="backtestData" class="space-y-3 text-xs max-h-[70vh] overflow-y-auto">
           <div class="grid grid-cols-2 gap-2 text-slate-300">
             <div class="rounded bg-slate-800 p-2">总收益: <span class="font-bold text-white">{{ backtestData.metrics?.total_return || '-' }}</span></div>
             <div class="rounded bg-slate-800 p-2">年化: <span class="font-bold text-white">{{ backtestData.metrics?.annual_return || '-' }}</span></div>
             <div class="rounded bg-slate-800 p-2">回撤: <span class="font-bold text-white">{{ backtestData.metrics?.max_drawdown || '-' }}</span></div>
             <div class="rounded bg-slate-800 p-2">胜率: <span class="font-bold text-white">{{ backtestData.metrics?.win_rate || '-' }}</span></div>
+            <div class="rounded bg-slate-800 p-2">日胜率: <span class="font-bold text-white">{{ backtestData.metrics?.day_win_rate || '-' }}</span></div>
+            <div class="rounded bg-slate-800 p-2">交易次数: <span class="font-bold text-white">{{ backtestData.metrics?.total_trades || '-' }}</span></div>
             <div class="rounded bg-slate-800 p-2">夏普: <span class="font-bold text-white">{{ backtestData.metrics?.sharpe || '-' }}</span></div>
             <div class="rounded bg-slate-800 p-2">基准: <span class="font-bold text-white">{{ backtestData.metrics?.benchmark_return || '-' }}</span></div>
           </div>
           <div class="rounded bg-slate-800 p-2 text-slate-400">
             参数: leverage={{ backtestData.policy?.leverage ?? '-' }}, trend_floor={{ backtestData.policy?.trend_floor_pos ?? '-' }}
+          </div>
+          <div v-if="backtestData.attribution && Object.keys(backtestData.attribution).length > 0" class="rounded bg-slate-800 p-2">
+            <div class="text-slate-300 font-semibold mb-1">归因分析</div>
+            <div class="grid grid-cols-2 gap-x-2 gap-y-1">
+              <template v-for="(val, key) in backtestData.attribution" :key="key">
+                <div class="text-slate-400">{{ key }}</div>
+                <div class="text-slate-200">{{ val.count }}次, {{ val.win_rate }}胜, {{ val.avg_pnl }}均</div>
+              </template>
+            </div>
+          </div>
+          <div v-if="backtestData.trades && backtestData.trades.length > 0" class="rounded bg-slate-800 p-2">
+            <div class="text-slate-300 font-semibold mb-1">交易记录 (最近10笔)</div>
+            <div class="max-h-32 overflow-y-auto">
+              <table class="w-full text-[10px]">
+                <thead class="text-slate-500">
+                  <tr>
+                    <th class="text-left">入场</th>
+                    <th class="text-left">出场</th>
+                    <th class="text-right">盈亏</th>
+                    <th class="text-right">持仓天</th>
+                    <th class="text-left">原因</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="(t, i) in backtestData.trades.slice(-10)" :key="i" :class="t.profit_pct > 0 ? 'text-green-400' : 'text-red-400'">
+                    <td>{{ t.entry_date?.slice(5) }}</td>
+                    <td>{{ t.exit_date?.slice(5) }}</td>
+                    <td class="text-right">{{ t.profit_pct }}%</td>
+                    <td class="text-right">{{ t.hold_days }}</td>
+                    <td>{{ t.reason }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div class="flex gap-2">
+            <button @click="loadBacktestGrid" class="flex-1 rounded bg-sky-700 hover:bg-sky-600 px-2 py-1 text-white text-xs" :disabled="loadingBacktestGrid">
+              {{ loadingBacktestGrid ? '加载中...' : '网格诊断' }}
+            </button>
+            <button @click="loadWalkforward" class="flex-1 rounded bg-purple-700 hover:bg-purple-600 px-2 py-1 text-white text-xs" :disabled="loadingWalkforward">
+              {{ loadingWalkforward ? '加载中...' : 'Walk-Forward' }}
+            </button>
+          </div>
+          <div v-if="backtestGridData" class="rounded bg-slate-800 p-2">
+            <div class="text-slate-300 font-semibold mb-1">网格诊断</div>
+            <div class="max-h-32 overflow-y-auto">
+              <table class="w-full text-[10px]">
+                <thead class="text-slate-500">
+                  <tr>
+                    <th class="text-left">杠杆</th>
+                    <th class="text-right">Floor</th>
+                    <th class="text-right">收益</th>
+                    <th class="text-right">回撤</th>
+                    <th class="text-right">胜率</th>
+                    <th class="text-right">交易</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="(g, i) in backtestGridData.grid" :key="i" :class="g.dd_passed ? 'text-green-400' : 'text-red-400'">
+                    <td>{{ g.leverage }}</td>
+                    <td class="text-right">{{ g.floor }}</td>
+                    <td class="text-right">{{ g.return }}</td>
+                    <td class="text-right">{{ g.max_dd }}</td>
+                    <td class="text-right">{{ g.win_rate }}</td>
+                    <td class="text-right">{{ g.trades }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div v-if="walkforwardData" class="rounded bg-slate-800 p-2">
+            <div class="text-slate-300 font-semibold mb-1">Walk-Forward结果</div>
+            <div class="grid grid-cols-2 gap-1 text-slate-400">
+              <div>OOS收益: <span class="text-white">{{ walkforwardData.metrics?.oos_total_return }}</span></div>
+              <div>OOS年化: <span class="text-white">{{ walkforwardData.metrics?.oos_annual_return }}</span></div>
+              <div>OOS回撤: <span class="text-white">{{ walkforwardData.metrics?.oos_max_drawdown }}</span></div>
+              <div>OOS胜率: <span class="text-white">{{ walkforwardData.metrics?.oos_win_rate }}</span></div>
+              <div>窗口数: <span class="text-white">{{ walkforwardData.metrics?.oos_total_trades }}</span></div>
+            </div>
           </div>
           <div class="text-[11px] text-slate-500">生成时间: {{ backtestData.generated_at || '-' }}</div>
         </div>
@@ -217,7 +298,7 @@
 
 <script setup>
 import { ref, onMounted, onBeforeUnmount } from 'vue';
-import { getMainlineHistory, getMarketSentiment, getSentimentPreview, getMarketSuggestion, getBacktestResult, syncSentiment, getTasksStatus } from '@/services/api';
+import { getMainlineHistory, getMarketSentiment, getSentimentPreview, getMarketSuggestion, getBacktestResult, getBacktestGrid, getBacktestWalkforward, syncSentiment, getTasksStatus } from '@/services/api';
 import { ChatBubbleLeftRightIcon } from '@heroicons/vue/20/solid'
 
 const loadingTrend = ref(false);
@@ -228,6 +309,10 @@ const showBacktestModal = ref(false);
 const loadingBacktest = ref(false);
 const backtestError = ref('');
 const backtestData = ref(null);
+const backtestGridData = ref(null);
+const walkforwardData = ref(null);
+const loadingBacktestGrid = ref(false);
+const loadingWalkforward = ref(false);
 const minimalTooltipMode = ref(false);
 const isMobile = ref(false);
 const syncingSentiment = ref(false);
@@ -475,6 +560,8 @@ const openBacktestModal = async () => {
   loadingBacktest.value = true;
   backtestError.value = '';
   backtestData.value = null;
+  backtestGridData.value = null;
+  walkforwardData.value = null;
   try {
     const res = await getBacktestResult(true);
     if (res.data?.status !== 'success') {
@@ -486,6 +573,36 @@ const openBacktestModal = async () => {
     backtestError.value = '回测结果获取失败';
   } finally {
     loadingBacktest.value = false;
+  }
+};
+
+const loadBacktestGrid = async () => {
+  if (backtestGridData.value) return;
+  loadingBacktestGrid.value = true;
+  try {
+    const res = await getBacktestGrid();
+    if (res.data?.status === 'success') {
+      backtestGridData.value = res.data || null;
+    }
+  } catch (e) {
+    console.error('网格诊断加载失败', e);
+  } finally {
+    loadingBacktestGrid.value = false;
+  }
+};
+
+const loadWalkforward = async () => {
+  if (walkforwardData.value) return;
+  loadingWalkforward.value = true;
+  try {
+    const res = await getBacktestWalkforward(120, 40);
+    if (res.data?.status === 'success') {
+      walkforwardData.value = res.data?.data || null;
+    }
+  } catch (e) {
+    console.error('Walk-Forward加载失败', e);
+  } finally {
+    loadingWalkforward.value = false;
   }
 };
 

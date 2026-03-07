@@ -121,7 +121,7 @@
       @mouseenter="clearHideKlinePreview"
       @mouseleave="scheduleHideKlinePreview"
     >
-      <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+      <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
         <div>
           <h3 class="text-xs font-bold text-slate-200">K线分析（悬浮预览）</h3>
           <p class="text-[10px] text-slate-500 mt-1">{{ selectedKlineName || '-' }} · {{ selectedKlineTsCode }}</p>
@@ -134,30 +134,30 @@
         </div>
       </div>
 
-      <div class="grid grid-cols-2 md:grid-cols-6 gap-2 mb-3 text-[11px]" v-if="latestKlinePoint">
-        <div class="rounded border border-slate-700/60 bg-slate-900/40 px-2 py-1.5">
-          <span class="text-slate-500">日期</span>
-          <p class="text-slate-200 mt-0.5">{{ latestKlinePoint.trade_date }}</p>
-        </div>
+      <div class="grid grid-cols-3 sm:grid-cols-6 gap-1.5 mb-2 text-[10px]" v-if="latestKlineData">
         <div class="rounded border border-slate-700/60 bg-slate-900/40 px-2 py-1.5">
           <span class="text-slate-500">收盘价</span>
-          <p class="text-slate-200 mt-0.5">{{ metricText(latestKlinePoint.close, 2) }}</p>
+          <p class="text-slate-200 mt-0.5 font-mono">{{ fmtPrice(latestKlineData.close) }}</p>
         </div>
         <div class="rounded border border-slate-700/60 bg-slate-900/40 px-2 py-1.5">
           <span class="text-slate-500">成交量</span>
-          <p class="text-slate-200 mt-0.5">{{ metricText(latestKlinePoint.vol, 0) }}</p>
+          <p class="text-slate-200 mt-0.5 font-mono">{{ fmtVolUnit(latestKlineData.vol) }}</p>
         </div>
         <div class="rounded border border-slate-700/60 bg-slate-900/40 px-2 py-1.5">
           <span class="text-slate-500">成交额</span>
-          <p class="text-slate-200 mt-0.5">{{ metricText(latestKlinePoint.amount, 0) }}</p>
+          <p class="text-slate-200 mt-0.5 font-mono">{{ fmtAmountUnit(latestKlineData.amount) }}</p>
         </div>
         <div class="rounded border border-slate-700/60 bg-slate-900/40 px-2 py-1.5">
-          <span class="text-slate-500">资金流</span>
-          <p class="mt-0.5" :class="retClass(latestKlinePoint.net_mf_vol)">{{ metricText(latestKlinePoint.net_mf_vol, 0) }}</p>
+          <span class="text-slate-500">主力流入</span>
+          <p class="mt-0.5 font-mono" :class="latestKlineData.net_mf_vol >= 0 ? 'text-cyan-400' : 'text-rose-400'">{{ fmtMfUnit(latestKlineData.net_mf_vol) }}</p>
         </div>
         <div class="rounded border border-slate-700/60 bg-slate-900/40 px-2 py-1.5">
           <span class="text-slate-500">MA5/10/20</span>
-          <p class="text-slate-200 mt-0.5">{{ metricText(latestKlinePoint.ma5, 2) }} / {{ metricText(latestKlinePoint.ma10, 2) }} / {{ metricText(latestKlinePoint.ma20, 2) }}</p>
+          <p class="text-slate-200 mt-0.5 font-mono text-[9px]">{{ fmtPrice(latestKlineData.ma5) }} / {{ fmtPrice(latestKlineData.ma10) }} / {{ fmtPrice(latestKlineData.ma20) }}</p>
+        </div>
+        <div class="rounded border border-slate-700/60 bg-slate-900/40 px-2 py-1.5">
+          <span class="text-slate-500">融资余额</span>
+          <p class="text-slate-200 mt-0.5 font-mono">{{ latestKlineData.rzye ? fmtRzyeUnit(latestKlineData.rzye) : '-' }}</p>
         </div>
       </div>
 
@@ -334,7 +334,7 @@ import {
 } from '@/services/api';
 import { useKlineChart } from '@/composables/useKlineChart';
 
-const { createKlineOption } = useKlineChart();
+const { createKlineOption, getLatestKlineData } = useKlineChart();
 
 const strategies = ref([]);
 const selectedStrategy = ref('');
@@ -409,6 +409,38 @@ const latestKlinePoint = computed(() => {
   const rows = normalizedKlineRows.value;
   return rows.length ? rows[rows.length - 1] : null;
 });
+
+const latestKlineData = computed(() => {
+  return getLatestKlineData(klineRows.value);
+});
+
+const fmtPrice = (v) => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n.toFixed(2) : '-';
+};
+
+const fmtVolUnit = (v) => {
+  if (!v || !Number.isFinite(v)) return '-';
+  if (Math.abs(v) >= 1e8) return `${(v / 1e8).toFixed(2)}亿手`;
+  if (Math.abs(v) >= 1e4) return `${(v / 1e4).toFixed(2)}万手`;
+  return `${Math.round(v)}手`;
+};
+
+const fmtAmountUnit = (v) => {
+  if (!v || !Number.isFinite(v)) return '-';
+  return `${v.toFixed(2)}亿`;
+};
+
+const fmtMfUnit = (v) => {
+  if (!v || !Number.isFinite(v)) return '-';
+  const sign = v >= 0 ? '+' : '';
+  return `${sign}${v.toFixed(2)}亿`;
+};
+
+const fmtRzyeUnit = (v) => {
+  if (!v || !Number.isFinite(v)) return '-';
+  return `${v.toFixed(2)}亿`;
+};
 
 const canStepOlder = computed(() => {
   const total = klineRows.value.length;

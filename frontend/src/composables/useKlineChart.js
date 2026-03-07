@@ -1,22 +1,24 @@
 function fmtVol(v) {
   if (!v || !Number.isFinite(v)) return '-';
-  if (Math.abs(v) >= 1e8) return `${(v / 1e8).toFixed(2)}亿`;
-  if (Math.abs(v) >= 1e4) return `${(v / 1e4).toFixed(0)}手`;
-  return `${Math.round(v)}`;
+  if (Math.abs(v) >= 1e8) return `${(v / 1e8).toFixed(2)}亿手`;
+  if (Math.abs(v) >= 1e4) return `${(v / 1e4).toFixed(2)}万手`;
+  return `${Math.round(v)}手`;
 }
 
 function fmtAmount(v) {
   if (!v || !Number.isFinite(v)) return '-';
-  if (Math.abs(v) >= 1e8) return `${(v / 1e8).toFixed(2)}亿`;
-  if (Math.abs(v) >= 1e4) return `${(v / 1e4).toFixed(2)}万`;
-  return `${Math.round(v)}`;
+  return `${v.toFixed(2)}亿`;
+}
+
+function fmtRzye(v) {
+  if (!v || !Number.isFinite(v)) return '-';
+  return `${v.toFixed(2)}亿`;
 }
 
 function fmtMf(v) {
   if (!v || !Number.isFinite(v)) return '-';
   const sign = v >= 0 ? '+' : '';
-  if (Math.abs(v) >= 1e4) return `${sign}${(v / 1e4).toFixed(0)}万`;
-  return `${sign}${Math.round(v)}`;
+  return `${sign}${v.toFixed(2)}亿`;
 }
 
 function fmtPrice(v) {
@@ -36,16 +38,18 @@ export function useKlineChart() {
     const ma5 = data.map(item => Number(item.ma5) || null);
     const ma10 = data.map(item => Number(item.ma10) || null);
     const ma20 = data.map(item => Number(item.ma20) || null);
-    const rzye = data.map(item => item.rzye ? Number(item.rzye) : null);
-    const netMfVol = data.map(item => item.net_mf_vol ? Number(item.net_mf_vol) : null);
+    const rzye = data.map(item => item.rzye ? Number(item.rzye) / 1e8 : null);
+    const netMfVol = data.map(item => item.net_mf_vol ? Number(item.net_mf_vol) / 1e8 : null);
+    const amount = data.map(item => (Number(item.amount) || 0) * 1000 / 1e8);
     
     const latest = data[data.length - 1];
     const latestMa5 = Number(latest?.ma5) || null;
     const latestMa10 = Number(latest?.ma10) || null;
     const latestMa20 = Number(latest?.ma20) || null;
     const latestVol = Number(latest?.vol) || 0;
-    const latestRzye = latest?.rzye ? Number(latest.rzye) : null;
-    const latestNetMf = latest?.net_mf_vol ? Number(latest.net_mf_vol) : null;
+    const latestRzye = latest?.rzye ? Number(latest.rzye) / 1e8 : null;
+    const latestNetMf = latest?.net_mf_vol ? Number(latest.net_mf_vol) / 1e8 : null;
+    const latestAmount = (Number(latest?.amount) || 0) * 1000 / 1e8;
     
     const series = [];
     
@@ -144,7 +148,8 @@ export function useKlineChart() {
             if (p.seriesName === 'MA10') html += `<div style="color:#38bdf8">MA10 ${fmtPrice(p.value)}</div>`;
             if (p.seriesName === 'MA20') html += `<div style="color:#a78bfa">MA20 ${fmtPrice(p.value)}</div>`;
             if (p.seriesName === '成交量') html += `<div style="color:#fff">量 ${fmtVol(p.value)}</div>`;
-            if (p.seriesName === '融资') html += `<div style="color:#3b82f6">融资 ${fmtAmount(p.value)}</div>`;
+            if (p.seriesName === '成交额') html += `<div style="color:#fbbf24">额 ${fmtAmount(p.value)}</div>`;
+            if (p.seriesName === '融资') html += `<div style="color:#3b82f6">融资 ${fmtRzye(p.value)}</div>`;
             if (p.seriesName === '主力') html += `<div style="color:${p.value >= 0 ? '#0ea5e9' : '#f43f5e'}">主力 ${fmtMf(p.value)}</div>`;
           });
           
@@ -187,6 +192,25 @@ export function useKlineChart() {
     
     return result;
   };
+
+  const getLatestKlineData = (data) => {
+    if (!data || !data.length) return null;
+    const latest = data[data.length - 1];
+    return {
+      trade_date: latest?.trade_date,
+      close: Number(latest?.close) || null,
+      open: Number(latest?.open) || null,
+      high: Number(latest?.high) || null,
+      low: Number(latest?.low) || null,
+      vol: Number(latest?.vol) || 0,
+      amount: (Number(latest?.amount) || 0) * 1000 / 1e8,
+      net_mf_vol: latest?.net_mf_vol ? Number(latest.net_mf_vol) / 1e8 : null,
+      rzye: latest?.rzye ? Number(latest.rzye) / 1e8 : null,
+      ma5: Number(latest?.ma5) || null,
+      ma10: Number(latest?.ma10) || null,
+      ma20: Number(latest?.ma20) || null,
+    };
+  };
   
-  return { createKlineOption };
+  return { createKlineOption, getLatestKlineData };
 }

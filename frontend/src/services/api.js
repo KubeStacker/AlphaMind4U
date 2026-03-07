@@ -98,6 +98,8 @@ export const getMarketSuggestion = (params = {}) => apiClient.get('/admin/market
 export const syncSentiment = (days = 250, syncIndex = false) =>
   apiClient.post('/admin/etl/sentiment', null, { params: { days, sync_index: syncIndex } });
 export const getBacktestResult = (optimize = true) => apiClient.get('/admin/backtest_result', { params: { optimize } });
+export const getBacktestGrid = () => apiClient.get('/admin/backtest_grid');
+export const getBacktestWalkforward = (trainDays = 120, testDays = 40) => apiClient.get('/admin/backtest_walkforward', { params: { train_days: trainDays, test_days: testDays } });
 export const getMainlineHistory = (days = 30) => apiClient.get('/admin/mainline_history', { params: { days } });
 export const getMarginHeatmap = (days = 10, top_n = 30) => apiClient.get('/admin/margin_heatmap', { params: { days, top_n } });
 export const getWatchlistRealtime = (codes, src = 'sina') => apiClient.get('/admin/watchlist/realtime', { params: { codes, src } });

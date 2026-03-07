@@ -196,7 +196,7 @@
       class="fixed z-40 left-2 right-2 bottom-14 md:left-auto md:right-4 md:bottom-4 md:w-[70vw] md:max-w-3xl bg-business-dark border border-business-light rounded-2xl p-2.5 md:p-3 shadow-2xl max-h-[78vh] overflow-y-auto"
       @click.stop
     >
-      <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+      <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
         <div>
           <h3 class="text-xs font-bold text-slate-200">K线分析（悬浮预览）</h3>
           <p class="text-[10px] text-slate-500 mt-1">{{ hoverInfo.stock?.name || '-' }} · {{ hoverInfo.stock?.ts_code || '-' }}</p>
@@ -204,9 +204,37 @@
       </div>
       <div v-if="klineLoading" class="h-[220px] sm:h-[280px] md:h-[340px] flex items-center justify-center text-slate-400 text-xs">K线加载中...</div>
       <div v-else-if="klineError" class="rounded border border-red-700/40 bg-red-500/10 px-3 py-2 text-xs text-red-300">{{ klineError }}</div>
-      <div v-else class="h-[220px] sm:h-[280px] md:h-[340px] lg:h-[380px]">
-        <v-chart :option="klineOption" autoresize />
-      </div>
+      <template v-else>
+        <div class="grid grid-cols-3 sm:grid-cols-6 gap-1.5 mb-2 text-[10px]" v-if="latestKlineData">
+          <div class="rounded border border-slate-700/60 bg-slate-900/40 px-2 py-1.5">
+            <span class="text-slate-500">收盘价</span>
+            <p class="text-slate-200 mt-0.5 font-mono">{{ fmt(latestKlineData.close, 2) }}</p>
+          </div>
+          <div class="rounded border border-slate-700/60 bg-slate-900/40 px-2 py-1.5">
+            <span class="text-slate-500">成交量</span>
+            <p class="text-slate-200 mt-0.5 font-mono">{{ fmtVol(latestKlineData.vol) }}</p>
+          </div>
+          <div class="rounded border border-slate-700/60 bg-slate-900/40 px-2 py-1.5">
+            <span class="text-slate-500">成交额</span>
+            <p class="text-slate-200 mt-0.5 font-mono">{{ fmtAmount(latestKlineData.amount) }}</p>
+          </div>
+          <div class="rounded border border-slate-700/60 bg-slate-900/40 px-2 py-1.5">
+            <span class="text-slate-500">主力流入</span>
+            <p class="mt-0.5 font-mono" :class="latestKlineData.net_mf_vol >= 0 ? 'text-cyan-400' : 'text-rose-400'">{{ fmtMf(latestKlineData.net_mf_vol) }}</p>
+          </div>
+          <div class="rounded border border-slate-700/60 bg-slate-900/40 px-2 py-1.5">
+            <span class="text-slate-500">MA5/10/20</span>
+            <p class="text-slate-200 mt-0.5 font-mono text-[9px]">{{ fmt(latestKlineData.ma5, 2) }} / {{ fmt(latestKlineData.ma10, 2) }} / {{ fmt(latestKlineData.ma20, 2) }}</p>
+          </div>
+          <div class="rounded border border-slate-700/60 bg-slate-900/40 px-2 py-1.5">
+            <span class="text-slate-500">融资余额</span>
+            <p class="text-slate-200 mt-0.5 font-mono">{{ latestKlineData.rzye ? fmtRzye(latestKlineData.rzye) : '-' }}</p>
+          </div>
+        </div>
+        <div class="h-[220px] sm:h-[280px] md:h-[340px] lg:h-[380px]">
+          <v-chart :option="klineOption" autoresize />
+        </div>
+      </template>
     </div>
 
     <!-- 专业点评详情弹窗 -->
@@ -388,7 +416,7 @@ use([
   GridComponent, TooltipComponent, DataZoomComponent, LegendComponent, VisualMapComponent
 ]);
 
-const { createKlineOption } = useKlineChart();
+const { createKlineOption, getLatestKlineData } = useKlineChart();
 
 const REFRESH_MS_TRADING = 10000;
 const REFRESH_MS_IDLE = 60000;
@@ -553,26 +581,37 @@ const klineOption = computed(() => {
   return createKlineOption(hoverInfo.klineData, { showLegend: true, showDataZoom: true, marginType: 'mf' });
 });
 
+const latestKlineData = computed(() => {
+  return getLatestKlineData(hoverInfo.klineData);
+});
+
+const fmtVol = (v) => {
+  if (!v || !Number.isFinite(v)) return '-';
+  if (Math.abs(v) >= 1e8) return `${(v / 1e8).toFixed(2)}亿手`;
+  if (Math.abs(v) >= 1e4) return `${(v / 1e4).toFixed(2)}万手`;
+  return `${Math.round(v)}手`;
+};
+
+const fmtAmount = (v) => {
+  if (!v || !Number.isFinite(v)) return '-';
+  return `${v.toFixed(2)}亿`;
+};
+
+const fmtMf = (v) => {
+  if (!v || !Number.isFinite(v)) return '-';
+  const sign = v >= 0 ? '+' : '';
+  return `${sign}${v.toFixed(2)}亿`;
+};
+
+const fmtRzye = (v) => {
+  if (!v || !Number.isFinite(v)) return '-';
+  return `${v.toFixed(2)}亿`;
+};
+
 const fmt = (v, digits = 2, suffix = '') => {
   const n = Number(v);
   if (!Number.isFinite(n)) return '-';
   return `${n.toFixed(digits)}${suffix}`;
-};
-
-const fmtAmount = (v) => {
-  const n = Number(v);
-  if (!Number.isFinite(n)) return '-';
-  if (Math.abs(n) >= 1e8) return `${(n / 1e8).toFixed(2)}亿`;
-  if (Math.abs(n) >= 1e4) return `${(n / 1e4).toFixed(2)}万`;
-  return `${Math.round(n)}`;
-};
-
-const fmtVol = (v) => {
-  const n = Number(v);
-  if (!Number.isFinite(n)) return '-';
-  if (Math.abs(n) >= 1e8) return `${(n / 1e8).toFixed(2)}亿`;
-  if (Math.abs(n) >= 1e4) return `${(n / 1e4).toFixed(0)}手`;
-  return `${Math.round(n)}`;
 };
 
 const numColor = (v) => {
