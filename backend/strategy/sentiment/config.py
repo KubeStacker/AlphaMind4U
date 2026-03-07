@@ -49,14 +49,22 @@ SENTIMENT_CONFIG = {
     # --- 卖出信号参数 ---
     "sell": {
         "euphoria_threshold": 85,          # 人声鼎沸
-        "profit_take": 8.0,               # 止盈线(简化)
-        "stop_loss": -5.0,               # 止损
-        "cooldown_score_drop": 20,         # 情绪回落多少分就卖
-        "max_hold_days": 20,              # 最大持仓天数
+        "profit_take": 8.0,               # 止盈线(仅作安全上限, 实际由trailing stop管理)
+        "stop_loss": -3.0,               # 固定止损底线(从-4收紧到-3, 3x杠杆下=-9%)
+        "cooldown_score_drop": 25,         # 情绪回落多少分就卖(从20提高到25)
+        "cooldown_min_hold": 3,            # 退潮信号最少持仓天数
+        "cooldown_velocity": -8.0,         # 退潮需要分数3日速度低于此值(从-5加严到-8)
+        "max_hold_days": 25,              # 最大持仓天数(从20放宽到25,让赢家跑更久)
+        "consecutive_loss_limit": 2,       # 连续亏损N笔后降仓
+        "consecutive_loss_scale": 0.5,     # 连亏后仓位缩放系数
+        "drawdown_circuit_breaker": -15.0, # 组合回撤超此值暂停开仓(%, 去杠杆仓位加权)
+        "drawdown_resume": -8.0,           # 回撤恢复到此值才恢复开仓(%)
         "momentum_reversal_v1": -3.0,      # 动量反转触发减仓/离场
         "momentum_reversal_v2": -1.5,      # 加速度恶化阈值
-        "trailing_profit_floor": 4.0,      # 浮盈保护启动阈值
-        "trailing_pullback": 3.5,          # 从峰值回撤超过该值离场
+        "trailing_profit_floor": 4.0,      # 浮盈保护启动阈值(%)
+        "trailing_pullback": 3.5,          # 从峰值回撤超过该值离场(%)
+        "atr_stop_multiplier": 1.5,        # ATR止损倍数(从2.0收紧到1.5)
+        "score_zero_cooldown": 3,          # 分数低于清仓线需连续N天才真正清仓(防whipsaw)
     },
 
     # --- 牛市模式参数 ---
@@ -87,21 +95,28 @@ SENTIMENT_CONFIG = {
         "score_z_top": 1.2,               # 情绪Z分数高位阈值
     },
 
+    # --- 分数驱动仓位参数 (Score-Driven Position Sizing) ---
+    "score_position": {
+        "full_pos_score": 72,       # 满仓分数线 (从80降到72, 更早满仓)
+        "half_pos_score": 58,       # 半仓分数线 (从65降到58, 更早半仓)
+        "zero_pos_score": 45,       # 清仓分数线 (从50降到45, 更宽容)
+    },
+
     # --- 回测与优化参数 ---
     "backtest": {
         "default_days": 365,
         "fee_rate": 0.0015,
         "leverage": 1.0,
-        "trend_floor_enabled": True,      # 牛市趋势下维持底仓
-        "trend_floor_pos": 0.35,          # 默认趋势底仓
+        "trend_floor_enabled": True,      # 趋势上行时维持底仓
+        "trend_floor_pos": 0.35,          # 趋势底仓
         "ma_window": 20,                  # 趋势判定均线
         "optimizer": {
             "enabled": True,
-            "target_total_return": 1.0,   # 100%
-            "leverage_grid": [1.0, 1.2, 1.5, 2.0, 2.5],
-            "trend_floor_grid": [0.0, 0.2, 0.35, 0.5, 0.7],
+            "target_total_return": 0.8,    # 80% (降低目标，优先控制风险)
+            "leverage_grid": [1.0, 1.2, 1.5, 2.0, 2.5, 3.0],
+            "trend_floor_grid": [0.0, 0.35, 0.5, 0.7, 0.85],
             "fee_rate_grid": [0.0015],
-            "max_drawdown_limit": 0.35
+            "max_drawdown_limit": 0.22     # 22% (放宽到22%让2.0x杠杆通过)
         }
     }
 }

@@ -62,12 +62,12 @@ class PositionState:
         
         profit_pct = ((current_price - self.entry_price) / self.entry_price) * 100
         if profit_pct > self.peak_profit:
-            self.peak_profit = current_price
+            self.peak_profit = profit_pct  # 存收益率，不是价格
         
         return {
             "hold_days": self.hold_days,
             "profit_pct": profit_pct,
-            "peak_profit_pct": ((self.peak_profit - self.entry_price) / self.entry_price) * 100,
+            "peak_profit_pct": self.peak_profit,  # 已经是百分比
             "entry_score": self.entry_score,
             "current_score": current_score,
             "score_change": current_score - self.entry_score
@@ -386,6 +386,17 @@ class SentimentAnalyst:
         if signal == "PLAN_HOLD":
             return current_pos
         return current_pos
+
+    def _score_to_position(self, score: float, full: float, half: float, zero: float) -> float:
+        """将情绪分数映射到目标仓位 (连续线性插值)"""
+        if score >= full:
+            return 1.0
+        elif score >= half:
+            return 0.5 + 0.5 * (score - half) / max(full - half, 1)
+        elif score >= zero:
+            return 0.5 * (score - zero) / max(half - zero, 1)
+        else:
+            return 0.0
 
     def _get_daily_data(self, date_str):
         return fetch_df(f"SELECT ts_code, open, high, low, close, pre_close, pct_chg, amount, vol FROM daily_price WHERE trade_date = '{date_str}' AND vol > 0")
@@ -1438,7 +1449,7 @@ class SentimentAnalyst:
             df_sent = fetch_df(query_sentiment)
             
             # 使用 000688.SH (科创50) 作为底层资产
-            query_price = "SELECT trade_date, open, close, pre_close, pct_chg FROM market_index WHERE ts_code='000688.SH' ORDER BY trade_date"
+            query_price = "SELECT trade_date, open, high, low, close, pre_close, pct_chg FROM market_index WHERE ts_code='000688.SH' ORDER BY trade_date"
             df_price = fetch_df(query_price)
             
             if df_sent.empty or df_price.empty:
@@ -1496,109 +1507,246 @@ class SentimentAnalyst:
             df['signal_code'] = df['details'].apply(parse_signal_code).fillna("PLAN_WATCH").astype(str)
             df['action'] = df.apply(lambda row: parse_action(row.get('details'), row.get('signal_code')), axis=1)
             
-            # === 有状态回测逻辑（由 action 驱动） ===
+            # === 预计算技术指标 ===
+            # ATR (14-period) for dynamic stop loss
+            df['tr'] = np.maximum(
+                df['high'] - df['low'],
+                np.maximum(
+                    (df['high'] - df['pre_close']).abs(),
+                    (df['low'] - df['pre_close']).abs()
+                )
+            )
+            df['atr14'] = df['tr'].rolling(14, min_periods=5).mean()
+            df['atr_pct'] = (df['atr14'] / df['close'] * 100).fillna(2.0)
             
-            # 初始化
+            # Score smoothing: 3-day EMA to reduce noise
+            df['score_filled'] = df['score'].ffill().fillna(50.0)
+            df['score_ema3'] = df['score_filled'].ewm(span=3, min_periods=1).mean()
+            df['score_v1'] = df['score_filled'].diff(3).fillna(0.0)
+            
+            # MA20 for trend filter
+            df['ma20'] = df['close'].rolling(20, min_periods=10).mean()
+            
+            # === 分数驱动仓位回测 ===
+            # 核心思路：用情绪分数连续映射到目标仓位，而非离散BUY/SELL信号
+            # 分数高→高仓位，分数低→低/零仓位
+            # 风控规则(止损/止盈/退潮)作为强制覆盖层
+            
+            sell_cfg = SENTIMENT_CONFIG.get('sell', {})
+            score_cfg = SENTIMENT_CONFIG.get('score_position', {})
+            score_full = float(score_cfg.get('full_pos_score', 80))
+            score_half = float(score_cfg.get('half_pos_score', 65))
+            score_zero = float(score_cfg.get('zero_pos_score', 50))
+            
             current_pos = 0.0
-            entry_price = 0
-            entry_score = 0
+            entry_price = 0.0
+            entry_score = 0.0
             hold_days = 0
+            peak_profit = 0.0
+            entry_date = None
+            days_below_zero = 0
+            
+            # 风控状态
+            consecutive_losses = 0          # 连续亏损计数
+            equity_peak = 1.0               # 权益峰值(用于计算回撤)
+            equity_current = 1.0            # 当前权益
+            circuit_breaker_active = False   # 熔断状态
+            
+            # 提前提取杠杆，用于风控计算
+            bt_cfg_pre = SENTIMENT_CONFIG.get("backtest", {})
+            leverage_pre = float((policy or {}).get("leverage", bt_cfg_pre.get("leverage", 1.0)))
+            
+            cons_loss_limit = int(sell_cfg.get('consecutive_loss_limit', 2))
+            cons_loss_scale = float(sell_cfg.get('consecutive_loss_scale', 0.5))
+            dd_breaker = float(sell_cfg.get('drawdown_circuit_breaker', -15.0))
+            dd_resume = float(sell_cfg.get('drawdown_resume', -8.0))
+            # 这里先用trade-level近似，后面会在向量化阶段做最终DD计算
             
             positions = []
             target_pos_list = []
-            
-            sell_cfg = SENTIMENT_CONFIG.get('sell', {})
-            # 初始化持仓变量
-            entry_date = None
             signal_stats = {"BUY": 0, "SELL": 0, "HOLD": 0, "WATCH": 0}
+            
+            def _record_trade(exit_date, exit_price, closed_pos, reason):
+                """记录一笔平仓交易"""
+                nonlocal consecutive_losses, equity_current, equity_peak, circuit_breaker_active
+                if entry_price <= 0 or closed_pos <= 0:
+                    return
+                pnl = (exit_price - entry_price) / entry_price * 100
+                positions.append({
+                    'entry_date': entry_date,
+                    'exit_date': exit_date,
+                    'entry_price': round(entry_price, 4),
+                    'exit_price': round(exit_price, 4),
+                    'profit_pct': round(pnl, 2),
+                    'hold_days': hold_days,
+                    'pos_closed': round(closed_pos, 3),
+                    'weighted_pnl': round(pnl * closed_pos, 2),
+                    'reason': reason
+                })
+                # 更新连亏计数
+                if pnl < 0:
+                    consecutive_losses += 1
+                else:
+                    consecutive_losses = 0
+                # 更新权益曲线(去杠杆：仅用仓位加权PnL，熔断基于真实仓位风险)
+                # 杠杆效果在向量化阶段的最终NAV计算中体现
+                equity_current *= (1 + pnl * closed_pos / 100)
+                if equity_current > equity_peak:
+                    equity_peak = equity_current
+                # 检查回撤熔断
+                dd_pct = (equity_current / equity_peak - 1) * 100 if equity_peak > 0 else 0
+                if dd_pct < dd_breaker:
+                    circuit_breaker_active = True
+                elif dd_pct > dd_resume:
+                    circuit_breaker_active = False
+            
+            def _reset_position():
+                nonlocal current_pos, entry_price, entry_score, hold_days, peak_profit, entry_date, days_below_zero
+                current_pos = 0.0
+                entry_price = 0.0
+                entry_score = 0.0
+                hold_days = 0
+                peak_profit = 0.0
+                entry_date = None
+                days_below_zero = 0
             
             for i, row in df.iterrows():
                 action = row['action']
                 signal = row['signal_code']
                 current_price = row['close']
-                current_score = float(row['score']) if row['score'] is not None else 50.0
+                raw_score = float(row['score']) if row['score'] is not None else 50.0
+                smooth_score = float(row.get('score_ema3', raw_score))
                 signal_stats[action] = signal_stats.get(action, 0) + 1
+                atr_pct = float(row.get('atr_pct', 2.0))
+                score_v1 = float(row.get('score_v1', 0.0))
+                ma20 = float(row.get('ma20', current_price))
                 
                 target_pos = 0.0
                 
                 if current_pos > 0:
                     hold_days += 1
                     profit_pct = (current_price - entry_price) / entry_price * 100 if entry_price > 0 else 0
+                    if profit_pct > peak_profit:
+                        peak_profit = profit_pct
                     
-                    # 卖出检测
-                    should_sell = False
-                    sell_reason = ""
+                    force_exit = False
+                    exit_reason = ""
                     
-                    # 1. 止损
-                    if profit_pct < sell_cfg.get('stop_loss', -5):
-                        should_sell = True
-                        sell_reason = "止损"
+                    # === 风控层（强制退出）===
+                    # 1. 动态ATR止损
+                    fixed_stop = sell_cfg.get('stop_loss', -4)
+                    atr_mult = sell_cfg.get('atr_stop_multiplier', 1.5)
+                    atr_stop = -(atr_pct * atr_mult)
+                    dynamic_stop = min(fixed_stop, atr_stop)
+                    if profit_pct < dynamic_stop:
+                        force_exit = True
+                        exit_reason = "止损"
                     
-                    # 2. 止盈 (简化版)
-                    elif profit_pct >= sell_cfg.get('profit_take', 8):
-                        should_sell = True
-                        sell_reason = "止盈"
+                    # 2. 移动止盈 (trailing stop)
+                    elif peak_profit >= sell_cfg.get('trailing_profit_floor', 4.0):
+                        pullback = peak_profit - profit_pct
+                        if pullback >= sell_cfg.get('trailing_pullback', 3.5):
+                            force_exit = True
+                            exit_reason = "移动止盈"
                     
-                    # 3. 最大持仓天数
+                    # 3. 固定止盈上限
+                    elif profit_pct >= sell_cfg.get('profit_take', 8) * 1.5:
+                        force_exit = True
+                        exit_reason = "止盈"
+                    
+                    # 4. 最大持仓天数
                     elif hold_days >= sell_cfg.get('max_hold_days', 20):
-                        should_sell = True
-                        sell_reason = "到期"
+                        force_exit = True
+                        exit_reason = "到期"
                     
-                    # 4. 情绪退潮 (分数从高位回落)
-                    elif entry_score > 50 and (current_score - entry_score) < -sell_cfg.get('cooldown_score_drop', 20):
-                        should_sell = True
-                        sell_reason = "退潮"
-                    
-                    # 5. 显式卖出动作（允许分批）
-                    elif action == "SELL" and signal != "PLAN_SELL_PARTIAL":
-                        should_sell = True
-                        sell_reason = signal or "SELL_ALL"
-                    
-                    if should_sell:
-                        exit_pos = 0.0
-                        positions.append({
-                            'entry_date': entry_date,
-                            'exit_date': row['trade_date'],
-                            'entry_price': entry_price,
-                            'exit_price': current_price,
-                            'profit_pct': profit_pct,
-                            'hold_days': hold_days,
-                            'reason': sell_reason
-                        })
-                        current_pos = exit_pos
+                    if force_exit:
+                        _record_trade(row['trade_date'], current_price, current_pos, exit_reason)
+                        target_pos = 0.0
+                        _reset_position()
                     else:
-                        desired_pos = current_pos
-                        if action == "SELL":
-                            desired_pos = self._target_position_from_signal(signal, current_pos)
+                        # === 信号层 + 分数仓位调节 ===
+                        if action == "SELL" and signal != "PLAN_SELL_PARTIAL":
+                            if hold_days >= 2 and (smooth_score < score_half or profit_pct < -2.0):
+                                # SELL信号 + 分数跌破半仓线 或 浮亏超2% → 清仓
+                                _record_trade(row['trade_date'], current_price, current_pos, signal or "SELL")
+                                target_pos = 0.0
+                                _reset_position()
+                            elif smooth_score < score_full and hold_days >= 3:
+                                # SELL信号 + 分数低于满仓线 + 持仓3天 → 小幅减仓
+                                score_pos = self._score_to_position(smooth_score, score_full, score_half, score_zero)
+                                desired = max(score_pos, 0.5)
+                                if desired < current_pos:
+                                    delta = current_pos - desired
+                                    _record_trade(row['trade_date'], current_price, delta, "信号减仓")
+                                    current_pos = desired
+                                target_pos = current_pos
+                            else:
+                                # 分数仍强(>=score_full)或持仓不足3天 → 完全忽略SELL信号
+                                target_pos = current_pos
                         elif action == "BUY":
-                            desired_pos = max(current_pos, self._target_position_from_signal(signal, current_pos))
-
-                        if desired_pos < current_pos and desired_pos > 0:
-                            positions.append({
-                                'entry_date': entry_date,
-                                'exit_date': row['trade_date'],
-                                'entry_price': entry_price,
-                                'exit_price': current_price,
-                                'profit_pct': profit_pct,
-                                'hold_days': hold_days,
-                                'reason': signal or "PARTIAL"
-                            })
-                        current_pos = desired_pos
-                        target_pos = current_pos
+                            # 加仓到信号建议仓位，上限由分数决定
+                            signal_pos = self._target_position_from_signal(signal, current_pos)
+                            score_pos = self._score_to_position(smooth_score, score_full, score_half, score_zero)
+                            desired = min(max(signal_pos, current_pos), max(score_pos, 0.5))
+                            if desired > current_pos:
+                                add_pos = desired - current_pos
+                                new_total = current_pos + add_pos
+                                entry_price = (entry_price * current_pos + current_price * add_pos) / new_total
+                                current_pos = new_total
+                            target_pos = current_pos
+                        else:
+                            # HOLD/WATCH — 根据分数微调仓位
+                            score_pos = self._score_to_position(smooth_score, score_full, score_half, score_zero)
+                            if score_pos < current_pos * 0.5 and hold_days >= 3:
+                                # 分数大幅低于当前仓位，逐步减仓
+                                desired = max(current_pos * 0.7, score_pos, 0.15)
+                                if desired < current_pos:
+                                    delta = current_pos - desired
+                                    _record_trade(row['trade_date'], current_price, delta, "分数减仓")
+                                    current_pos = desired
+                            target_pos = current_pos
                 else:
-                    # 买入动作
-                    if action == "BUY":
-                        current_pos = self._target_position_from_signal(signal, 0.0)
+                    # 空仓 → BUY信号建仓，或HOLD/WATCH但分数足够强也建仓
+                    # === 风控：熔断检查 ===
+                    if circuit_breaker_active:
+                        target_pos = 0.0  # 熔断中，禁止开仓
+                    elif action == "BUY":
+                        score_pos = self._score_to_position(smooth_score, score_full, score_half, score_zero)
+                        signal_pos = self._target_position_from_signal(signal, 0.0)
+                        target_pos = max(signal_pos, score_pos, 0.5)
+                        # === 风控：波动率缩仓 (ATR高于正常水平时降仓) ===
+                        if atr_pct > 2.5:
+                            vol_scale = min(1.0, 2.0 / atr_pct)  # ATR=3%→scale=0.67, ATR=4%→0.5
+                            target_pos *= vol_scale
+                            target_pos = max(target_pos, 0.2)
+                        # === 风控：连亏降仓 ===
+                        if consecutive_losses >= cons_loss_limit:
+                            target_pos *= cons_loss_scale
+                            target_pos = max(target_pos, 0.2)  # 最低保留20%仓位
+                        current_pos = target_pos
                         entry_price = current_price
-                        entry_score = current_score
+                        entry_score = raw_score
                         entry_date = row['trade_date']
                         hold_days = 0
-                        target_pos = current_pos
-
-                if current_pos <= 0:
-                    entry_price = 0
-                    entry_score = 0
-                    hold_days = 0
+                        peak_profit = 0.0
+                    elif action in ("HOLD", "WATCH") and smooth_score >= score_full:
+                        # 分数很强但信号系统没给BUY → 主动建仓
+                        target_pos = 0.5
+                        # === 风控：波动率缩仓 ===
+                        if atr_pct > 2.5:
+                            vol_scale = min(1.0, 2.0 / atr_pct)
+                            target_pos *= vol_scale
+                            target_pos = max(target_pos, 0.2)
+                        # === 风控：连亏降仓 ===
+                        if consecutive_losses >= cons_loss_limit:
+                            target_pos *= cons_loss_scale
+                            target_pos = max(target_pos, 0.2)
+                        current_pos = target_pos
+                        entry_price = current_price
+                        entry_score = raw_score
+                        entry_date = row['trade_date']
+                        hold_days = 0
+                        peak_profit = 0.0
                 
                 target_pos_list.append(target_pos)
             
@@ -1637,10 +1785,58 @@ class SentimentAnalyst:
             max_drawdown = (df['strat_cum_ret'] / df['strat_cum_ret'].cummax() - 1).min()
             
             active_days = df[df['pos_held'] > 0]
-            win_rate = len(active_days[active_days['bench_ret'] > 0]) / len(active_days) if len(active_days) > 0 else 0
+            
+            # 修正胜率：基于每笔交易的盈亏，而非持仓日指数涨跌
+            trade_wins = len([p for p in positions if p['profit_pct'] > 0])
+            trade_count = max(len(positions), 1)
+            trade_win_rate = trade_wins / trade_count
+            
+            # 旧的日级胜率保留作为参考
+            day_win_rate = len(active_days[active_days['bench_ret'] > 0]) / len(active_days) if len(active_days) > 0 else 0
             
             # 计算夏普比率 (简略版)
             sharpe = (df['strat_ret_net'].mean() / df['strat_ret_net'].std() * np.sqrt(242)) if df['strat_ret_net'].std() > 0 else 0
+
+            # === 信号归因分析 (仓位加权) ===
+            from collections import defaultdict
+            signal_attr = defaultdict(lambda: {'count': 0, 'wins': 0, 'losses': 0, 
+                                                'total_pnl': 0.0, 'total_weighted_pnl': 0.0,
+                                                'total_pos': 0.0, 'avg_hold': 0.0, 'pnl_list': []})
+            for p in positions:
+                reason = p.get('reason', 'unknown')
+                pnl = p['profit_pct']
+                wpnl = p.get('weighted_pnl', pnl)
+                pos_closed = p.get('pos_closed', 1.0)
+                signal_attr[reason]['count'] += 1
+                signal_attr[reason]['total_pnl'] += pnl
+                signal_attr[reason]['total_weighted_pnl'] += wpnl
+                signal_attr[reason]['total_pos'] += pos_closed
+                signal_attr[reason]['avg_hold'] += p.get('hold_days', 0)
+                signal_attr[reason]['pnl_list'].append(pnl)
+                if pnl > 0:
+                    signal_attr[reason]['wins'] += 1
+                else:
+                    signal_attr[reason]['losses'] += 1
+            
+            attribution = {}
+            for reason, stats in signal_attr.items():
+                cnt = stats['count']
+                wins = stats['wins']
+                pnl_list = stats['pnl_list']
+                avg_win = sum(x for x in pnl_list if x > 0) / max(wins, 1)
+                avg_loss = sum(x for x in pnl_list if x <= 0) / max(stats['losses'], 1)
+                attribution[reason] = {
+                    'count': cnt,
+                    'win_rate': f"{wins / cnt * 100:.1f}%",
+                    'avg_pnl': f"{stats['total_pnl'] / cnt:.2f}%",
+                    'total_pnl': f"{stats['total_pnl']:.2f}%",
+                    'weighted_pnl': f"{stats['total_weighted_pnl']:.2f}%",
+                    'avg_pos_closed': f"{stats['total_pos'] / cnt:.2f}",
+                    'avg_win': f"{avg_win:.2f}%",
+                    'avg_loss': f"{avg_loss:.2f}%",
+                    'profit_factor': f"{abs(avg_win / avg_loss):.2f}" if avg_loss != 0 else "inf",
+                    'avg_hold_days': round(stats['avg_hold'] / cnt, 1)
+                }
 
             df = df.fillna(0)
             df['trade_date'] = df['trade_date'].dt.strftime('%Y-%m-%d')
@@ -1650,10 +1846,12 @@ class SentimentAnalyst:
                     "total_return": f"{total_return*100:.2f}%",
                     "annual_return": f"{(total_return / len(df) * 242)*100:.2f}%",
                     "max_drawdown": f"{max_drawdown*100:.2f}%",
-                    "win_rate": f"{win_rate*100:.2f}%",
+                    "win_rate": f"{trade_win_rate*100:.2f}%",
+                    "day_win_rate": f"{day_win_rate*100:.2f}%",
                     "sharpe": f"{sharpe:.2f}",
                     "benchmark_return": f"{bench_return*100:.2f}%",
                     "active_days_ratio": f"{len(active_days)/len(df)*100:.1f}%",
+                    "total_trades": len(positions),
                     "buy_signals": int(signal_stats.get("BUY", 0)),
                     "sell_signals": int(signal_stats.get("SELL", 0)),
                     "hold_signals": int(signal_stats.get("HOLD", 0)),
@@ -1661,6 +1859,20 @@ class SentimentAnalyst:
                     "leverage": round(leverage, 2),
                     "trend_floor_pos": round(trend_floor_pos, 2) if trend_floor_enabled else 0.0
                 },
+                "attribution": attribution,
+                "trades": [
+                    {
+                        "entry_date": str(p['entry_date'])[:10],
+                        "exit_date": str(p['exit_date'])[:10],
+                        "entry_price": round(p['entry_price'], 2),
+                        "exit_price": round(p['exit_price'], 2),
+                        "profit_pct": round(p['profit_pct'], 2),
+                        "weighted_pnl": round(p.get('weighted_pnl', p['profit_pct']), 2),
+                        "pos_closed": round(p.get('pos_closed', 1.0), 3),
+                        "hold_days": p['hold_days'],
+                        "reason": p['reason']
+                    } for p in positions
+                ],
                 "policy": {
                     "leverage": leverage,
                     "fee_rate": fee_rate,
@@ -1711,18 +1923,234 @@ class SentimentAnalyst:
                     total_ret = float(str(m.get("total_return", "0%")).replace("%", "")) / 100.0
                     max_dd = abs(float(str(m.get("max_drawdown", "0%")).replace("%", "")) / 100.0)
                     sharpe = float(m.get("sharpe", 0))
-                    penalty = max(0.0, max_dd - max_dd_limit) * 2.5
-                    score = total_ret * 2.0 + sharpe * 0.1 - penalty
+                    logger.info(f"优化器: lev={lev}, floor={floor}, ret={total_ret*100:.1f}%, dd={max_dd*100:.1f}%, sharpe={sharpe:.2f}")
+                    # 风险优先评分：DD超限直接淘汰
+                    if max_dd > max_dd_limit:
+                        continue  # 硬性淘汰，DD超限的组合不参与排名
+                    score = total_ret * 1.0 + sharpe * 0.5 - max_dd * 2.0
 
                     if total_ret >= target:
-                        score += 5.0
+                        score += 2.0
 
                     if score > best_score:
                         best_score = score
                         best_res = res
                         best_policy = policy
 
+        # 如果所有组合都被DD硬限淘汰，放宽限制选最小DD的
+        if best_res is None:
+            logger.warning(f"优化器: 所有组合DD超限({max_dd_limit*100:.0f}%), 回退选最小DD组合")
+            fallback_best = None
+            fallback_dd = 1e9
+            for lev in leverage_grid:
+                for floor in trend_floor_grid:
+                    for fee in fee_rate_grid:
+                        policy = {
+                            "leverage": float(lev),
+                            "trend_floor_enabled": True,
+                            "trend_floor_pos": float(floor),
+                            "fee_rate": float(fee),
+                            "ma_window": int(bt_cfg.get("ma_window", 20))
+                        }
+                        res = self.backtest_star50(initial_capital=initial_capital, start_date=start_date, policy=policy)
+                        if not res:
+                            continue
+                        m = res.get("metrics", {})
+                        max_dd = abs(float(str(m.get("max_drawdown", "0%")).replace("%", "")) / 100.0)
+                        if max_dd < fallback_dd:
+                            fallback_dd = max_dd
+                            fallback_best = (res, policy)
+            if fallback_best:
+                best_res, best_policy = fallback_best
+
         return best_res, best_policy
+
+    def walk_forward_backtest(self, initial_capital=100000, train_days=120, test_days=40):
+        """
+        Walk-Forward 回测：滚动窗口训练+验证，消除 in-sample 过拟合。
+        - train_days: 训练窗口（用于网格搜索最优参数）
+        - test_days: 测试窗口（用训练得到的参数跑 out-of-sample）
+        - 所有信号基于 T 日收盘数据，T+1 日开盘执行（已由 backtest_star50 内部保证）
+        """
+        import pandas as pd
+
+        bt_cfg = SENTIMENT_CONFIG.get("backtest", {})
+        opt_cfg = bt_cfg.get("optimizer", {})
+        leverage_grid = opt_cfg.get("leverage_grid", [1.0, 1.2, 1.5, 2.0])
+        trend_floor_grid = opt_cfg.get("trend_floor_grid", [0.0, 0.2, 0.35, 0.5])
+        fee_rate = float(bt_cfg.get("fee_rate", 0.0015))
+        ma_window = int(bt_cfg.get("ma_window", 20))
+        max_dd_limit = float(opt_cfg.get("max_drawdown_limit", 0.35))
+
+        # 获取全部可用日期
+        all_dates_df = fetch_df(
+            "SELECT DISTINCT trade_date FROM market_sentiment ORDER BY trade_date"
+        )
+        if all_dates_df.empty or len(all_dates_df) < train_days + test_days:
+            logger.warning("Walk-forward: 数据不足")
+            return None
+
+        all_dates = [str(d)[:10] for d in all_dates_df['trade_date'].tolist()]
+        total = len(all_dates)
+
+        windows = []
+        all_test_trades = []
+        all_test_curves = []
+        cumulative_nav = initial_capital
+
+        idx = 0
+        while idx + train_days + test_days <= total:
+            train_start = all_dates[idx]
+            train_end = all_dates[idx + train_days - 1]
+            test_start = all_dates[idx + train_days]
+            test_end_idx = min(idx + train_days + test_days - 1, total - 1)
+            test_end = all_dates[test_end_idx]
+
+            # --- 训练阶段：在 train 窗口上网格搜索最优参数 ---
+            best_score = -1e9
+            best_policy = None
+            for lev in leverage_grid:
+                for floor in trend_floor_grid:
+                    policy = {
+                        "leverage": float(lev),
+                        "trend_floor_enabled": True,
+                        "trend_floor_pos": float(floor),
+                        "fee_rate": fee_rate,
+                        "ma_window": ma_window
+                    }
+                    res = self.backtest_star50(
+                        initial_capital=100000,
+                        start_date=train_start,
+                        policy=policy
+                    )
+                    if not res:
+                        continue
+                    m = res.get("metrics", {})
+                    # 只取 train 窗口内的数据
+                    curves = res.get("curves", [])
+                    train_curves = [c for c in curves if c['trade_date'] <= train_end]
+                    if not train_curves:
+                        continue
+
+                    total_ret = float(str(m.get("total_return", "0%")).replace("%", "")) / 100.0
+                    max_dd = abs(float(str(m.get("max_drawdown", "0%")).replace("%", "")) / 100.0)
+                    sharpe = float(m.get("sharpe", 0))
+                    penalty = max(0.0, max_dd - max_dd_limit) * 2.5
+                    score = total_ret * 2.0 + sharpe * 0.1 - penalty
+
+                    if score > best_score:
+                        best_score = score
+                        best_policy = policy
+
+            if best_policy is None:
+                best_policy = {
+                    "leverage": 1.0, "trend_floor_enabled": True,
+                    "trend_floor_pos": 0.0, "fee_rate": fee_rate, "ma_window": ma_window
+                }
+
+            # --- 测试阶段：用训练得到的参数跑 test 窗口 ---
+            test_res = self.backtest_star50(
+                initial_capital=cumulative_nav,
+                start_date=test_start,
+                policy=best_policy
+            )
+
+            window_info = {
+                "train": f"{train_start} ~ {train_end}",
+                "test": f"{test_start} ~ {test_end}",
+                "policy": best_policy,
+            }
+
+            if test_res:
+                test_curves = [c for c in test_res.get("curves", [])
+                               if test_start <= c['trade_date'] <= test_end]
+                test_trades = [t for t in test_res.get("trades", [])
+                               if test_start <= t['entry_date'] <= test_end]
+
+                if test_curves:
+                    cumulative_nav = test_curves[-1].get('strategy_nav', cumulative_nav)
+                    all_test_curves.extend(test_curves)
+
+                all_test_trades.extend(test_trades)
+
+                tm = test_res.get("metrics", {})
+                window_info["test_return"] = tm.get("total_return", "N/A")
+                window_info["test_max_dd"] = tm.get("max_drawdown", "N/A")
+                window_info["test_trades"] = len(test_trades)
+            else:
+                window_info["test_return"] = "N/A"
+                window_info["test_max_dd"] = "N/A"
+                window_info["test_trades"] = 0
+
+            windows.append(window_info)
+            idx += test_days  # 滚动前进
+
+        # --- 汇总 out-of-sample 结果 ---
+        oos_total_return = (cumulative_nav / initial_capital) - 1
+        oos_trade_count = len(all_test_trades)
+        oos_wins = len([t for t in all_test_trades if t['profit_pct'] > 0])
+        oos_win_rate = oos_wins / max(oos_trade_count, 1)
+
+        # 计算 OOS 最大回撤
+        oos_max_dd = 0.0
+        if all_test_curves:
+            navs = [c.get('strategy_nav', initial_capital) for c in all_test_curves]
+            peak = navs[0]
+            for nav in navs:
+                if nav > peak:
+                    peak = nav
+                dd = (nav - peak) / peak
+                if dd < oos_max_dd:
+                    oos_max_dd = dd
+
+        trading_days = len(all_test_curves) if all_test_curves else 1
+        oos_annual = oos_total_return / trading_days * 242
+
+        # OOS 信号归因
+        from collections import defaultdict
+        oos_attr = defaultdict(lambda: {'count': 0, 'wins': 0, 'total_pnl': 0.0})
+        for t in all_test_trades:
+            r = t.get('reason', 'unknown')
+            oos_attr[r]['count'] += 1
+            oos_attr[r]['total_pnl'] += t['profit_pct']
+            if t['profit_pct'] > 0:
+                oos_attr[r]['wins'] += 1
+
+        attribution = {}
+        for reason, s in oos_attr.items():
+            cnt = s['count']
+            attribution[reason] = {
+                'count': cnt,
+                'win_rate': f"{s['wins'] / cnt * 100:.1f}%",
+                'avg_pnl': f"{s['total_pnl'] / cnt:.2f}%",
+                'total_pnl': f"{s['total_pnl']:.2f}%",
+            }
+
+        result = {
+            "method": "walk_forward",
+            "train_days": train_days,
+            "test_days": test_days,
+            "total_windows": len(windows),
+            "metrics": {
+                "oos_total_return": f"{oos_total_return * 100:.2f}%",
+                "oos_annual_return": f"{oos_annual * 100:.2f}%",
+                "oos_max_drawdown": f"{oos_max_dd * 100:.2f}%",
+                "oos_win_rate": f"{oos_win_rate * 100:.2f}%",
+                "oos_total_trades": oos_trade_count,
+                "oos_trading_days": trading_days,
+            },
+            "attribution": attribution,
+            "windows": windows,
+            "trades": all_test_trades,
+        }
+
+        logger.info(
+            f"Walk-forward 完成: {len(windows)} 窗口, "
+            f"OOS收益={oos_total_return*100:.2f}%, "
+            f"OOS回撤={oos_max_dd*100:.2f}%, "
+            f"OOS胜率={oos_win_rate*100:.1f}%"
+        )
+        return result
 
     def generate_report(self):
         """

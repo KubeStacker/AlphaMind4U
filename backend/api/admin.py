@@ -655,12 +655,85 @@ def get_backtest_result(optimize: bool = True):
             "status": "success",
             "data": {
                 "metrics": result.get("metrics", {}),
+                "attribution": result.get("attribution", {}),
+                "trades": result.get("trades", []),
                 "policy": best_policy or result.get("policy", {}),
                 "generated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             }
         }
     except Exception as e:
         logger.error(f"获取回测结果失败: {e}")
+        return {"status": "error", "message": str(e)}
+
+@router.get("/backtest_grid")
+def get_backtest_grid():
+    """诊断：对每个leverage+floor组合跑回测，返回metrics对比"""
+    try:
+        from strategy.sentiment import sentiment_analyst
+        from strategy.sentiment.config import SENTIMENT_CONFIG
+        bt_cfg = SENTIMENT_CONFIG.get("backtest", {})
+        opt_cfg = bt_cfg.get("optimizer", {})
+        leverage_grid = opt_cfg.get("leverage_grid", [1.0, 1.2, 1.5, 2.0])
+        trend_floor_grid = opt_cfg.get("trend_floor_grid", [0.0])
+        max_dd_limit = float(opt_cfg.get("max_drawdown_limit", 0.35))
+
+        results = []
+        for lev in leverage_grid:
+            for floor in trend_floor_grid:
+                policy = {
+                    "leverage": float(lev),
+                    "trend_floor_enabled": True,
+                    "trend_floor_pos": float(floor),
+                    "fee_rate": float(bt_cfg.get("fee_rate", 0.0015)),
+                    "ma_window": int(bt_cfg.get("ma_window", 20))
+                }
+                res = sentiment_analyst.backtest_star50(initial_capital=100000, policy=policy)
+                if not res:
+                    continue
+                m = res.get("metrics", {})
+                total_ret = float(str(m.get("total_return", "0%")).replace("%", "")) / 100.0
+                max_dd = abs(float(str(m.get("max_drawdown", "0%")).replace("%", "")) / 100.0)
+                sharpe = float(m.get("sharpe", 0))
+                score = total_ret * 1.0 + sharpe * 0.5 - max_dd * 2.0
+                if total_ret >= float(opt_cfg.get("target_total_return", 1.0)):
+                    score += 2.0
+                passed = max_dd <= max_dd_limit
+                results.append({
+                    "leverage": lev, "floor": floor,
+                    "return": f"{total_ret*100:.2f}%",
+                    "max_dd": f"{max_dd*100:.2f}%",
+                    "sharpe": round(sharpe, 2),
+                    "score": round(score, 4),
+                    "dd_passed": passed,
+                    "trades": m.get("total_trades"),
+                    "win_rate": m.get("win_rate"),
+                })
+        return {"status": "success", "dd_limit": f"{max_dd_limit*100:.0f}%", "grid": results}
+    except Exception as e:
+        logger.error(f"回测网格诊断失败: {e}")
+        import traceback; traceback.print_exc()
+        return {"status": "error", "message": str(e)}
+
+@router.get("/backtest_walkforward")
+def get_walkforward_result(train_days: int = 120, test_days: int = 40):
+    """Walk-Forward 回测：滚动窗口训练+验证，消除过拟合"""
+    try:
+        from strategy.sentiment import sentiment_analyst
+        import datetime
+
+        result = sentiment_analyst.walk_forward_backtest(
+            train_days=train_days, test_days=test_days
+        )
+        if not result:
+            return {"status": "error", "message": "数据不足，无法执行 walk-forward 回测"}
+
+        return {
+            "status": "success",
+            "data": result,
+            "generated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+    except Exception as e:
+        logger.error(f"Walk-forward 回测失败: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}
 
 @router.get("/mainline_history")
