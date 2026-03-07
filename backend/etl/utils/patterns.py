@@ -8,16 +8,37 @@ get_professional_commentary 接口不变，供 admin.py 等模块复用。
 import pandas as pd
 import numpy as np
 import logging
+from pathlib import Path
 
 from etl.utils.kline_patterns import (
+    DEFAULT_CALIBRATION_PATH,
     detect_all_patterns,
     get_latest_signals,
+    load_pattern_calibration,
     PATTERN_CN_MAP,
     BULLISH_PATTERNS,
     BEARISH_PATTERNS,
 )
 
 logger = logging.getLogger(__name__)
+_PATTERN_CALIBRATION_CACHE: dict | None = None
+_PATTERN_CALIBRATION_MTIME: float | None = None
+
+
+def _get_pattern_calibration() -> dict:
+    global _PATTERN_CALIBRATION_CACHE, _PATTERN_CALIBRATION_MTIME
+
+    target = Path(DEFAULT_CALIBRATION_PATH)
+    current_mtime = target.stat().st_mtime if target.exists() else None
+    should_reload = (
+        _PATTERN_CALIBRATION_CACHE is None
+        or current_mtime != _PATTERN_CALIBRATION_MTIME
+    )
+
+    if should_reload:
+        _PATTERN_CALIBRATION_CACHE = load_pattern_calibration()
+        _PATTERN_CALIBRATION_MTIME = current_mtime
+    return _PATTERN_CALIBRATION_CACHE or {}
 
 
 class PatternRecognizer:
@@ -60,7 +81,11 @@ class PatternRecognizer:
 
         try:
             result_df = detect_all_patterns(self.df)
-            self.signals = get_latest_signals(result_df, min_confidence)
+            self.signals = get_latest_signals(
+                result_df,
+                min_confidence=min_confidence,
+                calibration=_get_pattern_calibration(),
+            )
             return [s['pattern'] for s in self.signals]
         except Exception as e:
             logger.error(f"形态识别异常: {e}", exc_info=True)
@@ -79,7 +104,11 @@ class PatternRecognizer:
 
         try:
             result_df = detect_all_patterns(self.df)
-            self.signals = get_latest_signals(result_df, min_confidence)
+            self.signals = get_latest_signals(
+                result_df,
+                min_confidence=min_confidence,
+                calibration=_get_pattern_calibration(),
+            )
             return self.signals
         except Exception as e:
             logger.error(f"形态识别异常: {e}", exc_info=True)
@@ -544,6 +573,13 @@ def get_professional_commentary_detailed(df: pd.DataFrame, patterns: list) -> di
                 "pattern": "红三兵",
                 "desc": "多头稳步推进，底部逐步抬升，趋势向好"
             })
+        if p_set & {'曙光初现'}:
+            pattern_view.append({
+                "type": "bullish",
+                "level": "medium",
+                "pattern": "曙光初现",
+                "desc": "空头衰竭后资金回补，属于经典止跌转强信号"
+            })
         if p_set & {'放量突破'}:
             pattern_view.append({
                 "type": "bullish",
@@ -574,14 +610,14 @@ def get_professional_commentary_detailed(df: pd.DataFrame, patterns: list) -> di
             })
 
         # 反转形态
-        if p_set & {'锤子线', '启明星', '早晨之星'}:
+        if p_set & {'锤子线', '启明星', '早晨之星', '曙光初现', '看涨吞没'}:
             pattern_view.append({
                 "type": "reversal_bull",
                 "level": "medium",
                 "pattern": "底部反转",
                 "desc": "出现底部反转信号，空头动能衰竭，多头开始反攻"
             })
-        if p_set & {'三只乌鸦', '黄昏星', '顶分型'}:
+        if p_set & {'三只乌鸦', '黄昏星', '顶分型', '乌云盖顶', '看跌吞没'}:
             pattern_view.append({
                 "type": "reversal_bear",
                 "level": "medium",
@@ -594,6 +630,13 @@ def get_professional_commentary_detailed(df: pd.DataFrame, patterns: list) -> di
                 "level": "light",
                 "pattern": "射击之星",
                 "desc": "上影线较长，警惕短期回调"
+            })
+        if p_set & {'乌云盖顶'}:
+            pattern_view.append({
+                "type": "warning",
+                "level": "warning",
+                "pattern": "乌云盖顶",
+                "desc": "强势区被空头反压，若次日继续走弱宜减仓控制风险"
             })
 
         # 警示形态

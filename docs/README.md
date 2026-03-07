@@ -2,6 +2,11 @@
 
 FastAPI 后端与 Vue 3 前端构建。
 
+## 专题文档
+
+- [经典 K 线识别引擎设计说明](./kline-pattern-recognition.md)
+- [经典 K 线识别实施与测试路线](./kline-pattern-implementation-playbook.md)
+
 ## 快速启动
 
 ### 后端
