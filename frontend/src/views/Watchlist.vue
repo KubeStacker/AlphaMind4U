@@ -70,16 +70,16 @@
     </div>
 
     <!-- 行情列表 -->
-    <div v-if="!zenMode" class="bg-business-dark p-4 rounded-2xl shadow-lg border border-business-light overflow-x-auto min-h-[400px]">
+    <div v-if="!zenMode" class="bg-business-dark p-2 sm:p-4 rounded-2xl shadow-lg border border-business-light overflow-x-auto min-h-[400px]">
       <table class="w-full text-xs">
         <thead>
           <tr class="text-slate-400 border-b border-slate-700">
-            <th class="text-left py-2 pr-2 w-20">代码</th>
-            <th class="text-left py-2 pr-2 w-20">名称</th>
-            <th class="text-right py-2 pr-2 w-16">最新价</th>
-            <th class="text-right py-2 pr-2 w-16">涨跌幅</th>
-            <th class="text-left py-2">专业点评</th>
-            <th class="text-right py-2 w-16">操作</th>
+            <th class="text-left py-2 px-1 w-20">代码</th>
+            <th class="text-left py-2 px-1 w-20">名称</th>
+            <th class="text-right py-2 px-1 w-16">价</th>
+            <th class="text-right py-2 px-1 w-16">涨跌</th>
+            <th class="text-left py-2 px-1 w-auto">点评</th>
+            <th class="text-right py-2 px-1 w-10"></th>
           </tr>
         </thead>
         <tbody>
@@ -89,66 +89,65 @@
           <tr
             v-for="item in rows"
             :key="item.ts_code"
-            class="border-b border-slate-800/70 hover:bg-slate-900/40 group transition-colors"
+            class="border-b border-slate-800/70 hover:bg-slate-900/40 transition-colors"
           >
-            <td data-kline-trigger="1" class="py-3 pr-2 text-slate-200 font-semibold font-mono cursor-pointer hover:text-business-accent" @click.stop="toggleKline(item, $event)">{{ item.ts_code }}</td>
-            <td data-kline-trigger="1" class="py-3 pr-2 text-slate-300 font-bold whitespace-nowrap cursor-pointer hover:text-business-accent" @click.stop="toggleKline(item, $event)">{{ item.name || '-' }}</td>
-            <td class="py-3 pr-2 text-right text-slate-200 font-mono text-sm">{{ fmt(item.price, 2) }}</td>
-            <td class="py-3 pr-2 text-right font-mono text-sm" :class="numColor(item.pct)">{{ fmt(item.pct, 2, '%') }}</td>
-            <td class="py-3 text-slate-300">
-              <div class="flex flex-col gap-1.5">
-                <div class="flex items-start gap-2">
+            <td data-kline-trigger="1" class="py-2 px-1 text-slate-200 font-semibold font-mono text-[11px] cursor-pointer hover:text-business-accent" @click.stop="toggleKline(item, $event)">{{ item.ts_code }}</td>
+            <td data-kline-trigger="1" class="py-2 px-1 text-slate-300 font-bold whitespace-nowrap text-[11px] cursor-pointer hover:text-business-accent" @click.stop="toggleKline(item, $event)">{{ item.name || '-' }}</td>
+            <td class="py-2 px-1 text-right text-slate-200 font-mono text-[11px]">{{ fmt(item.price, 2) }}</td>
+            <td class="py-2 px-1 text-right font-mono text-[11px]" :class="numColor(item.pct)">{{ fmt(item.pct, 2, '%') }}</td>
+            <td class="py-2 px-1 text-slate-300">
+              <div class="flex flex-col gap-0.5">
+                <div class="flex items-center gap-1 flex-wrap">
                   <span
                     v-if="item.analyze?.suggestion"
-                    class="px-1.5 py-0.5 rounded text-[10px] font-bold shrink-0"
+                    class="px-1 py-0.5 rounded text-[8px] font-bold"
                     :class="suggestionColor(item.analyze.suggestion)"
                   >
                     {{ item.analyze.suggestion }}
                   </span>
-                  <div class="flex-1 min-w-0">
-                    <div class="text-slate-200 text-[11px] leading-relaxed space-y-0.5">
+                  <span class="text-[7px] text-slate-500 uppercase font-mono">10D</span>
+                  <div class="flex items-center gap-1">
+                    <div
+                      v-for="(day, idx) in [...(item.analyze?.history || [])].reverse()"
+                      :key="idx"
+                      class="relative"
+                    >
                       <div
-                        v-for="(segment, idx) in parseCommentary(item.analyze?.summary)"
-                        :key="idx"
-                        class="flex items-start gap-1.5"
+                        class="w-2 h-2 sm:w-2.5 sm:h-2.5 rounded cursor-pointer"
+                        :class="dotColor(day.suggestion, day.tone)"
+                        @mouseenter="hoveredDay = day; checkTooltipPosition($event)"
+                        @mouseleave="hoveredDay = null"
+                      ></div>
+                      <div
+                        v-if="hoveredDay === day"
+                        :class="[
+                          'absolute z-50 left-1/2 -translate-x-1/2 px-2 py-1 bg-slate-800 border border-slate-600 rounded text-[9px] text-white whitespace-nowrap',
+                          tooltipPosition === 'top' ? 'bottom-full mb-1' : 'top-full mt-1'
+                        ]"
                       >
-                        <span
-                          v-if="segment.tag"
-                          class="px-1 py-0.5 rounded text-[9px] font-bold shrink-0 mt-0.5"
-                          :class="tagColor(segment.tag)"
-                        >
-                          {{ segment.tag }}
-                        </span>
-                        <span class="flex-1 text-slate-300">{{ segment.text }}</span>
+                        <div class="font-mono">{{ day.date || '-' }}</div>
+                        <div :class="String(day.suggestion || '').includes('关注') ? 'text-red-400' : String(day.suggestion || '').includes('减仓') ? 'text-emerald-400' : 'text-slate-300'">{{ day.suggestion || '-' }}</div>
+                        <div class="text-slate-400">{{ day.tone || '-' }}</div>
+                        <div class="text-slate-500 text-[8px]">{{ (day.patterns || []).join(', ') || '-' }}</div>
                       </div>
                     </div>
-                    <div class="mt-1">
-                      <button
-                        v-if="item.analyze?.detail"
-                        @click.stop="openDetailModal(item)"
-                        class="text-[10px] text-sky-400 hover:text-sky-300 transition-colors"
-                      >
-                        查看详情
-                      </button>
-                    </div>
                   </div>
+                  <button
+                    v-if="item.analyze?.detail"
+                    @click.stop="openDetailModal(item)"
+                    class="text-[8px] text-sky-400 hover:text-sky-300 transition-colors"
+                  >
+                    详情
+                  </button>
                 </div>
-                <!-- 10日形态轨迹 -->
-                <div class="flex items-center gap-1">
-                  <span class="text-[9px] text-slate-500 mr-1 uppercase font-mono">10D:</span>
-                  <div
-                    v-for="(day, idx) in [...(item.analyze?.history || [])].reverse()"
-                    :key="idx"
-                    class="w-2.5 h-2.5 rounded-sm transition-transform hover:scale-125 cursor-help"
-                    :class="dotColor(day.suggestion, day.tone)"
-                    :title="`${day.date}: ${day.suggestion} (${day.tone})\n形态: ${day.patterns.join(',')}`"
-                  ></div>
+                <div class="text-[9px] text-slate-400 truncate">
+                  {{ parseCommentary(item.analyze?.summary)[0]?.text || '-' }}
                 </div>
               </div>
             </td>
-            <td class="py-3 text-right">
-              <button @click.stop="handleRemove(item.ts_code)" class="text-slate-500 hover:text-red-400 transition-colors px-2">
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <td class="py-2 px-1 text-right">
+              <button @click.stop="handleRemove(item.ts_code)" class="text-slate-500 hover:text-red-400 transition-colors">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                 </svg>
               </button>
@@ -428,6 +427,15 @@ const message = ref('');
 const rows = ref([]);
 const newCode = ref('');
 const expandedComments = ref({});  // 展开的专业点评
+const hoveredDay = ref(null);  // 当前hover的10D节点
+const tooltipPosition = ref('top');  // tooltip显示位置
+
+const checkTooltipPosition = (event) => {
+  const rect = event.target.getBoundingClientRect();
+  const spaceAbove = rect.top;
+  const spaceBelow = window.innerHeight - rect.bottom;
+  tooltipPosition.value = spaceAbove > spaceBelow ? 'top' : 'bottom';
+};
 
 // Zen模式
 const zenMode = ref(false);
@@ -665,10 +673,12 @@ const suggestionColor = (s) => {
 };
 
 const dotColor = (s, tone) => {
-  if (tone.includes('爆发') || s.includes('试错') || s.includes('关注')) return 'bg-red-500';
-  if (tone.includes('杀跌') || s.includes('减仓') || s.includes('持币')) return 'bg-emerald-500';
-  if (tone.includes('看多')) return 'bg-red-900/60';
-  if (tone.includes('看空')) return 'bg-emerald-900/60';
+  const sStr = String(s || '');
+  const toneStr = String(tone || '');
+  if (toneStr.includes('爆发') || sStr.includes('试错') || sStr.includes('关注')) return 'bg-red-500';
+  if (toneStr.includes('杀跌') || sStr.includes('减仓') || sStr.includes('持币')) return 'bg-emerald-500';
+  if (toneStr.includes('看多')) return 'bg-red-900/60';
+  if (toneStr.includes('看空')) return 'bg-emerald-900/60';
   return 'bg-slate-700';
 };
 

@@ -113,6 +113,14 @@ class UserCreate(BaseModel):
     password: str
     role: str = "viewer"
 
+
+class TrainKlinePatternParams(BaseModel):
+    start_date: str | None = None
+    end_date: str | None = None
+    horizons: str = "3,5,10"
+    min_confidence: float = 0.55
+    positive_return_threshold: float = 0.0
+
 class PasswordChange(BaseModel):
     user_id: int
     new_password: str
@@ -424,6 +432,82 @@ async def trigger_sentiment_sync(days: int = 365, sync_index: bool = True):
         sync_engine.calculate_market_sentiment(days=days)
 
     task_name = f"{'同步并重算' if sync_index else '重算'}市场情绪({days}天)"
+    await add_to_queue(task_name, task_logic)
+    return {"message": f"{task_name}任务已加入队列"}
+
+
+@router.post("/etl/train_kline_patterns", status_code=202)
+async def trigger_kline_pattern_training(params: TrainKlinePatternParams):
+    """
+    训练K线形态校准文件
+    """
+    from pathlib import Path
+    from etl.utils.kline_patterns import (
+        train_pattern_calibration,
+        save_pattern_calibration,
+        evaluate_pattern_performance,
+    )
+
+    horizons = tuple(int(x.strip()) for x in params.horizons.split(",") if x.strip())
+    if not horizons:
+        raise HTTPException(status_code=400, detail="至少指定一个 horizon")
+
+    output_path = Path(__file__).parent.parent / "etl" / "utils" / "kline_pattern_calibration.json"
+
+    def task_logic():
+        conditions = []
+        query_params = []
+
+        if params.start_date:
+            conditions.append("trade_date >= ?")
+            query_params.append(params.start_date)
+        if params.end_date:
+            conditions.append("trade_date <= ?")
+            query_params.append(params.end_date)
+
+        where_sql = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        sql = f"""
+            SELECT trade_date, ts_code, open, high, low, close, pct_chg, vol, amount
+            FROM daily_price
+            {where_sql}
+            ORDER BY ts_code, trade_date
+        """
+        df = fetch_df(sql, query_params)
+        if df.empty:
+            logger.warning("未查询到 daily_price 历史数据，无法训练。")
+            return
+
+        calibration = train_pattern_calibration(
+            df=df,
+            group_col="ts_code",
+            date_col="trade_date",
+            horizons=horizons,
+            min_confidence=params.min_confidence,
+            positive_return_threshold=params.positive_return_threshold,
+        )
+        save_pattern_calibration(calibration, str(output_path))
+
+        summary = evaluate_pattern_performance(
+            df=df,
+            group_col="ts_code",
+            date_col="trade_date",
+            horizons=horizons,
+            min_confidence=params.min_confidence,
+            positive_return_threshold=params.positive_return_threshold,
+        )
+
+        logger.info(f"K线形态校准文件已生成: {output_path}")
+        if not summary.empty:
+            primary = horizons[0]
+            logger.info(f"Top patterns by {primary}d directional edge:")
+            show_cols = [
+                "pattern", "direction", "sample_count", "avg_confidence",
+                f"hit_rate_{primary}d", f"avg_ret_{primary}d", f"directional_edge_{primary}d"
+            ]
+            show_cols = [c for c in show_cols if c in summary.columns]
+            logger.info(summary[show_cols].head(12).to_string(index=False))
+
+    task_name = f"训练K线形态校准({params.start_date or '全量'}~{params.end_date or '至今'})"
     await add_to_queue(task_name, task_logic)
     return {"message": f"{task_name}任务已加入队列"}
 
