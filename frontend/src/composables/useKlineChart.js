@@ -39,7 +39,7 @@ export function useKlineChart() {
     const ma10 = data.map(item => Number(item.ma10) || null);
     const ma20 = data.map(item => Number(item.ma20) || null);
     const rzye = data.map(item => item.rzye != null ? Number(item.rzye) / 1e8 : null);
-    const netMfVol = data.map(item => item.net_mf_vol != null ? Number(item.net_mf_vol) / 10 : null);
+    const netMfVol = data.map(item => item.net_mf_amount != null ? Number(item.net_mf_amount) / 10000 : null);
     const amount = data.map(item => (Number(item.amount) || 0) * 1000 / 1e8);
     
     const latest = data[data.length - 1];
@@ -48,7 +48,7 @@ export function useKlineChart() {
     const latestMa20 = Number(latest?.ma20) || null;
     const latestVol = Number(latest?.vol) || 0;
     const latestRzye = latest?.rzye != null ? Number(latest.rzye) / 1e8 : null;
-    const latestNetMf = latest?.net_mf_vol != null ? Number(latest.net_mf_vol) / 10 : null;
+    const latestNetMf = latest?.net_mf_amount != null ? Number(latest.net_mf_amount) / 10000 : null;
     const latestAmount = (Number(latest?.amount) || 0) * 1000 / 1e8;
     
     const series = [];
@@ -98,7 +98,7 @@ export function useKlineChart() {
       name: '融资', 
       type: 'line', 
       xAxisIndex: 2, 
-      yAxisIndex: 3, 
+      yAxisIndex: 2, 
       data: rzyeData, 
       smooth: true, 
       showSymbol: false, 
@@ -167,29 +167,26 @@ export function useKlineChart() {
       },
       grid: [
         { left: 50, right: 10, top: showLegend ? 35 : 15, height: '45%' },
-        { left: 50, right: 10, top: '62%', height: '15%' },
-        { left: 50, right: 10, top: '79%', height: '10%' },
-        { left: 50, right: 10, top: '90%', height: '8%' }
+        { left: 50, right: 10, top: '65%', height: '15%' },
+        { left: 50, right: 10, top: '82%', height: '14%' }
       ],
       xAxis: [
         { type: 'category', data: dates, scale: true, boundaryGap: false, axisLine: { lineStyle: { color: '#444' } }, axisLabel: { show: false }, splitLine: { show: false } },
         { type: 'category', gridIndex: 1, data: dates, axisLine: { lineStyle: { color: '#444' } }, axisLabel: { show: false }, splitLine: { show: false } },
-        { type: 'category', gridIndex: 2, data: dates, axisLine: { lineStyle: { color: '#444' } }, axisLabel: { show: false }, splitLine: { show: false } },
-        { type: 'category', gridIndex: 3, data: dates, axisLine: { lineStyle: { color: '#444' } }, axisLabel: { color: '#666', fontSize: 9 }, splitLine: { show: false } }
+        { type: 'category', gridIndex: 2, data: dates, axisLine: { lineStyle: { color: '#444' } }, axisLabel: { color: '#666', fontSize: 9 }, splitLine: { show: false } }
       ],
       yAxis: [
         { scale: true, splitLine: { lineStyle: { color: '#333' } }, axisLabel: { color: '#888', fontSize: 10, formatter: (v) => fmtPrice(v) } },
         { gridIndex: 1, splitNumber: 2, axisLabel: { show: false }, splitLine: { show: false } },
-        { gridIndex: 2, scale: true, splitNumber: 2, axisLabel: { show: false }, splitLine: { show: false } },
-        { gridIndex: 3, scale: true, splitNumber: 2, axisLabel: { show: false }, splitLine: { show: false } }
+        { gridIndex: 2, scale: true, splitNumber: 2, axisLabel: { show: false }, splitLine: { show: false } }
       ],
       series
     };
     
     if (showDataZoom) {
       result.dataZoom = [
-        { type: 'inside', xAxisIndex: [0, 1, 2, 3], start: 70, end: 100 },
-        { type: 'slider', xAxisIndex: [0, 1, 2, 3], bottom: 2, height: 18, borderColor: '#333', backgroundColor: '#222', fillerColor: 'rgba(59, 130, 246, 0.2)', handleStyle: { color: '#3b82f6' }, textStyle: { color: '#888', fontSize: 10 } },
+        { type: 'inside', xAxisIndex: [0, 1, 2], start: 70, end: 100 },
+        { type: 'slider', xAxisIndex: [0, 1, 2], bottom: 2, height: 18, borderColor: '#333', backgroundColor: '#222', fillerColor: 'rgba(59, 130, 246, 0.2)', handleStyle: { color: '#3b82f6' }, textStyle: { color: '#888', fontSize: 10 } },
       ];
     }
     
@@ -207,7 +204,7 @@ export function useKlineChart() {
       low: Number(latest?.low) || null,
       vol: Number(latest?.vol) || 0,
       amount: (Number(latest?.amount) || 0) * 1000 / 1e8,
-      net_mf_vol: latest?.net_mf_vol != null ? Number(latest.net_mf_vol) / 10 : null,
+      net_mf_vol: latest?.net_mf_amount != null ? Number(latest.net_mf_amount) / 10000 : null,
       rzye: latest?.rzye != null ? Number(latest.rzye) / 1e8 : null,
       ma5: Number(latest?.ma5) || null,
       ma10: Number(latest?.ma10) || null,

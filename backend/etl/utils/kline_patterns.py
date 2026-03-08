@@ -1159,10 +1159,185 @@ def train_pattern_calibration(
 
 
 def save_pattern_calibration(calibration: dict[str, Any], path: str | Path | None = None) -> str:
+    import os
     target = Path(path or DEFAULT_CALIBRATION_PATH)
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(calibration, ensure_ascii=False, indent=2), encoding="utf-8")
+    temp_path = target.with_suffix(".tmp")
+    temp_path.write_text(json.dumps(calibration, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(temp_path, target)
     return str(target)
+
+
+def build_combined_training_stats(
+    df: pd.DataFrame,
+    group_col: str | None = "ts_code",
+    date_col: str = "trade_date",
+    horizons: Sequence[int] = (3, 5, 10),
+    min_confidence: float = 0.55,
+    positive_return_threshold: float = 0.0,
+    prior_strength: float = 24.0,
+    conf_buckets: Sequence[float] = DEFAULT_CONF_BUCKETS,
+) -> tuple[dict[str, Any], pd.DataFrame]:
+    """
+    单次遍历版本：同时生成校准表和评估摘要，避免重复计算。
+    """
+    panel = _build_pattern_eval_panel(df, group_col=group_col, date_col=date_col, horizons=horizons)
+    
+    # 1. 生成校准表
+    calibration: dict[str, Any] = {
+        "meta": {
+            "trained_at": datetime.now(timezone.utc).isoformat(),
+            "horizons": [int(h) for h in horizons],
+            "min_confidence": float(min_confidence),
+            "positive_return_threshold": float(positive_return_threshold),
+            "prior_strength": float(prior_strength),
+            "confidence_buckets": list(conf_buckets),
+            "sample_rows": int(len(panel)),
+        },
+        "patterns": {},
+    }
+    
+    if panel.empty:
+        return calibration, pd.DataFrame()
+
+    # 先计算 priors
+    direction_priors: dict[tuple[str, int], float] = {}
+    for direction in ("bullish", "bearish"):
+        direction_codes = [
+            c for c in ALL_PATTERN_COLS
+            if (direction == "bullish" and c in BULLISH_PATTERNS)
+            or (direction == "bearish" and c in BEARISH_PATTERNS)
+        ]
+        for horizon in horizons:
+            samples: list[pd.Series] = []
+            for code in direction_codes:
+                if code in panel.columns:
+                    ser = panel.loc[panel[code] >= float(min_confidence), f"fwd_ret_{int(horizon)}d"]
+                    ser = pd.to_numeric(ser, errors="coerce").dropna()
+                    if not ser.empty:
+                        samples.append(ser)
+            if not samples:
+                direction_priors[(direction, int(horizon))] = 0.5
+                continue
+            merged = pd.concat(samples, ignore_index=True)
+            hits = (
+                merged > float(positive_return_threshold)
+                if direction == "bullish"
+                else merged < -float(positive_return_threshold)
+            )
+            direction_priors[(direction, int(horizon))] = float(hits.mean()) if not hits.empty else 0.5
+
+    # 循环各个形态计算统计
+    rows_eval: list[dict[str, Any]] = []
+    primary_horizon = int(horizons[0])
+
+    for pattern_code in ALL_PATTERN_COLS:
+        if pattern_code not in panel.columns:
+            continue
+        sig = panel.loc[panel[pattern_code] >= float(min_confidence)].copy()
+        if sig.empty:
+            continue
+
+        direction = (
+            "bullish" if pattern_code in BULLISH_PATTERNS else
+            "bearish" if pattern_code in BEARISH_PATTERNS else
+            "neutral"
+        )
+        
+        # 校准表条目
+        entry: dict[str, Any] = {
+            "pattern": PATTERN_CN_MAP[pattern_code],
+            "direction": direction,
+            "sample_count": int(len(sig)),
+            "avg_confidence": round(float(sig[pattern_code].mean()), 4),
+        }
+        
+        # 评估摘要条目
+        row_eval: dict[str, Any] = {
+            "pattern_code": pattern_code,
+            "pattern": PATTERN_CN_MAP[pattern_code],
+            "direction": direction,
+            "sample_count": int(len(sig)),
+            "avg_confidence": round(float(sig[pattern_code].mean()), 4),
+        }
+
+        conf_bucket = pd.cut(
+            sig[pattern_code],
+            bins=list(conf_buckets),
+            labels=[_bucket_confidence(v, conf_buckets) for v in conf_buckets[:-1]],
+            right=False,
+            include_lowest=True,
+        )
+        sig["_conf_bucket"] = conf_bucket.astype(str)
+
+        for horizon in horizons:
+            col = f"fwd_ret_{int(horizon)}d"
+            data = sig[[pattern_code, "_conf_bucket", col]].copy()
+            data[col] = pd.to_numeric(data[col], errors="coerce")
+            data = data.dropna(subset=[col])
+            
+            if data.empty:
+                entry[f"{int(horizon)}d"] = {
+                    "sample_count": 0,
+                    "hit_rate": None,
+                    "bayes_hit_rate": None,
+                    "avg_ret": None,
+                    "directional_edge": None,
+                    "buckets": {},
+                }
+                continue
+
+            hits = _directional_hits(pattern_code, data[col], float(positive_return_threshold))
+            edge = _directional_edge(pattern_code, data[col])
+            prior_hit = direction_priors.get((direction, int(horizon)), 0.5) if direction != "neutral" else 0.5
+            
+            avg_ret = float(data[col].mean())
+            avg_edge = float(edge.mean())
+            sample_count = int(len(data))
+            raw_hit = None if hits.empty else float(hits.mean())
+            bayes_hit = float((hits.sum() + float(prior_strength) * prior_hit) / (sample_count + float(prior_strength))) if raw_hit is not None else None
+
+            # 填充校准表
+            bucket_stats: dict[str, Any] = {}
+            for bucket_name, bucket_df in data.groupby("_conf_bucket", dropna=False):
+                if bucket_name in ("nan", "None", ""): continue
+                sb = int(len(bucket_df))
+                bhits = _directional_hits(pattern_code, bucket_df[col], float(positive_return_threshold))
+                bhit = float(bhits.mean()) if not bhits.empty else None
+                bbayes = float((bhits.sum() + float(prior_strength) * prior_hit) / (sb + float(prior_strength))) if bhit is not None else None
+                
+                bucket_stats[str(bucket_name)] = {
+                    "sample_count": sb,
+                    "hit_rate": round(bhit, 4) if bhit is not None else None,
+                    "bayes_hit_rate": round(bbayes, 4) if bbayes is not None else None,
+                    "avg_ret": round(float(bucket_df[col].mean()), 4),
+                    "directional_edge": round(float(_directional_edge(pattern_code, bucket_df[col]).mean()), 4),
+                }
+
+            entry[f"{int(horizon)}d"] = {
+                "sample_count": sample_count,
+                "hit_rate": round(raw_hit, 4) if raw_hit is not None else None,
+                "bayes_hit_rate": round(bayes_hit, 4) if bayes_hit is not None else None,
+                "avg_ret": round(avg_ret, 4),
+                "directional_edge": round(avg_edge, 4),
+                "buckets": bucket_stats,
+            }
+            
+            # 填充评估摘要
+            row_eval[f"sample_{int(horizon)}d"] = sample_count
+            row_eval[f"hit_rate_{int(horizon)}d"] = round(raw_hit, 4) if raw_hit is not None else None
+            row_eval[f"avg_ret_{int(horizon)}d"] = round(avg_ret, 4)
+            row_eval[f"directional_edge_{int(horizon)}d"] = round(avg_edge, 4)
+
+        calibration["patterns"][pattern_code] = entry
+        rows_eval.append(row_eval)
+
+    summary = pd.DataFrame(rows_eval)
+    if not summary.empty:
+        sort_col = f"directional_edge_{primary_horizon}d"
+        summary = summary.sort_values([sort_col, "sample_count"], ascending=[False, False], na_position="last").reset_index(drop=True)
+    
+    return calibration, summary
 
 
 def load_pattern_calibration(path: str | Path | None = None) -> dict[str, Any]:

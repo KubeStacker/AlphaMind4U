@@ -164,38 +164,19 @@
       <div v-if="klineLoading" class="h-[220px] sm:h-[280px] md:h-[340px] flex items-center justify-center text-slate-400 text-xs">K线加载中...</div>
       <div v-else-if="klineError" class="rounded border border-red-700/40 bg-red-500/10 px-3 py-2 text-xs text-red-300">{{ klineError }}</div>
       <div v-else class="h-[220px] sm:h-[280px] md:h-[340px] lg:h-[380px]">
-        <v-chart :option="klineChartOption" autoresize />
+        <v-chart :option="klineChartOption" autoresize @updateAxisPointer="handleUpdateAxisPointer" />
       </div>
     </div>
 
     <div class="space-y-3">
       <div class="bg-business-dark border border-business-light rounded-2xl p-3">
-        <button class="w-full flex items-center justify-between" @click="panelOpen.history = !panelOpen.history">
-          <h3 class="text-xs font-bold text-slate-200">运行历史</h3>
-          <span class="text-[10px] text-slate-500">{{ panelOpen.history ? '收起' : '展开' }}</span>
-        </button>
-        <div v-if="panelOpen.history" class="space-y-2 max-h-[280px] overflow-auto mt-2">
-          <button
-            v-for="run in runs"
-            :key="run.run_id"
-            @click="loadRun(run.run_id)"
-            class="w-full text-left p-2 rounded-lg border text-[11px] transition"
-            :class="activeRun?.run_id === run.run_id ? 'border-amber-600 bg-amber-900/20' : 'border-slate-700 hover:bg-slate-800/40'"
-          >
-            <div class="flex justify-between"><span class="text-slate-300">{{ run.strategy_id }}</span><span class="text-slate-500">#{{ run.run_id }}</span></div>
-            <div class="text-slate-500 mt-1">{{ run.trade_date }} · 分 {{ metricText(run.summary?.avg_score, 1) }}</div>
-          </button>
-        </div>
-      </div>
-
-      <div class="bg-business-dark border border-business-light rounded-2xl p-3">
         <button class="w-full flex items-center justify-between" @click="panelOpen.dataOps = !panelOpen.dataOps">
-          <h3 class="text-xs font-bold text-slate-200">数据清理</h3>
+          <h3 class="text-xs font-bold text-slate-200">数据管理</h3>
           <span class="text-[10px] text-slate-500">{{ panelOpen.dataOps ? '收起' : '展开' }}</span>
         </button>
         <div v-if="panelOpen.dataOps" class="mt-2">
           <div class="flex gap-2 mb-2">
-            <button @click="removeRun(false)" :disabled="!activeRun" class="flex-1 px-3 py-2 rounded border border-rose-700 text-rose-300 text-[11px] hover:bg-rose-900/20 disabled:opacity-50">删除当前</button>
+            <button @click="removeRun(false)" :disabled="!activeRun" class="flex-1 px-3 py-2 rounded border border-rose-700 text-rose-300 text-[11px] hover:bg-rose-900/20 disabled:opacity-50">删除当前运行</button>
           </div>
           <div class="grid grid-cols-2 gap-2 mb-2">
             <input v-model="batchStartDate" type="date" class="w-full bg-business-darker border border-business-light rounded-lg px-2 py-2 text-xs text-slate-100" />
@@ -206,85 +187,8 @@
             :disabled="!selectedStrategy || !batchStartDate || !batchEndDate"
             class="w-full px-3 py-2 rounded border border-rose-700 text-rose-300 text-[11px] hover:bg-rose-900/20 disabled:opacity-50"
           >
-            区间批量删除
+            按区间清理记录
           </button>
-        </div>
-      </div>
-
-      <div class="bg-business-dark border border-business-light rounded-2xl p-3">
-        <button class="w-full flex items-center justify-between" @click="panelOpen.trash = !panelOpen.trash">
-          <h3 class="text-xs font-bold text-slate-200">回收站</h3>
-          <span class="text-[10px] text-slate-500">{{ panelOpen.trash ? '收起' : '展开' }}</span>
-        </button>
-        <div v-if="panelOpen.trash" class="mt-2">
-          <div class="flex gap-1 mb-2">
-            <button @click="selectAllDeletedRuns" class="text-[10px] px-2 py-1 rounded border border-slate-700 text-slate-400 hover:bg-slate-800">全选</button>
-            <button @click="clearDeletedRunSelection" class="text-[10px] px-2 py-1 rounded border border-slate-700 text-slate-400 hover:bg-slate-800">清空</button>
-            <button @click="refreshDeletedRuns" class="text-[10px] px-2 py-1 rounded border border-slate-700 text-slate-400 hover:bg-slate-800">刷新</button>
-          </div>
-          <div class="text-[10px] text-slate-500 mb-2">已选 {{ selectedDeletedRunIds.length }} 条</div>
-          <div class="space-y-2 max-h-[180px] overflow-auto mb-2">
-            <button
-              v-for="run in deletedRuns"
-              :key="`del-${run.run_id}`"
-              @click="selectedDeletedRunId = run.run_id"
-              class="w-full text-left p-2 rounded-lg border text-[11px] transition"
-              :class="selectedDeletedRunId === run.run_id ? 'border-emerald-600 bg-emerald-900/20' : 'border-slate-700 hover:bg-slate-800/40'"
-            >
-              <div class="flex justify-between items-center">
-                <label class="flex items-center gap-2 text-slate-300" @click.stop="">
-                  <input type="checkbox" :checked="selectedDeletedRunIds.includes(run.run_id)" @change="toggleDeletedRunSelection(run.run_id)" />
-                  <span>#{{ run.run_id }}</span>
-                </label>
-                <span class="text-slate-500">{{ run.trade_date }}</span>
-              </div>
-              <div class="text-slate-500 mt-1">删除于 {{ run.deleted_at || '-' }}</div>
-            </button>
-            <div v-if="deletedRuns.length === 0" class="text-[11px] text-slate-500 py-2 text-center">暂无回收站记录</div>
-          </div>
-          <div class="flex gap-2 mb-2">
-            <button @click="restoreDeletedRunsBatch" :disabled="selectedDeletedRunIds.length === 0" class="flex-1 px-3 py-2 rounded border border-emerald-700 text-emerald-300 text-[11px] hover:bg-emerald-900/20 disabled:opacity-50">批量恢复</button>
-            <button @click="hardDeleteDeletedRunsBatch" :disabled="selectedDeletedRunIds.length === 0" class="flex-1 px-3 py-2 rounded border border-rose-700 text-rose-300 text-[11px] hover:bg-rose-900/20 disabled:opacity-50">批量硬删</button>
-          </div>
-          <div class="flex gap-2">
-            <button @click="restoreDeletedRun" :disabled="!selectedDeletedRunId" class="flex-1 px-3 py-2 rounded border border-emerald-700 text-emerald-300 text-[11px] hover:bg-emerald-900/20 disabled:opacity-50">恢复</button>
-            <button @click="hardDeleteDeletedRun" :disabled="!selectedDeletedRunId" class="flex-1 px-3 py-2 rounded border border-rose-700 text-rose-300 text-[11px] hover:bg-rose-900/20 disabled:opacity-50">硬删</button>
-          </div>
-        </div>
-      </div>
-
-      <div class="bg-business-dark border border-business-light rounded-2xl p-3">
-        <button class="w-full flex items-center justify-between" @click="panelOpen.audit = !panelOpen.audit">
-          <h3 class="text-xs font-bold text-slate-200">操作审计</h3>
-          <span class="text-[10px] text-slate-500">{{ panelOpen.audit ? '收起' : '展开' }}</span>
-        </button>
-        <div v-if="panelOpen.audit" class="mt-2">
-          <div class="flex justify-end mb-2">
-            <button @click="refreshOps" class="text-[10px] px-2 py-1 rounded border border-slate-700 text-slate-400 hover:bg-slate-800">刷新</button>
-          </div>
-          <div class="overflow-auto max-h-[220px]">
-            <table class="w-full text-left text-xs">
-              <thead class="text-slate-500 border-b border-slate-700 sticky top-0 bg-business-dark">
-                <tr>
-                  <th class="py-2">时间</th>
-                  <th>类型</th>
-                  <th>策略</th>
-                  <th>运行ID</th>
-                  <th>操作人</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="op in operationLogs" :key="`${op.created_at}-${op.op_type}-${op.run_ids?.join(',')}`" class="border-b border-slate-800/60">
-                  <td class="py-2 text-slate-400">{{ op.created_at || '-' }}</td>
-                  <td class="text-slate-200">{{ op.op_type || '-' }}</td>
-                  <td class="text-slate-400">{{ op.strategy_id || '-' }}</td>
-                  <td class="text-slate-400">{{ (op.run_ids || []).join(', ') || '-' }}</td>
-                  <td class="text-slate-500">{{ op.operator || '-' }}</td>
-                </tr>
-                <tr v-if="operationLogs.length === 0"><td colspan="5" class="py-4 text-center text-slate-500">暂无审计记录</td></tr>
-              </tbody>
-            </table>
-          </div>
         </div>
       </div>
     </div>
@@ -324,6 +228,7 @@ import {
   getFalconRunDetail,
   getFalconScore,
   getFalconStrategies,
+  getStockKline,
   hardDeleteFalconRunsBatch,
   listFalconDeletedRuns,
   listFalconOps,
@@ -362,6 +267,7 @@ const klineError = ref('');
 const klineRows = ref([]);
 const klineOffset = ref(0);
 const klineWindowDays = ref(60);
+const klineHoveredIndex = ref(-1);
 let klineHideTimer = null;
 const klineCache = new Map();
 
@@ -411,8 +317,24 @@ const latestKlinePoint = computed(() => {
 });
 
 const latestKlineData = computed(() => {
-  return getLatestKlineData(klineRows.value);
+  const rows = normalizedKlineRows.value;
+  if (!rows || !rows.length) return null;
+  const idx = klineHoveredIndex.value >= 0 ? klineHoveredIndex.value : rows.length - 1;
+  const item = rows[idx];
+  if (!item) return getLatestKlineData(rows);
+  return {
+    ...item,
+    net_mf_vol: item.net_mf_amount != null ? Number(item.net_mf_amount) / 10000 : null,
+    rzye: item.rzye != null ? Number(item.rzye) / 1e8 : null,
+  };
 });
+
+const handleUpdateAxisPointer = (event) => {
+  const info = event.dataIndex;
+  if (info != null && info >= 0) {
+    klineHoveredIndex.value = info;
+  }
+};
 
 const fmtPrice = (v) => {
   const n = Number(v);
@@ -525,31 +447,10 @@ const fetchKline = async (tsCode) => {
   klineLoading.value = true;
   klineError.value = '';
   try {
-    const quoteSql = `
-      SELECT trade_date, open, high, low, close, vol, amount
-      FROM daily_price
-      WHERE ts_code = '${tsCode}'
-      ORDER BY trade_date DESC
-      LIMIT 420
-    `;
-    const moneyflowSql = `
-      SELECT trade_date, net_mf_vol
-      FROM stock_moneyflow
-      WHERE ts_code = '${tsCode}'
-      ORDER BY trade_date DESC
-      LIMIT 420
-    `;
+    const res = await getStockKline(tsCode, 420);
+    const rows = res.data?.data || [];
 
-    const [quoteRes, moneyflowRes] = await Promise.all([
-      executeDBQuery(quoteSql),
-      executeDBQuery(moneyflowSql).catch(() => ({ data: { data: [] } })),
-    ]);
-
-    const quoteRows = quoteRes.data?.data || [];
-    const moneyRows = moneyflowRes.data?.data || [];
-    const moneyMap = new Map((moneyRows || []).map((x) => [String(x.trade_date).slice(0, 10), Number(x.net_mf_vol)]));
-
-    const baseRows = quoteRows
+    const baseRows = rows
       .map((r) => {
         const d = String(r.trade_date).slice(0, 10);
         return {
@@ -560,7 +461,8 @@ const fetchKline = async (tsCode) => {
           close: Number(r.close),
           vol: Number(r.vol),
           amount: Number(r.amount),
-          net_mf_vol: moneyMap.get(d) ?? null,
+          net_mf_amount: r.net_mf_amount ?? null,
+          rzye: r.rzye ?? null,
         };
       })
       .filter((x) => Number.isFinite(x.open) && Number.isFinite(x.high) && Number.isFinite(x.low) && Number.isFinite(x.close))
@@ -597,6 +499,7 @@ const openKline = async (row) => {
   selectedKlineTsCode.value = row.ts_code;
   selectedKlineName.value = row.name || '';
   klineOffset.value = 0;
+  klineHoveredIndex.value = -1;
   klinePreviewVisible.value = true;
   await fetchKline(row.ts_code);
 };
@@ -612,6 +515,7 @@ const scheduleHideKlinePreview = () => {
   clearHideKlinePreview();
   klineHideTimer = setTimeout(() => {
     klinePreviewVisible.value = false;
+    klineHoveredIndex.value = -1;
   }, 160);
 };
 
@@ -625,21 +529,25 @@ const stepOlder = () => {
   const total = klineRows.value.length;
   const maxOffset = Math.max(0, total - klineWindowDays.value);
   klineOffset.value = Math.min(maxOffset, klineOffset.value + 10);
+  klineHoveredIndex.value = -1;
 };
 
 const stepNewer = () => {
   if (!canStepNewer.value) return;
   klineOffset.value = Math.max(0, klineOffset.value - 10);
+  klineHoveredIndex.value = -1;
 };
 
 const zoomIn = () => {
   klineWindowDays.value = Math.max(20, klineWindowDays.value - 10);
   klineOffset.value = Math.min(klineOffset.value, Math.max(0, klineRows.value.length - klineWindowDays.value));
+  klineHoveredIndex.value = -1;
 };
 
 const zoomOut = () => {
   klineWindowDays.value = Math.min(180, klineWindowDays.value + 10);
   klineOffset.value = Math.min(klineOffset.value, Math.max(0, klineRows.value.length - klineWindowDays.value));
+  klineHoveredIndex.value = -1;
 };
 
 const handleRun = async () => {

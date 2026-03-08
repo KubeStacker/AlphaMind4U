@@ -9,16 +9,31 @@ from db.connection import fetch_df
 
 class DuckDbFalconDataProvider:
     def latest_trade_date(self) -> str:
+        # 优化：先取一个较近的时间范围（最近30天），避免全表扫描进行分组计数
         df = fetch_df(
             """
             SELECT trade_date
             FROM daily_price
+            WHERE trade_date >= (SELECT MAX(trade_date) FROM daily_price) - INTERVAL 30 DAY
             GROUP BY trade_date
             HAVING COUNT(*) > 1000
             ORDER BY trade_date DESC
             LIMIT 1
             """
         )
+        if df.empty:
+            # 如果最近30天没找到符合条件的，则退化为全表（兜底，通常不会发生）
+            df = fetch_df(
+                """
+                SELECT trade_date
+                FROM daily_price
+                GROUP BY trade_date
+                HAVING COUNT(*) > 1000
+                ORDER BY trade_date DESC
+                LIMIT 1
+                """
+            )
+        
         if df.empty:
             raise ValueError("无可用交易日数据")
         return str(df.iloc[0]["trade_date"])[:10]
@@ -86,6 +101,26 @@ class DuckDbFalconDataProvider:
         }
 
     def load_universe_snapshot(self, trade_date: str) -> pd.DataFrame:
+        # 优化：计算回溯起始日期，避免扫描全表历史
+        # ma50 需要 50 个交易日，我们取 100 个以确保窗口充足
+        lookback_df = fetch_df(
+            """
+            SELECT MIN(trade_date) as start_date
+            FROM (
+                SELECT DISTINCT trade_date
+                FROM daily_price
+                WHERE trade_date <= ?
+                ORDER BY trade_date DESC
+                LIMIT 100
+            )
+            """,
+            [trade_date]
+        )
+        if lookback_df.empty or pd.isna(lookback_df.iloc[0]["start_date"]):
+            return pd.DataFrame()
+        
+        start_date = lookback_df.iloc[0]["start_date"]
+
         query = """
         WITH hist AS (
             SELECT
@@ -107,7 +142,7 @@ class DuckDbFalconDataProvider:
                 LAG(d.close, 20) OVER (PARTITION BY d.ts_code ORDER BY d.trade_date) AS close_20,
                 AVG(d.amount) OVER (PARTITION BY d.ts_code ORDER BY d.trade_date ROWS BETWEEN 19 PRECEDING AND CURRENT ROW) AS avg_amount_20
             FROM daily_price d
-            WHERE d.trade_date <= ?
+            WHERE d.trade_date <= ? AND d.trade_date >= ?
         ),
         mf_hist AS (
             SELECT
@@ -116,7 +151,7 @@ class DuckDbFalconDataProvider:
                 m.net_mf_vol,
                 AVG(m.net_mf_vol) OVER (PARTITION BY m.ts_code ORDER BY m.trade_date ROWS BETWEEN 4 PRECEDING AND CURRENT ROW) AS mf_5
             FROM stock_moneyflow m
-            WHERE m.trade_date <= ?
+            WHERE m.trade_date <= ? AND m.trade_date >= ?
         )
         SELECT
             h.ts_code,
@@ -141,7 +176,7 @@ class DuckDbFalconDataProvider:
         WHERE h.trade_date = ?
           AND h.vol > 0
         """
-        df = fetch_df(query, [trade_date, trade_date, trade_date])
+        df = fetch_df(query, [trade_date, start_date, trade_date, start_date, trade_date])
         if df.empty:
             return df
 
@@ -273,3 +308,69 @@ class DuckDbFalconDataProvider:
             )
 
         return pd.DataFrame(rows)
+
+    def load_history_panel(
+        self,
+        trade_date: str,
+        ts_codes: list[str],
+        lookback_days: int = 60,
+    ) -> pd.DataFrame:
+        """
+        批量加载一组股票的历史面板数据。
+        
+        Args:
+            trade_date: 基准交易日 (包含此日期)
+            ts_codes: 股票代码列表
+            lookback_days: 回溯天数
+            
+        Returns:
+            DataFrame: 包含 trade_date, ts_code, open, high, low, close, vol, amount
+        """
+        if not ts_codes:
+            return pd.DataFrame(columns=["trade_date", "ts_code", "open", "high", "low", "close", "vol", "amount"])
+
+        # 优化：计算一个保守的起始日期，利用索引减少扫描量
+        lookback_days_int = int(lookback_days)
+        start_date_df = fetch_df(
+            """
+            SELECT MIN(trade_date) as start_date
+            FROM (
+                SELECT DISTINCT trade_date
+                FROM daily_price
+                WHERE trade_date <= ?
+                ORDER BY trade_date DESC
+                LIMIT ?
+            )
+            """,
+            [trade_date, lookback_days_int + 10]  # 多留10天缓冲
+        )
+        if start_date_df.empty or pd.isna(start_date_df.iloc[0]["start_date"]):
+            start_date = '1990-01-01'
+        else:
+            start_date = start_date_df.iloc[0]["start_date"]
+
+        # 为每个 ts_code 提取最近 N 条记录，由于 DuckDB SQL 限制，我们使用 ROW_NUMBER 分组取前 N 条
+        placeholders = ",".join(["?"] * len(ts_codes))
+        query = f"""
+        WITH ranked AS (
+            SELECT
+                trade_date,
+                ts_code,
+                open,
+                high,
+                low,
+                close,
+                vol,
+                amount,
+                ROW_NUMBER() OVER (PARTITION BY ts_code ORDER BY trade_date DESC) as rn
+            FROM daily_price
+            WHERE trade_date <= ? AND trade_date >= ?
+              AND ts_code IN ({placeholders})
+        )
+        SELECT trade_date, ts_code, open, high, low, close, vol, amount
+        FROM ranked
+        WHERE rn <= ?
+        ORDER BY ts_code, trade_date ASC
+        """
+        params = [trade_date, start_date] + ts_codes + [lookback_days_int]
+        return fetch_df(query, params)

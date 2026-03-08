@@ -366,6 +366,23 @@ CREATE TABLE IF NOT EXISTS falcon_op_log (
 );
 """
 
+# -- ETL 任务持久化表 (etl_tasks) --
+CREATE_ETL_TASKS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS etl_tasks (
+    task_id         VARCHAR(50) PRIMARY KEY,
+    task_key        VARCHAR(100) UNIQUE,
+    task_type       VARCHAR(50),
+    params_json     JSON,
+    status          VARCHAR(20),
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    started_at      TIMESTAMP,
+    heartbeat_at    TIMESTAMP,
+    finished_at     TIMESTAMP,
+    error           TEXT,
+    progress        DOUBLE DEFAULT 0.0
+);
+"""
+
 ALL_TABLES_SQL = [
     "CREATE SEQUENCE IF NOT EXISTS users_id_seq START 1;",
     "CREATE SEQUENCE IF NOT EXISTS falcon_runs_id_seq START 1;",
@@ -395,6 +412,7 @@ ALL_TABLES_SQL = [
     CREATE_FALCON_DAILY_SCORE_TABLE_SQL,
     CREATE_FALCON_EVOLUTION_LOG_TABLE_SQL,
     CREATE_FALCON_OP_LOG_TABLE_SQL,
+    CREATE_ETL_TASKS_TABLE_SQL,
     "CREATE INDEX IF NOT EXISTS idx_falcon_runs_strategy_date ON falcon_runs (strategy_id, trade_date);",
     "CREATE INDEX IF NOT EXISTS idx_falcon_picks_run ON falcon_picks (run_id);",
     "CREATE INDEX IF NOT EXISTS idx_falcon_eval_run ON falcon_pick_eval (run_id);",

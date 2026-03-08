@@ -70,91 +70,143 @@
     </div>
 
     <!-- 行情列表 -->
-    <div v-if="!zenMode" class="bg-business-dark p-2 sm:p-4 rounded-2xl shadow-lg border border-business-light overflow-x-auto min-h-[400px]">
-      <table class="w-full text-xs">
-        <thead>
-          <tr class="text-slate-400 border-b border-slate-700">
-            <th class="text-left py-2 px-1 w-20">代码</th>
-            <th class="text-left py-2 px-1 w-20">名称</th>
-            <th class="text-right py-2 px-1 w-16">价</th>
-            <th class="text-right py-2 px-1 w-16">涨跌</th>
-            <th class="text-left py-2 px-1 w-auto">点评</th>
-            <th class="text-right py-2 px-1 w-10"></th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-if="!rows.length && !loading" class="text-slate-500">
-            <td colspan="6" class="py-12 text-center">暂无自选股，请先添加</td>
-          </tr>
-          <tr
-            v-for="item in rows"
-            :key="item.ts_code"
-            class="border-b border-slate-800/70 hover:bg-slate-900/40 transition-colors"
-          >
-            <td data-kline-trigger="1" class="py-2 px-1 text-slate-200 font-semibold font-mono text-[11px] cursor-pointer hover:text-business-accent" @click.stop="toggleKline(item, $event)">{{ item.ts_code }}</td>
-            <td data-kline-trigger="1" class="py-2 px-1 text-slate-300 font-bold whitespace-nowrap text-[11px] cursor-pointer hover:text-business-accent" @click.stop="toggleKline(item, $event)">{{ item.name || '-' }}</td>
-            <td class="py-2 px-1 text-right text-slate-200 font-mono text-[11px]">{{ fmt(item.price, 2) }}</td>
-            <td class="py-2 px-1 text-right font-mono text-[11px]" :class="numColor(item.pct)">{{ fmt(item.pct, 2, '%') }}</td>
-            <td class="py-2 px-1 text-slate-300">
-              <div class="flex flex-col gap-0.5">
-                <div class="flex items-center gap-1 flex-wrap">
-                  <span
-                    v-if="item.analyze?.suggestion"
-                    class="px-1 py-0.5 rounded text-[8px] font-bold"
-                    :class="suggestionColor(item.analyze.suggestion)"
+    <div v-if="!zenMode" class="space-y-3">
+      <!-- 表头 (仅桌面端) -->
+      <div class="hidden md:grid md:grid-cols-12 gap-4 px-6 py-2 text-[10px] font-bold text-slate-500 uppercase tracking-wider border-b border-slate-800">
+        <div class="col-span-2">标的信息</div>
+        <div class="col-span-2 text-right">最新行情</div>
+        <div class="col-span-7">专业分析与 10D 历史</div>
+        <div class="col-span-1 text-right">操作</div>
+      </div>
+
+      <div v-if="!rows.length && !loading" class="bg-business-dark p-12 rounded-2xl border border-business-light text-center text-slate-500 text-xs">
+        暂无自选股，请先添加
+      </div>
+
+      <!-- 股票行 -->
+      <div
+        v-for="item in rows"
+        :key="item.ts_code"
+        class="bg-business-dark rounded-2xl border border-business-light hover:border-business-accent/40 transition-all shadow-business group"
+      >
+        <div class="grid grid-cols-1 md:grid-cols-12 gap-3 md:gap-4 p-4 md:px-6 md:py-4 items-center">
+          <!-- 1. 标的信息 -->
+          <div class="col-span-2 flex items-center gap-3 md:block" data-kline-trigger="1" @click.stop="toggleKline(item, $event)">
+            <div class="cursor-pointer">
+              <div class="text-[13px] font-bold text-white group-hover:text-business-accent transition-colors">{{ item.name || '-' }}</div>
+              <div class="text-[10px] text-slate-500 font-mono mt-0.5">{{ item.ts_code }}</div>
+            </div>
+            <!-- 移动端标签显示在名称旁 -->
+            <span
+              v-if="item.analyze?.suggestion"
+              class="md:hidden px-1.5 py-0.5 rounded text-[9px] font-black"
+              :class="suggestionColor(item.analyze.suggestion)"
+            >
+              {{ item.analyze.suggestion }}
+            </span>
+          </div>
+
+          <!-- 2. 行情数据 -->
+          <div class="col-span-2 flex md:flex-col justify-between md:items-end gap-1">
+            <div class="text-[13px] font-mono font-bold text-slate-100">{{ fmt(item.price, 2) }}</div>
+            <div class="text-[11px] font-mono font-bold" :class="numColor(item.pct)">
+              {{ item.pct >= 0 ? '+' : '' }}{{ fmt(item.pct, 2, '%') }}
+            </div>
+          </div>
+
+          <!-- 3. 点评与历史 (核心优化区) -->
+          <div class="col-span-7 flex flex-col lg:flex-row gap-3 lg:gap-6 pt-3 md:pt-0 border-t md:border-t-0 border-slate-800/50">
+            <!-- 建议与历史圆点 -->
+            <div class="flex flex-col gap-2 shrink-0 lg:w-40">
+              <div class="flex items-center gap-2">
+                <span
+                  v-if="item.analyze?.suggestion"
+                  class="hidden md:inline-block px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-tighter"
+                  :class="suggestionColor(item.analyze.suggestion)"
+                >
+                  {{ item.analyze.suggestion }}
+                </span>
+                <span class="text-[9px] text-slate-500 font-bold font-mono">10D HIST</span>
+                <button
+                  v-if="item.analyze?.detail"
+                  @click.stop="openDetailModal(item)"
+                  class="ml-auto lg:hidden text-[10px] text-sky-400 font-bold"
+                >
+                  详情
+                </button>
+              </div>
+              
+              <div class="flex items-center gap-1.5">
+                <div
+                  v-for="(day, idx) in [...(item.analyze?.history || [])].reverse()"
+                  :key="idx"
+                  class="relative"
+                >
+                  <div
+                    class="w-2.5 h-2.5 md:w-3 md:h-3 rounded-full cursor-pointer border border-black/20 hover:scale-125 transition-transform"
+                    :class="dotColor(day.suggestion, day.tone)"
+                    @mouseenter="hoveredDay = day; checkTooltipPosition($event)"
+                    @mouseleave="hoveredDay = null"
+                  ></div>
+                  <!-- Tooltip -->
+                  <div
+                    v-if="hoveredDay === day"
+                    :class="[
+                      'absolute z-50 left-1/2 -translate-x-1/2 px-2 py-1.5 bg-slate-800 border border-slate-600 rounded-lg shadow-2xl text-[10px] text-white whitespace-nowrap',
+                      tooltipPosition === 'top' ? 'bottom-full mb-2' : 'top-full mt-2'
+                    ]"
                   >
-                    {{ item.analyze.suggestion }}
-                  </span>
-                  <span class="text-[7px] text-slate-500 uppercase font-mono">10D</span>
-                  <div class="flex items-center gap-1">
-                    <div
-                      v-for="(day, idx) in [...(item.analyze?.history || [])].reverse()"
-                      :key="idx"
-                      class="relative"
-                    >
-                      <div
-                        class="w-2 h-2 sm:w-2.5 sm:h-2.5 rounded cursor-pointer"
-                        :class="dotColor(day.suggestion, day.tone)"
-                        @mouseenter="hoveredDay = day; checkTooltipPosition($event)"
-                        @mouseleave="hoveredDay = null"
-                      ></div>
-                      <div
-                        v-if="hoveredDay === day"
-                        :class="[
-                          'absolute z-50 left-1/2 -translate-x-1/2 px-2 py-1 bg-slate-800 border border-slate-600 rounded text-[9px] text-white whitespace-nowrap',
-                          tooltipPosition === 'top' ? 'bottom-full mb-1' : 'top-full mt-1'
-                        ]"
-                      >
-                        <div class="font-mono">{{ day.date || '-' }}</div>
-                        <div :class="String(day.suggestion || '').includes('关注') ? 'text-red-400' : String(day.suggestion || '').includes('减仓') ? 'text-emerald-400' : 'text-slate-300'">{{ day.suggestion || '-' }}</div>
-                        <div class="text-slate-400">{{ day.tone || '-' }}</div>
-                        <div class="text-slate-500 text-[8px]">{{ (day.patterns || []).join(', ') || '-' }}</div>
-                      </div>
+                    <div class="font-bold border-b border-slate-700 pb-1 mb-1">{{ day.date || '-' }}</div>
+                    <div class="flex items-center gap-2">
+                      <span :class="String(day.suggestion || '').includes('关注') ? 'text-red-400' : String(day.suggestion || '').includes('减仓') ? 'text-emerald-400' : 'text-slate-300'">{{ day.suggestion || '-' }}</span>
+                      <span class="text-slate-500 px-1 border border-slate-700 rounded text-[9px]">{{ day.tone || '-' }}</span>
                     </div>
+                    <div class="text-slate-400 mt-1 italic">{{ (day.patterns || []).join(', ') || '无形态' }}</div>
                   </div>
-                  <button
-                    v-if="item.analyze?.detail"
-                    @click.stop="openDetailModal(item)"
-                    class="text-[8px] text-sky-400 hover:text-sky-300 transition-colors"
-                  >
-                    详情
-                  </button>
-                </div>
-                <div class="text-[9px] text-slate-400 truncate">
-                  {{ parseCommentary(item.analyze?.summary)[0]?.text || '-' }}
                 </div>
               </div>
-            </td>
-            <td class="py-2 px-1 text-right">
-              <button @click.stop="handleRemove(item.ts_code)" class="text-slate-500 hover:text-red-400 transition-colors">
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                </svg>
-              </button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+            </div>
+
+            <!-- 专家点评片段 -->
+            <div class="flex-1 space-y-1.5">
+              <div class="flex flex-wrap gap-2">
+                <div 
+                  v-for="(seg, sIdx) in parseCommentary(item.analyze?.summary)" 
+                  :key="sIdx"
+                  class="flex items-center bg-slate-900/40 rounded-lg border border-slate-800/60 overflow-hidden"
+                >
+                  <span v-if="seg.tag" class="px-1.5 py-0.5 text-[9px] font-bold text-slate-100" :class="tagColor(seg.tag)">
+                    {{ seg.tag }}
+                  </span>
+                  <span class="px-2 py-0.5 text-[10px] text-slate-300">{{ seg.text }}</span>
+                </div>
+              </div>
+              <!-- 桌面端详情按钮 -->
+              <div class="hidden lg:block">
+                <button
+                  v-if="item.analyze?.detail"
+                  @click.stop="openDetailModal(item)"
+                  class="text-[10px] text-sky-400 hover:text-sky-300 font-bold transition-colors flex items-center gap-1"
+                >
+                  查看深度分析报告
+                  <svg xmlns="http://www.w3.org/2000/svg" class="h-2.5 w-2.5" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M10.293 3.293a1 1 0 011.414 0l6 6a1 1 0 010 1.414l-6 6a1 1 0 01-1.414-1.414L14.586 11H3a1 1 0 110-2h11.586l-4.293-4.293a1 1 0 010-1.414z" clip-rule="evenodd" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 4. 操作区 -->
+          <div class="col-span-1 flex justify-end md:items-center">
+            <button @click.stop="handleRemove(item.ts_code)" class="p-2 text-slate-600 hover:text-rose-400 hover:bg-rose-500/10 rounded-full transition-all">
+              <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+              </svg>
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- Zen模式全屏覆盖 -->
@@ -231,7 +283,7 @@
           </div>
         </div>
         <div class="h-[220px] sm:h-[280px] md:h-[340px] lg:h-[380px]">
-          <v-chart :option="klineOption" autoresize />
+          <v-chart :option="klineOption" autoresize @updateAxisPointer="handleUpdateAxisPointer" />
         </div>
       </template>
     </div>
@@ -428,6 +480,15 @@ const rows = ref([]);
 const newCode = ref('');
 const expandedComments = ref({});  // 展开的专业点评
 const hoveredDay = ref(null);  // 当前hover的10D节点
+const klineHoveredIndex = ref(-1);  // K线图当前hover的索引
+
+const handleUpdateAxisPointer = (event) => {
+  const info = event.dataIndex;
+  if (info != null && info >= 0) {
+    klineHoveredIndex.value = info;
+  }
+};
+
 const tooltipPosition = ref('top');  // tooltip显示位置
 
 const checkTooltipPosition = (event) => {
@@ -549,6 +610,7 @@ const showKline = async (stock, event) => {
   hoverInfo.stock = stock;
   hoverInfo.visible = true;
   hoverInfo.klineData = [];
+  klineHoveredIndex.value = -1;
   klineLoading.value = true;
   klineError.value = '';
 
@@ -575,6 +637,7 @@ const hideKline = () => {
   hoverInfo.visible = false;
   klineLoading.value = false;
   klineError.value = '';
+  klineHoveredIndex.value = -1;
 };
 
 const handleDocumentClick = (e) => {
@@ -590,7 +653,25 @@ const klineOption = computed(() => {
 });
 
 const latestKlineData = computed(() => {
-  return getLatestKlineData(hoverInfo.klineData);
+  const data = hoverInfo.klineData;
+  if (!data || !data.length) return null;
+  const idx = klineHoveredIndex.value >= 0 ? klineHoveredIndex.value : data.length - 1;
+  const item = data[idx];
+  if (!item) return getLatestKlineData(data);
+  return {
+    trade_date: item.trade_date,
+    close: Number(item.close) || null,
+    open: Number(item.open) || null,
+    high: Number(item.high) || null,
+    low: Number(item.low) || null,
+    vol: Number(item.vol) || 0,
+    amount: (Number(item.amount) || 0) * 1000 / 1e8,
+    net_mf_vol: item.net_mf_amount != null ? Number(item.net_mf_amount) / 10000 : null,
+    rzye: item.rzye != null ? Number(item.rzye) / 1e8 : null,
+    ma5: Number(item.ma5) || null,
+    ma10: Number(item.ma10) || null,
+    ma20: Number(item.ma20) || null,
+  };
 });
 
 const fmtVol = (v) => {

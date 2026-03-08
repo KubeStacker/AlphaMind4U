@@ -1,7 +1,7 @@
 # /backend/api/admin.py
 
 from fastapi import APIRouter, HTTPException, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 import arrow
 import asyncio
@@ -9,6 +9,7 @@ import time
 import logging
 import math
 import json
+import pandas as pd
 
 from etl.sync import sync_engine
 from etl.utils.quality import quality_checker
@@ -18,498 +19,399 @@ from etl.calendar import trading_calendar
 
 logger = logging.getLogger(__name__)
 
+router = APIRouter(prefix="/admin", tags=["Admin"])
+
 # 统一加密上下文
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# --- 任务队列优化 ---
-class TaskItem:
-    def __init__(self, name, func, *args, **kwargs):
-        self.name = name
-        self.func = func
-        self.args = args
-        self.kwargs = kwargs
-        self.status = "PENDING"
-        self.created_at = time.time()
-        self.started_at = None
-        self.finished_at = None
-        self.error = None
-
-# 全局任务队列和状态
-_task_queue = asyncio.Queue()
-_task_history = []
-_current_task = None
-
-async def task_worker():
-    """ 任务消费者，顺序执行队列中的任务 """
-    global _current_task
-    logger.info("任务中心消费者已启动")
-    while True:
-        task = await _task_queue.get()
-        _current_task = task
-        task.status = "RUNNING"
-        task.started_at = time.time()
-        logger.info(f"开始执行任务: {task.name}")
-        
-        try:
-            # 执行任务（目前大部分是同步函数，在 threadpool 中执行以防阻塞事件循环）
-            if asyncio.iscoroutinefunction(task.func):
-                await task.func(*task.args, **task.kwargs)
-            else:
-                await asyncio.to_thread(task.func, *task.args, **task.kwargs)
-            task.status = "COMPLETED"
-        except Exception as e:
-            logger.error(f"任务 {task.name} 失败: {e}")
-            task.status = "FAILED"
-            task.error = str(e)
-        finally:
-            task.finished_at = time.time()
-            _task_queue.task_done()
-            _current_task = None
-            # 只保留最近 20 条历史记录
-            _task_history.append(task)
-            if len(_task_history) > 20:
-                _task_history.pop(0)
-
-async def add_to_queue(name, func, *args, **kwargs):
-    """ 向队列添加任务 """
-    task = TaskItem(name, func, *args, **kwargs)
-    await _task_queue.put(task)
-    return task
-
-# 创建一个专门用于管理和ETL任务的路由
-router = APIRouter(
-    prefix="/admin",
-    tags=["Admin & ETL"], # 在OpenAPI文档中分组
-)
-
-# --- 数据模型 ---
-class IntegrityParams(BaseModel):
-    start_date: str | None = None
-    end_date: str | None = None
-
-class SyncDailyParams(BaseModel):
-    start_date: str | None = None
-    end_date: str | None = None
-    years: int = 1
-    force: bool = False
-    calc_factors: bool = True
+# --- 模型定义 ---
 
 class SyncTaskParams(BaseModel):
-    task: str
-    start_date: str | None = None
-    end_date: str | None = None
+    task: str = Field(..., description="任务类型: basic, calendar, price, index, moneyflow, financials, margin, fx, factors")
     years: int = 0
     days: int = 3
+    ts_code: Optional[str] = None
     force: bool = False
-    calc_factors: bool = True
-    ts_code: str | None = None
-    limit: int = 1000
-    force_sync: bool = False
-    refresh_sentiment: bool = False
-    sentiment_days: int = 30
+
+class TrainKlinePatternParams(BaseModel):
+    horizons: str = "3,5,10"
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    full_history: bool = False
+    min_confidence: float = 0.55
+    positive_return_threshold: float = 0.0
+
+class IntegrityParams(BaseModel):
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
 
 class UserCreate(BaseModel):
     username: str
     password: str
     role: str = "viewer"
 
-
-class TrainKlinePatternParams(BaseModel):
-    start_date: str | None = None
-    end_date: str | None = None
-    horizons: str = "3,5,10"
-    min_confidence: float = 0.55
-    positive_return_threshold: float = 0.0
-
 class PasswordChange(BaseModel):
     user_id: int
     new_password: str
 
-class DBQuery(BaseModel):
-    sql: str
+class UserLogin(BaseModel):
+    username: str
+    password: str
 
+# --- 任务持久化 ---
+class TaskRegistry:
+    @staticmethod
+    def create_task(task_type: str, params: dict, task_key: str = None):
+        import uuid
+        import json
+        import hashlib
+        
+        task_id = str(uuid.uuid4())[:8]
+        params_str = json.dumps(params, sort_keys=True)
+        if not task_key:
+            task_key = hashlib.md5(f"{task_type}_{params_str}".encode()).hexdigest()
+        
+        with get_db_connection() as con:
+            # 检查是否已有相同 key 的任务在排队或运行
+            existing = con.execute(
+                "SELECT task_id, status FROM etl_tasks WHERE task_key = ? AND status IN ('PENDING', 'RUNNING')", 
+                (task_key,)
+            ).fetchone()
+            if existing:
+                return existing[0], existing[1]
+            
+            # 如果是训练任务，确保全局只有一个 RUNNING/PENDING
+            if task_type == "KLINE_TRAIN":
+                global_running = con.execute(
+                    "SELECT task_id FROM etl_tasks WHERE task_type = 'KLINE_TRAIN' AND status IN ('PENDING', 'RUNNING')"
+                ).fetchone()
+                if global_running:
+                    return global_running[0], "ALREADY_EXISTS"
 
-def _safe_float(value):
-    try:
-        x = float(value)
-        if math.isnan(x) or math.isinf(x):
-            return None
-        return x
-    except Exception:
+            con.execute(
+                "INSERT INTO etl_tasks (task_id, task_key, task_type, params_json, status) VALUES (?, ?, ?, ?, ?)",
+                (task_id, task_key, task_type, params_str, "PENDING")
+            )
+        return task_id, "PENDING"
+
+    @staticmethod
+    def update_status(task_id: str, status: str, error: str = None, progress: float = None):
+        with get_db_connection() as con:
+            updates = ["status = ?", "heartbeat_at = CURRENT_TIMESTAMP"]
+            params = [status]
+            if status == "RUNNING":
+                updates.append("started_at = CURRENT_TIMESTAMP")
+            elif status in ("COMPLETED", "FAILED"):
+                updates.append("finished_at = CURRENT_TIMESTAMP")
+            
+            if error is not None:
+                updates.append("error = ?")
+                params.append(str(error))
+            if progress is not None:
+                updates.append("progress = ?")
+                params.append(float(progress))
+            
+            params.append(task_id)
+            con.execute(f"UPDATE etl_tasks SET {', '.join(updates)} WHERE task_id = ?", params)
+
+    @staticmethod
+    def get_pending_task():
+        try:
+            with get_db_connection() as con:
+                # 恢复僵尸任务：10分钟没心跳的 RUNNING 改回 PENDING
+                con.execute(
+                    "UPDATE etl_tasks SET status = 'PENDING' WHERE status = 'RUNNING' AND (heartbeat_at < CURRENT_TIMESTAMP - INTERVAL 10 MINUTE OR heartbeat_at IS NULL)"
+                )
+                
+                row = con.execute(
+                    "SELECT task_id, task_type, params_json FROM etl_tasks WHERE status = 'PENDING' ORDER BY created_at LIMIT 1"
+                ).fetchone()
+                if row:
+                    return {"task_id": row[0], "task_type": row[1], "params": json.loads(row[2])}
+        except Exception as e:
+            logger.error(f"获取待执行任务失败: {e}")
         return None
 
+# --- 辅助函数 ---
 
-def _normalize_ts_code(raw_code: str) -> str:
-    code = (raw_code or "").strip().upper()
-    if not code:
-        return ""
-    if "." in code:
-        return code
-    if code.startswith(("6", "9")):
-        return f"{code}.SH"
-    return f"{code}.SZ"
+def _normalize_ts_code(code: str) -> str:
+    if not code: return ""
+    code = str(code).upper().strip()
+    if "." in code: return code
+    # 简单启发式补齐
+    if code.startswith("6"): return f"{code}.SH"
+    if code.startswith("0") or code.startswith("3"): return f"{code}.SZ"
+    if code.startswith("8") or code.startswith("4"): return f"{code}.BJ"
+    return code
 
-
-def _detect_kline_patterns(df):
-    """向量化K线形态识别 — 委托给 kline_patterns 引擎"""
-    if df is None or df.empty or len(df) < 5:
-        return []
-
+def _safe_float(v, default=None):
     try:
-        from etl.utils.kline_patterns import detect_all_patterns, get_latest_signals
-        result_df = detect_all_patterns(df)
-        signals = get_latest_signals(result_df, min_confidence=0.5)
-        return [s['pattern'] for s in signals][:5]
-    except Exception as e:
-        logger.error(f"K线形态识别失败: {e}", exc_info=True)
-        return []
-
-
-def _get_single_day_analysis(df_slice):
-    if df_slice.empty or len(df_slice) < 5:
-        return {"patterns": [], "suggestion": "观望", "tone": "中性"}
-    
-    # 使用增强版识别器
-    recognizer = PatternRecognizer(df_slice)
-    patterns = recognizer.recognize()
-    
-    latest = df_slice.iloc[-1]
-    pct = _safe_float(latest.get("pct_chg"))
-    
-    suggestion = "观望"
-    tone = "中性"
-    
-    bullish_pats = {"底分型", "早晨之星", "金针探底", "红三兵", "大阳线", "老鸭头",
-                     "放量突破", "仙人指路", "锤子线", "看涨吞没", "启明星",
-                     "上升三法", "量价齐升", "曙光初现"}
-    bearish_pats = {"顶分型", "黄昏之星", "墓碑线", "三只乌鸦", "大阴线",
-                     "上吊线", "看跌吞没", "下降三法", "量价背离", "乌云盖顶",
-                     "射击之星"}
-    
-    p_set = set(patterns)
-    bull_hits = p_set.intersection(bullish_pats)
-    bear_hits = p_set.intersection(bearish_pats)
-    
-    if bull_hits:
-        suggestion = "试错关注" if "老鸭头" in bull_hits or "放量突破" in bull_hits else "择机关注"
-        tone = "看多"
-    elif bear_hits:
-        suggestion = "减仓避险" if "顶分型" in bear_hits else "谨慎持币"
-        tone = "看空"
-        
-    if pct is not None:
-        if pct >= 5: tone = "强力爆发"
-        elif pct <= -5: tone = "恐慌杀跌"
-        
-    return {
-        "patterns": patterns,
-        "suggestion": suggestion,
-        "tone": tone,
-        "date": str(latest.get("trade_date"))[:10]
-    }
-
+        if v is None: return default
+        f = float(v)
+        if math.isnan(f) or math.isinf(f): return default
+        return f
+    except:
+        return default
 
 def _build_watch_analyse(ts_code: str):
+    """ 为自选股生成详细的技术面分析（包含 10D 历史） """
+    try:
+        # 获取最近 70 天数据，确保计算 MA60 后还有足够的历史展示 10D
+        df = fetch_df(f"SELECT trade_date, open, high, low, close, vol as volume, amount, pct_chg FROM daily_price WHERE ts_code = '{ts_code}' ORDER BY trade_date DESC LIMIT 75")
+        if df.empty or len(df) < 20:
+            return {"summary": "数据不足", "history": [], "suggestion": "观望", "detail": {}}
+        
+        df = df.iloc[::-1].reset_index(drop=True) # 转为正序
+        
+        from etl.utils.patterns import PatternRecognizer, get_professional_commentary_detailed
+        
+        history = []
+        # 计算最近 10 个交易日的简易信号
+        for i in range(len(df) - 10, len(df)):
+            sub_df = df.iloc[:i+1]
+            if len(sub_df) < 5: continue
+            
+            recognizer = PatternRecognizer(sub_df)
+            patterns = recognizer.recognize()
+            detail = get_professional_commentary_detailed(sub_df, patterns)
+            
+            # 简单的信号推导逻辑
+            suggestion = "观望"
+            tone = "中性"
+            
+            # 1. 根据形态和涨跌幅推导 suggestion
+            pct_today = sub_df.iloc[-1].get('pct_chg', 0)
+            if any(p in ['老鸭头', '放量突破', '红三兵', '出水芙蓉'] for p in patterns) or pct_today > 5:
+                suggestion = "关注"
+            elif any(p in ['仙人指路', '多方炮', '探底回升'] for p in patterns):
+                suggestion = "试错"
+            elif any(p in ['三只乌鸦', '乌云盖顶', '高位放量'] for p in patterns) or pct_today < -5:
+                suggestion = "减仓"
+            
+            # 2. 根据趋势推导 tone
+            inst_view = detail.get("institution", [])
+            for v in inst_view:
+                if v.get("type") == "trend":
+                    if v.get("level") == "strong": tone = "看多(强)"
+                    elif v.get("level") == "medium": tone = "看多"
+                    elif v.get("level") == "bearish": tone = "看空"
+            
+            if pct_today > 7: tone = "爆发"
+            elif pct_today < -7: tone = "杀跌"
+            
+            history.append({
+                "date": str(sub_df.iloc[-1]['trade_date'])[:10],
+                "suggestion": suggestion,
+                "tone": tone,
+                "patterns": patterns
+            })
+
+        # 最新一天的完整分析
+        latest_recognizer = PatternRecognizer(df)
+        latest_patterns = latest_recognizer.recognize()
+        latest_detail = get_professional_commentary_detailed(df, latest_patterns)
+        
+        return {
+            "summary": latest_detail.get("summary", ""),
+            "history": history,
+            "suggestion": history[-1]["suggestion"] if history else "观望",
+            "detail": latest_detail,
+            "patterns": latest_patterns
+        }
+    except Exception as e:
+        logger.warning(f"分析股票 {ts_code} 失败: {e}", exc_info=True)
+        return {"summary": "分析失败", "history": [], "suggestion": "观望", "detail": {}}
+
+def _build_sync_task(p: SyncTaskParams):
+    task = p.task.lower()
+    if task == "basic":
+        return "基础信息同步", sync_engine.sync_stock_basic
+    elif task == "calendar":
+        return "交易日历同步", (sync_engine.sync_trade_cal, {"years": p.years})
+    elif task == "price":
+        return "日线行情同步", (sync_engine.sync_daily_price, {"years": p.years, "force": p.force})
+    elif task == "index":
+        return "指数数据同步", (sync_engine.sync_core_indices, {"years": p.years, "days": p.days})
+    elif task == "moneyflow":
+        return "资金流向同步", (sync_engine.sync_moneyflow, {"years": p.years, "days": p.days})
+    elif task == "financials":
+        return "财务数据同步", sync_engine.sync_financials
+    elif task == "margin":
+        return "两融数据同步", (sync_engine.sync_margin, {"days": p.days})
+    elif task == "fx":
+        return "外汇数据同步", sync_engine.sync_fx
+    elif task == "factors":
+        return "因子数据计算", sync_engine.fill_missing_factors
+    else:
+        raise ValueError(f"不支持的任务类型: {p.task}")
+
+# 全局任务循环
+async def task_worker():
+    logger.info("持久化任务消费者已启动")
+    while True:
+        task_info = TaskRegistry.get_pending_task()
+        if not task_info:
+            await asyncio.sleep(5)
+            continue
+            
+        task_id = task_info["task_id"]
+        task_type = task_info["task_type"]
+        params = task_info["params"]
+        
+        TaskRegistry.update_status(task_id, "RUNNING")
+        logger.info(f"开始执行持久化任务 [{task_id}]: {task_type}")
+        
+        try:
+            if task_type == "KLINE_TRAIN":
+                await asyncio.to_thread(_run_kline_train_task, task_id, params)
+            elif task_type == "SYNC":
+                await asyncio.to_thread(_run_sync_task, task_id, params)
+            elif task_type == "SENTIMENT":
+                await asyncio.to_thread(_run_sentiment_task, task_id, params)
+            else:
+                raise ValueError(f"未知任务类型: {task_type}")
+                
+            TaskRegistry.update_status(task_id, "COMPLETED", progress=100.0)
+            logger.info(f"任务 [{task_id}] 完成")
+        except Exception as e:
+            logger.error(f"任务 [{task_id}] 失败: {e}", exc_info=True)
+            TaskRegistry.update_status(task_id, "FAILED", error=str(e))
+        
+        await asyncio.sleep(1)
+
+def _run_sync_task(task_id, params):
+    # 模拟原来的 sync 逻辑
+    from pydantic import parse_obj_as
+    p = SyncTaskParams(**params)
+    task_name, task_obj = _build_sync_task(p)
+    if isinstance(task_obj, tuple):
+        fn, kwargs = task_obj
+        fn(**kwargs)
+    else:
+        task_obj()
+
+def _run_sentiment_task(task_id, params):
+    days = params.get("days", 365)
+    sync_index = params.get("sync_index", True)
+    if sync_index:
+        sync_engine.sync_core_indices(years=0, days=max(int(days), 30))
+    sync_engine.calculate_market_sentiment(days=days)
+
+def _run_kline_train_task(task_id, params):
     """
-    站在机构研究员和游资大佬视角，结合收盘日线给出专业点评。
+    优化的 K 线训练任务：
+    1. 批量分块读取数据
+    2. 单遍扫描完成训练与评估
     """
-    # 获取更多历史数据以计算均线
-    hist = fetch_df(
-        """
-        SELECT trade_date, open, high, low, close, pct_chg, vol, amount, factors
-        FROM daily_price
-        WHERE ts_code = ?
-        ORDER BY trade_date DESC
-        LIMIT 100
-        """,
-        (ts_code,),
+    from etl.utils.kline_patterns import build_combined_training_stats, save_pattern_calibration
+    from pathlib import Path
+    
+    horizons = tuple(int(x.strip()) for x in params["horizons"].split(",") if x.strip())
+    start_date = params.get("start_date")
+    end_date = params.get("end_date")
+    
+    # 默认回溯 2 年，除非显式 full_history
+    if not start_date and not params.get("full_history"):
+        start_date = arrow.now().shift(years=-2).format("YYYY-MM-DD")
+        
+    output_path = Path(__file__).parent.parent / "etl" / "utils" / "kline_pattern_calibration.json"
+    
+    # 获取需要处理的所有 ts_code
+    codes_df = fetch_df("SELECT DISTINCT ts_code FROM daily_price")
+    all_codes = codes_df["ts_code"].tolist()
+    total_codes = len(all_codes)
+    
+    chunk_size = 200
+    all_parts = []
+    
+    for i in range(0, total_codes, chunk_size):
+        chunk_codes = all_codes[i:i+chunk_size]
+        placeholders = ",".join(["?"] * len(chunk_codes))
+        
+        conditions = [f"ts_code IN ({placeholders})"]
+        q_params = list(chunk_codes)
+        
+        if start_date:
+            conditions.append("trade_date >= ?")
+            q_params.append(start_date)
+        if end_date:
+            conditions.append("trade_date <= ?")
+            q_params.append(end_date)
+            
+        sql = f"SELECT trade_date, ts_code, open, high, low, close, pct_chg, vol, amount FROM daily_price WHERE {' AND '.join(conditions)} ORDER BY ts_code, trade_date"
+        df_chunk = fetch_df(sql, q_params)
+        
+        if not df_chunk.empty:
+            all_parts.append(df_chunk)
+            
+        progress = min(90.0, (i + len(chunk_codes)) / total_codes * 100 * 0.8) # 预留 20% 给计算
+        TaskRegistry.update_status(task_id, "RUNNING", progress=progress)
+        logger.info(f"Task [{task_id}] loading data: {i+len(chunk_codes)}/{total_codes} codes")
+
+    if not all_parts:
+        raise ValueError("未查询到有效数据")
+        
+    full_df = pd.concat(all_parts, ignore_index=True)
+    TaskRegistry.update_status(task_id, "RUNNING", progress=85.0)
+    
+    # 单遍扫描
+    calibration, summary = build_combined_training_stats(
+        df=full_df,
+        horizons=horizons,
+        min_confidence=params["min_confidence"],
+        positive_return_threshold=params["positive_return_threshold"]
     )
     
-    if hist.empty:
-        return {"summary": "历史数据不足", "patterns": [], "suggestion": "观望", "history": []}
+    save_pattern_calibration(calibration, str(output_path))
+    TaskRegistry.update_status(task_id, "RUNNING", progress=100.0)
+    
+    logger.info(f"K线形态校准文件已原子化更新: {output_path}")
+    if not summary.empty:
+        primary = horizons[0]
+        logger.info(f"Top patterns by {primary}d edge:\n{summary.head(10).to_string()}")
 
-    hist = hist.iloc[::-1].reset_index(drop=True)
-    
-    # 展开 factors
-    for idx, row in hist.iterrows():
-        if row['factors']:
-            try:
-                factors = json.loads(row['factors']) if isinstance(row['factors'], str) else row['factors']
-                for k, v in factors.items():
-                    hist.at[idx, k] = v
-            except: pass
-    
-    # 填充缺失均线 (如果SQL没算出来，手动补一下基础的)
-    for ma in [5, 10, 20, 60]:
-        col = f'ma{ma}'
-        if col not in hist.columns:
-            hist[col] = hist['close'].rolling(ma).mean()
-
-    # 获取融资数据 (如果有)
-    margin = fetch_df(
-        """
-        SELECT rzye, rzmre, rqye
-        FROM stock_margin
-        WHERE ts_code = ?
-        ORDER BY trade_date DESC
-        LIMIT 1
-        """,
-        (ts_code,),
-    )
-    if not margin.empty:
-        for col in margin.columns:
-            hist.at[len(hist)-1, col] = margin.iloc[0][col]
-
-    # 获取最近 10 天的简要形态历史 (前端点点)
-    history = []
-    n = len(hist)
-    history_window = max(1, min(10, n - 19))
-    for i in range(history_window):
-        idx = n - i
-        day_analysis = _get_single_day_analysis(hist.iloc[:idx])
-        history.append(day_analysis)
-    
-    # 生成专业点评 (最近 5 日)
-    recognizer = PatternRecognizer(hist)
-    latest_patterns = recognizer.recognize()
-    pro_commentary = get_professional_commentary(hist, latest_patterns)
-    pro_detail = get_professional_commentary_detailed(hist, latest_patterns)
-    
-    latest_analysis = history[0] if history else {"suggestion": "观望"}
-    
-    return {
-        "summary": pro_commentary,
-        "patterns": latest_patterns,
-        "suggestion": latest_analysis["suggestion"],
-        "history": history,
-        "detail": pro_detail
-    }
-
-# --- API 接口 ---
+# 修改 API 接口使用新任务系统
 
 @router.get("/tasks/status")
-def get_tasks_status():
-    """ 获取当前任务执行状态和历史 """
+def get_tasks_status(limit: int = 20):
+    """ 获取持久化任务状态 """
+    with get_db_connection() as con:
+        history = con.execute(
+            "SELECT task_id, task_type, status, error, progress, CAST(created_at AS VARCHAR), CAST(finished_at AS VARCHAR) FROM etl_tasks ORDER BY created_at DESC LIMIT ?",
+            (limit,)
+        ).fetchall()
+        
     return {
-        "queue_size": _task_queue.qsize(),
-        "current_task": {
-            "name": _current_task.name,
-            "started_at": _current_task.started_at,
-            "status": _current_task.status
-        } if _current_task else None,
-        "history": [
+        "tasks": [
             {
-                "name": t.name,
-                "status": t.status,
-                "error": t.error,
-                "finished_at": t.finished_at
-            } for t in reversed(_task_history)
+                "task_id": r[0],
+                "task_type": r[1],
+                "status": r[2],
+                "error": r[3],
+                "progress": r[4],
+                "created_at": r[5],
+                "finished_at": r[6]
+            } for r in history
         ]
     }
 
-@router.post("/db/query")
-def execute_db_query(query: DBQuery):
-    """ 执行自定义 SQL 查询 (限 SELECT) """
-    if not query.sql.strip().lower().startswith("select"):
-        raise HTTPException(status_code=400, detail="仅支持 SELECT 查询")
-    
-    try:
-        import math
-        from db.connection import fetch_df_read_only
-        df = fetch_df_read_only(query.sql)
-        if not df.empty:
-            for col in df.columns:
-                if df[col].dtype == 'object' or hasattr(df[col], 'dt'):
-                    df[col] = df[col].astype(str)
-            
-            data = df.to_dict('records')
-            for record in data:
-                for key, value in record.items():
-                    if isinstance(value, float) and math.isnan(value):
-                        record[key] = None
-
-            return {
-                "columns": df.columns.tolist(),
-                "data": data
-            }
-        return {"columns": [], "data": []}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"查询执行失败: {e}")
-
-def _build_sync_task(params: SyncTaskParams):
-    task = (params.task or "").strip().lower()
-    if task == "daily":
-        name = f"同步当日行情:{params.start_date}" if params.start_date else "同步当日行情"
-        def logic():
-            # 兼容仅传 start_date 的手动补数场景
-            if params.start_date and (not params.end_date or params.start_date == params.end_date):
-                sync_engine.sync_daily_by_date(params.start_date, calc_factors=params.calc_factors)
-            else:
-                years = params.years if params.years > 0 else 1
-                sync_engine.sync_daily_price(years=years, force=params.force, calc_factors=params.calc_factors)
-        return name, logic
-
-    if task == "index":
-        ts_code = params.ts_code or "000001.SH"
-        years = params.years if params.years >= 0 else 0
-        days = params.days if params.days > 0 else 3
-        return f"同步指数:{ts_code}", (sync_engine.sync_market_index, {"ts_code": ts_code, "years": years, "days": days})
-
-    if task == "basic":
-        return "同步股票基本信息", sync_engine.sync_stock_basic
-    if task == "concepts":
-        return "同步概念板块", sync_engine.sync_concepts
-    if task == "calendar":
-        return "同步交易日历", sync_engine.sync_trade_cal
-    if task == "financials":
-        return "同步财务指标", (sync_engine.sync_financials, {"limit": params.limit})
-
-    if task == "quarterly_income":
-        from etl.tasks.financials_task import FinancialsTask
-        from etl.providers.tushare_pro import TushareProvider
-        provider = TushareProvider()
-        financial_task = FinancialsTask(provider=provider)
-        return "同步季度利润表", (financial_task.sync_quarterly_income, {"ts_code": params.ts_code, "force_sync": params.force_sync})
-
-    if task == "fina_indicator":
-        from etl.tasks.financials_task import FinancialsTask
-        from etl.providers.tushare_pro import TushareProvider
-        provider = TushareProvider()
-        financial_task = FinancialsTask(provider=provider)
-        return "同步财务指标(全部)", (financial_task.sync_fina_indicator, {"ts_code": params.ts_code})
-
-    if task == "moneyflow":
-        years = params.years if params.years >= 0 else 0
-        days = params.days if params.days > 0 else 3
-        return "同步资金流向", (sync_engine.sync_moneyflow, {"years": years, "days": days, "force": params.force})
-
-    if task == "margin":
-        days = params.days if params.days > 0 else 90
-        return f"同步融资融券({days}天)", (sync_engine.sync_margin, {"days": days})
-
-    if task == "fx":
-        return "同步外汇数据", sync_engine.sync_fx
-
-    raise HTTPException(status_code=400, detail=f"不支持的同步任务: {params.task}")
-
+@router.post("/etl/train_kline_patterns", status_code=202)
+async def trigger_kline_pattern_training(params: TrainKlinePatternParams):
+    tid, status = TaskRegistry.create_task("KLINE_TRAIN", params.dict())
+    if status == "ALREADY_EXISTS":
+        return {"message": "已有相同任务在排队或运行", "task_id": tid}
+    return {"message": "训练任务已加入持久化队列", "task_id": tid}
 
 @router.post("/etl/sync", status_code=202)
 async def trigger_sync(params: SyncTaskParams):
-    task_name, task_obj = _build_sync_task(params)
-    sentiment_days = max(int(params.sentiment_days), 1)
-
-    def run_task():
-        if isinstance(task_obj, tuple):
-            fn, kwargs = task_obj
-            fn(**kwargs)
-        else:
-            task_obj()
-
-    if params.refresh_sentiment:
-        def wrapped():
-            run_task()
-            sync_engine.sync_core_indices(years=0, days=max(5, sentiment_days))
-            sync_engine.calculate_market_sentiment(days=sentiment_days)
-        wrapped_name = f"{task_name}+重算市场情绪({sentiment_days}天)"
-        await add_to_queue(wrapped_name, wrapped)
-        return {"message": f"{wrapped_name}任务已加入队列"}
-
-    await add_to_queue(task_name, run_task)
-    return {"message": f"{task_name}任务已加入队列"}
+    tid, status = TaskRegistry.create_task("SYNC", params.dict())
+    return {"message": "同步任务已加入持久化队列", "task_id": tid}
 
 @router.post("/etl/sentiment", status_code=202)
 async def trigger_sentiment_sync(days: int = 365, sync_index: bool = True):
-    """
-    统一情绪任务入口：
-    - sync_index=True: 先同步指数再重算情绪
-    - sync_index=False: 仅重算情绪
-    """
-    def task_logic():
-        if sync_index:
-            # 先补齐情绪模型依赖的核心指数，并覆盖本次重算窗口
-            sync_days = max(int(days), 30)
-            sync_engine.sync_core_indices(years=0, days=sync_days)
-        sync_engine.calculate_market_sentiment(days=days)
-
-    task_name = f"{'同步并重算' if sync_index else '重算'}市场情绪({days}天)"
-    await add_to_queue(task_name, task_logic)
-    return {"message": f"{task_name}任务已加入队列"}
-
-
-@router.post("/etl/train_kline_patterns", status_code=202)
-async def trigger_kline_pattern_training(params: TrainKlinePatternParams):
-    """
-    训练K线形态校准文件
-    """
-    from pathlib import Path
-    from etl.utils.kline_patterns import (
-        train_pattern_calibration,
-        save_pattern_calibration,
-        evaluate_pattern_performance,
-    )
-
-    horizons = tuple(int(x.strip()) for x in params.horizons.split(",") if x.strip())
-    if not horizons:
-        raise HTTPException(status_code=400, detail="至少指定一个 horizon")
-
-    output_path = Path(__file__).parent.parent / "etl" / "utils" / "kline_pattern_calibration.json"
-
-    def task_logic():
-        conditions = []
-        query_params = []
-
-        if params.start_date:
-            conditions.append("trade_date >= ?")
-            query_params.append(params.start_date)
-        if params.end_date:
-            conditions.append("trade_date <= ?")
-            query_params.append(params.end_date)
-
-        where_sql = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-        sql = f"""
-            SELECT trade_date, ts_code, open, high, low, close, pct_chg, vol, amount
-            FROM daily_price
-            {where_sql}
-            ORDER BY ts_code, trade_date
-        """
-        df = fetch_df(sql, query_params)
-        if df.empty:
-            logger.warning("未查询到 daily_price 历史数据，无法训练。")
-            return
-
-        calibration = train_pattern_calibration(
-            df=df,
-            group_col="ts_code",
-            date_col="trade_date",
-            horizons=horizons,
-            min_confidence=params.min_confidence,
-            positive_return_threshold=params.positive_return_threshold,
-        )
-        save_pattern_calibration(calibration, str(output_path))
-
-        summary = evaluate_pattern_performance(
-            df=df,
-            group_col="ts_code",
-            date_col="trade_date",
-            horizons=horizons,
-            min_confidence=params.min_confidence,
-            positive_return_threshold=params.positive_return_threshold,
-        )
-
-        logger.info(f"K线形态校准文件已生成: {output_path}")
-        if not summary.empty:
-            primary = horizons[0]
-            logger.info(f"Top patterns by {primary}d directional edge:")
-            show_cols = [
-                "pattern", "direction", "sample_count", "avg_confidence",
-                f"hit_rate_{primary}d", f"avg_ret_{primary}d", f"directional_edge_{primary}d"
-            ]
-            show_cols = [c for c in show_cols if c in summary.columns]
-            logger.info(summary[show_cols].head(12).to_string(index=False))
-
-    task_name = f"训练K线形态校准({params.start_date or '全量'}~{params.end_date or '至今'})"
-    await add_to_queue(task_name, task_logic)
-    return {"message": f"{task_name}任务已加入队列"}
+    params = {"days": days, "sync_index": sync_index}
+    tid, status = TaskRegistry.create_task("SENTIMENT", params)
+    return {"message": "情绪计算任务已加入持久化队列", "task_id": tid}
 
 @router.get("/integrity")
 def get_data_integrity_report(params: IntegrityParams = Depends()):
@@ -1410,7 +1312,7 @@ def get_stock_kline(ts_code: str, limit: int = 200):
         # 获取主力资金数据
         moneyflow_df = fetch_df(
             """
-            SELECT trade_date, net_mf_vol
+            SELECT trade_date, net_mf_vol, net_mf_amount
             FROM stock_moneyflow
             WHERE ts_code = ?
             ORDER BY trade_date DESC
@@ -1540,70 +1442,3 @@ def get_watchlist_realtime(codes: Optional[str] = None, src: str = "sina"):
         "data": rows,
     }
 
-    col_map = {str(c).lower(): c for c in quote_df.columns}
-    ts_col = col_map.get("ts_code")
-    if ts_col is None:
-        raise HTTPException(status_code=500, detail="实时行情缺少 ts_code 字段")
-
-    name_col = col_map.get("name")
-    price_col = col_map.get("price") or col_map.get("current") or col_map.get("close")
-    pre_close_col = col_map.get("pre_close") or col_map.get("yclose")
-    open_col = col_map.get("open")
-    high_col = col_map.get("high")
-    low_col = col_map.get("low")
-    pct_col = col_map.get("pct_chg") or col_map.get("pct_change") or col_map.get("changepercent")
-    vol_col = col_map.get("vol") or col_map.get("volume")
-    amount_col = col_map.get("amount") or col_map.get("turnover")
-
-    rows = []
-    for _, row in quote_df.iterrows():
-        ts_code = _normalize_ts_code(str(row.get(ts_col, "")))
-        if ts_code not in norm_codes:
-            continue
-
-        price = _safe_float(row.get(price_col)) if price_col else None
-        pre_close = _safe_float(row.get(pre_close_col)) if pre_close_col else None
-        open_val = _safe_float(row.get(open_col)) if open_col else None
-        high_val = _safe_float(row.get(high_col)) if high_col else None
-        low_val = _safe_float(row.get(low_col)) if low_col else None
-        
-        pct = _safe_float(row.get(pct_col)) if pct_col else None
-        diff = None
-        amplitude = None
-
-        if price is not None and pre_close is not None:
-            diff = price - pre_close
-            if pct is None and pre_close != 0:
-                pct = diff / pre_close * 100.0
-        
-        if high_val is not None and low_val is not None and pre_close and pre_close > 0:
-            amplitude = (high_val - low_val) / pre_close * 100.0
-
-        rows.append(
-            {
-                "ts_code": ts_code,
-                "name": str(row.get(name_col, "")) if name_col else "",
-                "price": price,
-                "pre_close": pre_close,
-                "open": open_val,
-                "high": high_val,
-                "low": low_val,
-                "pct": pct,
-                "diff": diff,
-                "amplitude": amplitude,
-                "vol": _safe_float(row.get(vol_col)) if vol_col else None,
-                "amount": _safe_float(row.get(amount_col)) if amount_col else None,
-                "analyze": _build_watch_analyse(ts_code),
-            }
-        )
-
-    idx_map = {c: i for i, c in enumerate(norm_codes)}
-    rows.sort(key=lambda x: idx_map.get(x.get("ts_code"), 10**9))
-
-    return {
-        "status": "success",
-        "refresh_mode": "realtime",
-        "is_trading_time": True,
-        "message": "ok",
-        "data": rows,
-    }
