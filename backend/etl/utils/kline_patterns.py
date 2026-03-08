@@ -112,9 +112,10 @@ def _body_features(df: pd.DataFrame) -> pd.DataFrame:
     计算K线实体和影线基础特征（向量化）。
     """
     df = _ensure_volume_col(df)
-    if not CORE_FEATURE_COLS.issubset(df.columns):
-        df = df.copy()
+    if "body_to_atr" in df.columns:
+        return df
 
+    df = df.copy()
     base_cols = ["open", "high", "low", "close"]
     if "volume" in df.columns:
         base_cols.append("volume")
@@ -170,6 +171,9 @@ def _volume_features(df: pd.DataFrame) -> pd.DataFrame:
     计算量能辅助特征（向量化）。
     """
     df = _ensure_volume_col(df)
+    if "vol_trend" in df.columns:
+        return df
+
     if "volume" not in df.columns:
         df = df.copy()
         df["volume"] = 0.0
@@ -187,6 +191,9 @@ def _volume_features(df: pd.DataFrame) -> pd.DataFrame:
 
 def _ma_features(df: pd.DataFrame) -> pd.DataFrame:
     """计算均线与均线斜率特征。"""
+    if "ma20_slope_5" in df.columns:
+        return df
+
     for p in [5, 10, 20, 60]:
         col = f"ma{p}"
         if col not in df.columns:
@@ -205,6 +212,9 @@ def _trend_context(df: pd.DataFrame) -> pd.DataFrame:
       - ret_3/5/10/20
       - close_rank_20（处于20日区间中的位置）
     """
+    if "trend_up" in df.columns and "close_rank_20" in df.columns:
+        return df
+
     df = _ma_features(df)
     df["ret_3"] = _safe_divide(df["close"] - df["close"].shift(3), df["close"].shift(3), 0.0)
     df["ret_5"] = _safe_divide(df["close"] - df["close"].shift(5), df["close"].shift(5), 0.0)
@@ -232,6 +242,8 @@ def _trend_context(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _prepare_core_features(df: pd.DataFrame) -> pd.DataFrame:
+    if "trend_up" in df.columns and "body_to_atr" in df.columns:
+        return df
     df = _body_features(df)
     df = _volume_features(df)
     df = _trend_context(df)

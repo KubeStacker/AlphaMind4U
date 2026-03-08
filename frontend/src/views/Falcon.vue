@@ -76,6 +76,7 @@
               <th class="py-2">序</th>
               <th>标的</th>
               <th>策略分</th>
+              <th>理由</th>
               <th>+5</th>
               <th>+10</th>
               <th>操作</th>
@@ -101,6 +102,7 @@
                 </button>
               </td>
               <td>{{ metricText(r.strategy_score, 1) }}</td>
+              <td class="text-slate-400 truncate max-w-[120px]" :title="r.reason">{{ r.reason || '-' }}</td>
               <td :class="retClass(r.ret_5d)">{{ retPct(r.ret_5d) }}</td>
               <td :class="retClass(r.ret_10d)">{{ retPct(r.ret_10d) }}</td>
               <td>

@@ -1,6 +1,7 @@
 import logging
 import json
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -48,7 +49,7 @@ def _load_calibration() -> dict[str, Any] | None:
 class ClassicKlineRecommenderPlugin(FalconPlugin):
     strategy_id = "classic_kline_recommender"
     display_name = "经典K线识别推荐"
-    version = "1.0.1"
+    version = "1.1.0"
 
     def default_params(self) -> dict[str, Any]:
         return {
@@ -119,16 +120,21 @@ class ClassicKlineRecommenderPlugin(FalconPlugin):
                     valid_bullish = []
                     for s in bullish_signals:
                         stats = calibration.get("patterns", {}).get(s["code"], {}).get(f"{params['calibration_horizon']}d", {})
-                        if stats.get("sample_count", 0) >= params["min_sample_count"] and \
-                           (stats.get("bayes_hit_rate", 1.0) >= params["min_historical_hit_rate"]):
-                            valid_bullish.append(s)
+                        # 仅当统计信息存在且不满足阈值时才过滤
+                        if stats:
+                            if stats.get("sample_count", 0) < params["min_sample_count"] or \
+                               stats.get("bayes_hit_rate", 1.0) < params["min_historical_hit_rate"]:
+                                continue
+                        valid_bullish.append(s)
                     bullish_signals = valid_bullish
                     
                     valid_bearish = []
                     for s in bearish_signals:
                         stats = calibration.get("patterns", {}).get(s["code"], {}).get(f"{params['calibration_horizon']}d", {})
-                        if stats.get("sample_count", 0) >= params["min_sample_count"]:
-                            valid_bearish.append(s)
+                        # 仅当统计信息存在且样本数太少时才过滤 (看跌形态不要求胜率，只看样本可靠性)
+                        if stats and stats.get("sample_count", 0) < params["min_sample_count"]:
+                            continue
+                        valid_bearish.append(s)
                     bearish_signals = valid_bearish
 
                 if not bullish_signals and not bearish_signals:
@@ -214,17 +220,23 @@ class ClassicKlineRecommenderPlugin(FalconPlugin):
         return float(np.clip(penalty, 0, 50))
 
     def run(self, universe_df: pd.DataFrame, as_of_date: str, params: dict[str, Any]) -> pd.DataFrame:
+        t0 = time.time()
         if universe_df is None or universe_df.empty:
+            logger.warning(f"[{self.display_name}] Empty universe provided.")
             return pd.DataFrame()
 
         p = {**self.default_params(), **(params or {})}
         
         # 基础过滤
         min_amount = float(p["min_amount"])
+        total_universe = len(universe_df)
         work_df = universe_df[universe_df["amount"] >= min_amount].copy()
         if p["require_benchmark"]:
             work_df = work_df[work_df.get("benchmark_ok", True)]
             
+        filtered_count = len(work_df)
+        logger.info(f"[{self.display_name}] Universe: {total_universe} -> Filtered: {filtered_count} (Amount>={min_amount/1e4:.0f}w, BenchOK={p['require_benchmark']})")
+
         if work_df.empty:
             return pd.DataFrame()
 
@@ -237,11 +249,21 @@ class ClassicKlineRecommenderPlugin(FalconPlugin):
         
         pattern_results = {}
         # 批量拉取历史并识别
+        t_all_batches_start = time.time()
         for i in range(0, len(all_codes), batch_size):
+            t_chunk_start = time.time()
             chunk_codes = all_codes[i:i+batch_size]
-            panel = provider.load_history_panel(as_of_date, chunk_codes, lookback_days=int(p["history_days"]))
-            chunk_results = self._calculate_pattern_score_batch(panel, calibration, p)
-            pattern_results.update(chunk_results)
+            try:
+                # 保持 DuckDB 单进程友好，顺序执行
+                panel = provider.load_history_panel(as_of_date, chunk_codes, lookback_days=int(p["history_days"]))
+                chunk_results = self._calculate_pattern_score_batch(panel, calibration, p)
+                pattern_results.update(chunk_results)
+                logger.debug(f"[{self.display_name}] Batch {i//batch_size + 1} processed {len(chunk_codes)} stocks in {time.time() - t_chunk_start:.2f}s")
+            except Exception as e:
+                logger.error(f"[{self.display_name}] Batch {i//batch_size + 1} failed: {e}")
+        
+        t_all_batches_end = time.time()
+        logger.info(f"[{self.display_name}] Pattern recognition: {len(pattern_results)} hits out of {len(all_codes)}. Total batch time: {t_all_batches_end - t_all_batches_start:.2f}s")
 
         # 组装结果
         final_list = []
@@ -274,12 +296,29 @@ class ClassicKlineRecommenderPlugin(FalconPlugin):
             if final_score < float(p["min_score_to_pick"]) or pres["confidence"] < float(p["min_confidence_to_pick"]):
                 continue
 
+            # 生成可读理由
+            bullish_names = [s["pattern"] for s in pres.get("bullish_signals", [])]
+            reason_parts = []
+            if bullish_names:
+                reason_parts.append(f"形态:{','.join(bullish_names)}")
+            if trend_score > 60:
+                reason_parts.append("趋势强")
+            elif trend_score < 40:
+                reason_parts.append("趋势弱")
+            
+            if flow_score > 60:
+                reason_parts.append("资金流入")
+            
+            if sector_score > 60:
+                reason_parts.append("板块热")
+                
             final_list.append({
                 "ts_code": ts_code,
                 "name": row.get("name", ""),
                 "strategy_score": final_score,
                 "confidence": pres["confidence"],
                 "signal_label": "强信号" if final_score >= 75 else "偏强" if final_score >= 60 else "观察",
+                "reason": " + ".join(reason_parts),
                 "score_breakdown": {
                     "kline_signals": pres["bullish_signals"] + pres["bearish_signals"],
                     "factor_scores": {
@@ -292,6 +331,9 @@ class ClassicKlineRecommenderPlugin(FalconPlugin):
                     }
                 }
             })
+
+        t1 = time.time()
+        logger.info(f"[{self.display_name}] Finished. Selected {len(final_list)} candidates. Total time: {t1 - t0:.2f}s")
 
         if not final_list:
             return pd.DataFrame()
