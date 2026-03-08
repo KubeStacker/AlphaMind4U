@@ -45,7 +45,7 @@
       </div>
     </div>
 
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-2">
+    <div class="grid grid-cols-2 md:grid-cols-6 gap-2">
       <div class="bg-business-dark border border-business-light rounded-xl p-3">
         <div class="text-[10px] text-slate-500">本次评分</div>
         <div class="text-lg font-bold text-white mt-1">{{ metricText(activeRun?.summary?.avg_score, 1) }}</div>
@@ -62,11 +62,58 @@
         <div class="text-[10px] text-slate-500">候选数</div>
         <div class="text-lg font-bold text-white mt-1">{{ activeRun?.summary?.pick_count ?? '-' }}</div>
       </div>
+      <div class="bg-business-dark border border-business-light rounded-xl p-3">
+        <div class="text-[10px] text-slate-500">建议仓位</div>
+        <div class="text-lg font-bold text-amber-300 mt-1">{{ metricPct(activeRun?.summary?.portfolio_advice?.market_target_position) }}</div>
+      </div>
+      <div class="bg-business-dark border border-business-light rounded-xl p-3">
+        <div class="text-[10px] text-slate-500">单票上限</div>
+        <div class="text-lg font-bold text-sky-300 mt-1">{{ metricPct(activeRun?.summary?.portfolio_advice?.max_single_position) }}</div>
+      </div>
+    </div>
+
+    <div
+      v-if="activeRun?.summary?.portfolio_advice"
+      class="bg-business-dark border border-business-light rounded-2xl px-4 py-3"
+    >
+      <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+        <div>
+          <div class="text-[10px] text-slate-500">组合执行建议</div>
+          <div class="text-sm font-semibold text-slate-100 mt-1">
+            {{ activeRun.summary.portfolio_advice.market_label || '-' }}
+            <span class="text-slate-400 font-normal">/ {{ activeRun.summary.portfolio_advice.market_signal || '-' }}</span>
+          </div>
+        </div>
+        <div class="flex flex-wrap gap-3 text-[11px] text-slate-400">
+          <span>已分配 {{ metricPct(activeRun.summary.portfolio_advice.allocated_position) }}</span>
+          <span>现金缓冲 {{ metricPct(activeRun.summary.portfolio_advice.cash_buffer) }}</span>
+          <span>建议持股 {{ activeRun.summary.portfolio_advice.suggested_pick_count ?? '-' }} 只</span>
+        </div>
+      </div>
+    </div>
+
+    <div
+      v-if="activeRun?.summary?.pool_split"
+      class="bg-business-dark border border-business-light rounded-2xl px-4 py-3"
+    >
+      <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+        <div>
+          <div class="text-[10px] text-slate-500">分层结果</div>
+          <div class="text-sm font-semibold text-slate-100 mt-1">
+            可交易池 {{ activePoolSplit.tradable_count ?? 0 }} 只
+            <span class="text-slate-400 font-normal">/ 观察池 {{ activePoolSplit.observation_count ?? 0 }} 只</span>
+          </div>
+        </div>
+        <div v-if="activeObservationSummary" class="flex flex-wrap gap-3 text-[11px] text-slate-400">
+          <span>观察池 +5 {{ metricPct(activeObservationSummary.hit_5d) }}</span>
+          <span>观察池 +10 {{ metricPct(activeObservationSummary.hit_10d) }}</span>
+        </div>
+      </div>
     </div>
 
     <div class="bg-business-dark border border-business-light rounded-2xl p-3">
       <div class="flex items-center justify-between mb-2">
-        <h3 class="text-xs font-bold text-slate-200">推荐结果</h3>
+        <h3 class="text-xs font-bold text-slate-200">可交易池</h3>
         <div class="text-[10px] text-slate-500">{{ activeRun?.trade_date || '-' }}</div>
       </div>
       <div class="overflow-auto max-h-[460px]">
@@ -111,7 +158,56 @@
                 </div>
               </td>
             </tr>
-            <tr v-if="activeRunPicks.length === 0"><td colspan="6" class="py-6 text-center text-slate-500">暂无结果</td></tr>
+            <tr v-if="activeRunPicks.length === 0"><td colspan="7" class="py-6 text-center text-slate-500">暂无结果</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div v-if="activeObservationPool.length > 0" class="bg-business-dark border border-business-light rounded-2xl p-3">
+      <div class="flex items-center justify-between mb-2">
+        <h3 class="text-xs font-bold text-slate-200">观察池</h3>
+        <div class="text-[10px] text-slate-500">{{ activeObservationPool.length }} 只</div>
+      </div>
+      <div class="overflow-auto max-h-[360px]">
+        <table class="w-full text-left text-xs">
+          <thead class="text-slate-500 border-b border-slate-700 sticky top-0 bg-business-dark">
+            <tr>
+              <th class="py-2">标的</th>
+              <th>策略分</th>
+              <th>观察原因</th>
+              <th>主线</th>
+              <th>阶段</th>
+              <th>拥挤度</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="r in activeObservationPool"
+              :key="`observe-${r.ts_code}`"
+              class="border-b border-slate-800/60"
+            >
+              <td class="py-2">
+                <button
+                  class="text-left"
+                  @mouseenter="handleStockHover(r)"
+                  @mouseleave="scheduleHideKlinePreview"
+                  @focus="handleStockHover(r)"
+                >
+                  <div class="font-semibold text-slate-100 hover:text-sky-300">{{ r.name || '-' }}</div>
+                  <div class="text-[10px] text-slate-500">{{ r.ts_code }}</div>
+                </button>
+              </td>
+              <td>{{ metricText(r.strategy_score, 1) }}</td>
+              <td class="text-slate-400 max-w-[220px]" :title="r.observation_reason">{{ r.observation_reason || '-' }}</td>
+              <td class="text-slate-300">{{ r.mainline_name || '-' }}</td>
+              <td class="text-slate-400">{{ r.mainline_phase || '-' }}</td>
+              <td class="text-amber-300">{{ metricText(r.crowding_score, 1) }}</td>
+              <td>
+                <button @click="openScore(r)" class="px-2 py-1 rounded border border-slate-700 text-[10px] text-slate-300 hover:bg-slate-800">评分</button>
+              </td>
+            </tr>
           </tbody>
         </table>
       </div>
@@ -274,6 +370,9 @@ let klineHideTimer = null;
 const klineCache = new Map();
 
 const scoreModal = ref({ open: false, row: null });
+const activeObservationPool = computed(() => Array.isArray(activeRun.value?.summary?.observation_pool) ? activeRun.value.summary.observation_pool : []);
+const activeObservationSummary = computed(() => activeRun.value?.summary?.observation_summary || null);
+const activePoolSplit = computed(() => activeRun.value?.summary?.pool_split || null);
 
 const metricText = (v, d = 2) => {
   const n = Number(v);

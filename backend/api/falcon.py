@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException
 from strategy.falcon.engine import falcon_service
 from strategy.falcon.models import (
     FalconBatchRunsRequest,
+    FalconBacktestRequest,
     FalconDeleteRangeRequest,
     FalconDeleteRequest,
     FalconEvolveRequest,
@@ -37,6 +38,23 @@ def run_falcon(req: FalconRunRequest):
             strategy_id=req.strategy_id,
             as_of_date=req.trade_date,
             params=req.params,
+        )
+        return {"status": "success", "data": data}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/backtest")
+def backtest_falcon(req: FalconBacktestRequest):
+    try:
+        data = falcon_service.backtest_strategy(
+            strategy_id=req.strategy_id,
+            start_date=req.start_date,
+            end_date=req.end_date,
+            params=req.params,
+            success_threshold_5d=req.success_threshold_5d,
+            success_threshold_10d=req.success_threshold_10d,
+            include_daily=req.include_daily,
         )
         return {"status": "success", "data": data}
     except Exception as e:

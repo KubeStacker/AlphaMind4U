@@ -11,6 +11,16 @@ class FalconRunRequest(BaseModel):
     params: dict[str, Any] = Field(default_factory=dict)
 
 
+class FalconBacktestRequest(BaseModel):
+    strategy_id: str = Field(..., min_length=1)
+    start_date: str | None = None
+    end_date: str | None = None
+    params: dict[str, Any] = Field(default_factory=dict)
+    success_threshold_5d: float = 0.0
+    success_threshold_10d: float = 0.0
+    include_daily: bool = False
+
+
 class FalconDeleteRequest(BaseModel):
     run_id: int
     hard: bool = False

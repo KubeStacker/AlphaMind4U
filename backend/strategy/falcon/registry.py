@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from strategy.falcon.plugins.base import FalconPlugin
+from strategy.falcon.plugins.falcon_ashare_adaptive import FalconAshareAdaptivePlugin
 from strategy.falcon.plugins.falcon_momentum import FalconMomentumPlugin
 from strategy.falcon.plugins.classic_kline_recommender import ClassicKlineRecommenderPlugin
 
@@ -12,6 +13,7 @@ class FalconRegistry:
         self._plugins: dict[str, FalconPlugin] = {}
         self.register(FalconMomentumPlugin())
         self.register(ClassicKlineRecommenderPlugin())
+        self.register(FalconAshareAdaptivePlugin())
 
     def register(self, plugin: FalconPlugin) -> None:
         self._plugins[plugin.strategy_id] = plugin

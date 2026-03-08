@@ -8,6 +8,16 @@ import pandas as pd
 from strategy.falcon.ports import FalconDataProviderPort
 
 
+PICK_FRAME_COLUMNS = [
+    "ts_code",
+    "name",
+    "strategy_score",
+    "confidence",
+    "signal_label",
+    "score_breakdown",
+]
+
+
 def build_forward_eval_rows(
     provider: FalconDataProviderPort,
     run_id: int,
@@ -112,3 +122,71 @@ def summarize_run(picks_df: pd.DataFrame, eval_rows: list[dict[str, Any]]) -> di
         "ret_5d": None if valid_5.empty else float(valid_5.mean()),
         "ret_10d": None if valid_10.empty else float(valid_10.mean()),
     }
+
+
+def coerce_pick_frame(rows: pd.DataFrame | list[dict[str, Any]] | None) -> pd.DataFrame:
+    if isinstance(rows, pd.DataFrame):
+        df = rows.copy()
+    else:
+        df = pd.DataFrame(rows or [])
+
+    if df.empty:
+        return pd.DataFrame(columns=PICK_FRAME_COLUMNS)
+
+    if "ts_code" not in df.columns:
+        return pd.DataFrame(columns=PICK_FRAME_COLUMNS)
+
+    if "name" not in df.columns:
+        df["name"] = ""
+    if "strategy_score" not in df.columns:
+        df["strategy_score"] = 0.0
+    if "confidence" not in df.columns:
+        df["confidence"] = 0.0
+    if "signal_label" not in df.columns:
+        df["signal_label"] = "观察"
+    if "score_breakdown" not in df.columns:
+        df["score_breakdown"] = [{} for _ in range(len(df))]
+
+    df["ts_code"] = df["ts_code"].astype(str)
+    df["name"] = df["name"].fillna("").astype(str)
+    df["strategy_score"] = pd.to_numeric(df["strategy_score"], errors="coerce").fillna(0.0)
+    df["confidence"] = pd.to_numeric(df["confidence"], errors="coerce").fillna(0.0)
+    df["signal_label"] = df["signal_label"].fillna("观察").astype(str)
+    df["score_breakdown"] = df["score_breakdown"].apply(lambda x: x if isinstance(x, dict) else {})
+    return df[PICK_FRAME_COLUMNS].copy()
+
+
+def summarize_eval_frame(
+    picks_df: pd.DataFrame | list[dict[str, Any]] | None,
+    eval_rows: list[dict[str, Any]],
+    success_threshold_5d: float = 0.0,
+    success_threshold_10d: float = 0.0,
+) -> dict[str, Any]:
+    pick_frame = coerce_pick_frame(picks_df)
+    summary = summarize_run(pick_frame, eval_rows)
+
+    eval_df = pd.DataFrame(eval_rows) if eval_rows else pd.DataFrame()
+    if eval_df.empty:
+        summary["sample_count_5d"] = 0
+        summary["sample_count_10d"] = 0
+        if success_threshold_5d > 0:
+            summary["success_threshold_5d"] = float(success_threshold_5d)
+            summary["hit_target_5d"] = None
+        if success_threshold_10d > 0:
+            summary["success_threshold_10d"] = float(success_threshold_10d)
+            summary["hit_target_10d"] = None
+        return summary
+
+    valid_5 = pd.to_numeric(eval_df.get("ret_5d"), errors="coerce").dropna()
+    valid_10 = pd.to_numeric(eval_df.get("ret_10d"), errors="coerce").dropna()
+    summary["sample_count_5d"] = int(valid_5.shape[0])
+    summary["sample_count_10d"] = int(valid_10.shape[0])
+
+    if success_threshold_5d > 0:
+        summary["success_threshold_5d"] = float(success_threshold_5d)
+        summary["hit_target_5d"] = None if valid_5.empty else float((valid_5 >= float(success_threshold_5d)).mean())
+    if success_threshold_10d > 0:
+        summary["success_threshold_10d"] = float(success_threshold_10d)
+        summary["hit_target_10d"] = None if valid_10.empty else float((valid_10 >= float(success_threshold_10d)).mean())
+
+    return summary
