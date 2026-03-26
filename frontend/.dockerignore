@@ -4,3 +4,6 @@ dist/
 *.log
 .vscode/
 .idea/
+.git/
+Dockerfile
+docker-compose.yml

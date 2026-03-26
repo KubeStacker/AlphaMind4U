@@ -1,7 +1,7 @@
 from etl.tasks.base_task import BaseTask
 from db.connection import get_db_connection
 from core.constants import CONCEPT_BLACKLIST
-from etl.config import settings
+from core.config import settings
 import pandas as pd
 import time
 

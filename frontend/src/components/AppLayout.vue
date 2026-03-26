@@ -25,17 +25,17 @@
             >
               仪表盘
             </router-link>
-            <router-link
-              to="/falcon"
-              class="px-3 py-1.5 rounded-lg text-xs font-bold transition-all"
-              :class="isFalconPage ? 'bg-business-accent text-white' : 'text-slate-400 hover:text-white'"
-            >
-              猎鹰
-            </router-link>
           </div>
         </div>
 
         <div class="flex items-center space-x-2">
+          <!-- Docs Button (desktop) -->
+          <button @click="showDocs = !showDocs"
+            class="hidden md:flex items-center space-x-1 px-3 py-1.5 rounded-lg text-xs font-bold transition-all"
+            :class="showDocs ? 'bg-business-accent text-white' : 'text-slate-400 hover:text-white hover:bg-business-light'">
+            <DocumentTextIcon class="w-4 h-4" />
+            <span>文档</span>
+          </button>
           <div class="hidden md:block">
             <Menu as="div" class="relative inline-block text-left">
               <MenuButton class="flex items-center space-x-1 px-3 py-1.5 rounded-lg text-xs font-bold text-slate-400 hover:bg-business-light transition-all">
@@ -49,6 +49,11 @@
                     <MenuItem v-slot="{ active }">
                       <router-link :to="{ path: '/settings', query: { tab: 'users' } }" :class="[active ? 'bg-business-accent text-white' : 'text-slate-300', 'group flex w-full items-center rounded-lg px-2.5 py-2 text-xs font-bold transition-colors']">
                         <UserGroupIcon class="mr-2 h-4 w-4 opacity-70" /> 用户管理
+                      </router-link>
+                    </MenuItem>
+                    <MenuItem v-slot="{ active }">
+                      <router-link :to="{ path: '/settings', query: { tab: 'ai' } }" :class="[active ? 'bg-business-accent text-white' : 'text-slate-300', 'group flex w-full items-center rounded-lg px-2.5 py-2 text-xs font-bold transition-colors']">
+                        <SparklesIcon class="mr-2 h-4 w-4 opacity-70" /> AI 配置
                       </router-link>
                     </MenuItem>
                     <MenuItem v-if="authStore.isAdmin" v-slot="{ active }">
@@ -93,38 +98,42 @@
           <ChartBarIcon class="w-5 h-5" />
           <span class="text-[9px] font-bold mt-0.5">仪表盘</span>
         </router-link>
-        <router-link to="/falcon" class="flex flex-col items-center transition-all" :class="isFalconPage ? 'text-business-highlight' : 'text-slate-500'">
-          <CommandLineIcon class="w-5 h-5" />
-          <span class="text-[9px] font-bold mt-0.5">猎鹰</span>
-        </router-link>
+        <button @click="showDocs = !showDocs" class="flex flex-col items-center transition-all" :class="showDocs ? 'text-business-highlight' : 'text-slate-500'">
+          <DocumentTextIcon class="w-5 h-5" />
+          <span class="text-[9px] font-bold mt-0.5">文档</span>
+        </button>
         <router-link to="/settings" class="flex flex-col items-center transition-all" :class="isSettingsPage ? 'text-business-highlight' : 'text-slate-500'">
           <Cog6ToothIcon class="w-5 h-5" />
           <span class="text-[9px] font-bold mt-0.5">设置</span>
         </router-link>
       </div>
     </div>
+
+    <!-- Docs Panel -->
+    <DocsPanel :open="showDocs" @close="showDocs = false" />
   </div>
 </template>
 
 <script setup>
-import { computed } from 'vue';
+import { ref, computed } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
 import { Menu, MenuButton, MenuItems, MenuItem } from '@headlessui/vue'
 import { 
   ChevronDownIcon, Cog6ToothIcon, UserGroupIcon, 
   CircleStackIcon, ArrowRightOnRectangleIcon, ChartBarIcon, CommandLineIcon,
-  EyeIcon
+  EyeIcon, SparklesIcon, DocumentTextIcon
 } from '@heroicons/vue/20/solid'
+import DocsPanel from './DocsPanel.vue';
 
 const route = useRoute();
 const router = useRouter();
 const authStore = useAuthStore();
+const showDocs = ref(false);
 
 const isSettingsPage = computed(() => route.path.startsWith('/settings'));
 const isWatchlistPage = computed(() => route.name === 'watchlist');
 const isDashboardPage = computed(() => route.name === 'dashboard');
-const isFalconPage = computed(() => route.name === 'falcon');
 
 const handleLogout = () => { authStore.logout(); router.push({ name: 'login' }); };
 </script>

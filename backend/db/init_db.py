@@ -41,6 +41,29 @@ def initialize_database():
             con.execute("DELETE FROM daily_price WHERE trade_date IN ('2026-01-01', '2026-01-02')")
             con.execute("DELETE FROM market_sentiment WHERE trade_date IN ('2026-01-01', '2026-01-02')")
             print("已自动清理 2026-01-01/02 的异常占位数据。")
+            
+            # 添加缺失的列到现有表
+            try:
+                # 为 user_ai_config 表添加 selected_template_id 列
+                con.execute("ALTER TABLE user_ai_config ADD COLUMN IF NOT EXISTS selected_template_id INTEGER")
+                print("已添加 user_ai_config.selected_template_id 列")
+            except Exception as e:
+                print(f"添加 user_ai_config.selected_template_id 列失败: {e}")
+            
+            try:
+                # 为 stock_moneyflow 表添加 net_mf_ratio 列
+                con.execute("ALTER TABLE stock_moneyflow ADD COLUMN IF NOT EXISTS net_mf_ratio DOUBLE")
+                print("已添加 stock_moneyflow.net_mf_ratio 列")
+            except Exception as e:
+                print(f"添加 stock_moneyflow.net_mf_ratio 列失败: {e}")
+            
+            try:
+                # 为 stock_basic 表添加拼音相关列
+                con.execute("ALTER TABLE stock_basic ADD COLUMN IF NOT EXISTS pinyin VARCHAR(100)")
+                con.execute("ALTER TABLE stock_basic ADD COLUMN IF NOT EXISTS pinyin_abbr VARCHAR(20)")
+                print("已添加 stock_basic.pinyin 和 pinyin_abbr 列")
+            except Exception as e:
+                print(f"添加 stock_basic 拼音列失败: {e}")
 
     except Exception as e:
         print(f"数据库初始化失败: {e}")

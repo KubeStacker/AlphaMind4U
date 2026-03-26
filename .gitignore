@@ -15,3 +15,7 @@ build/
 .coverage
 htmlcov/
 *.log
+backend/venv/
+frontend/dist/
+*.tmp
+*.bak

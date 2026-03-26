@@ -101,7 +101,6 @@ export const getBacktestResult = (optimize = true) => apiClient.get('/admin/back
 export const getBacktestGrid = () => apiClient.get('/admin/backtest_grid');
 export const getBacktestWalkforward = (trainDays = 120, testDays = 40) => apiClient.get('/admin/backtest_walkforward', { params: { train_days: trainDays, test_days: testDays } });
 export const getMainlineHistory = (days = 30) => apiClient.get('/admin/mainline_history', { params: { days } });
-export const getMarginHeatmap = (days = 10, top_n = 30) => apiClient.get('/admin/margin_heatmap', { params: { days, top_n } });
 export const getWatchlistRealtime = (codes, src = 'sina') => apiClient.get('/admin/watchlist/realtime', { params: { codes, src } });
 
 // 盯盘管理 (DB)
@@ -112,25 +111,46 @@ export const removeFromWatchlist = (ts_code) => apiClient.delete(`/admin/watchli
 // 股票日K (含两融)
 export const getStockKline = (ts_code, limit = 200) => apiClient.get(`/admin/stock/${ts_code}/kline`, { params: { limit } });
 export const searchStocks = (q, limit = 10) => apiClient.get('/admin/stock/search', { params: { q, limit } });
-export const getFalconStrategies = () => apiClient.get('/falcon/strategies');
-export const getFalconLatestTradeDate = () => apiClient.get('/falcon/latest_trade_date');
-export const runFalcon = (payload) => apiClient.post('/falcon/run', payload);
-export const listFalconRuns = (strategyId = null, limit = 30) =>
-  apiClient.get('/falcon/runs', { params: { strategy_id: strategyId || undefined, limit } });
-export const listFalconDeletedRuns = (strategyId = null, limit = 30) =>
-  apiClient.get('/falcon/runs/deleted', { params: { strategy_id: strategyId || undefined, limit } });
-export const listFalconOps = (strategyId = null, limit = 20) =>
-  apiClient.get('/falcon/ops', { params: { strategy_id: strategyId || undefined, limit } });
-export const getFalconRunDetail = (runId) => apiClient.get(`/falcon/runs/${runId}`);
-export const getFalconScore = (strategyId, tradeDate) =>
-  apiClient.get('/falcon/score', { params: { strategy_id: strategyId, trade_date: tradeDate } });
-export const deleteFalconRun = (runId, hard = false) => apiClient.delete('/falcon/runs', { data: { run_id: runId, hard } });
-export const deleteFalconRunsByRange = (strategyId, startDate, endDate) =>
-  apiClient.post('/falcon/runs/delete_range', { strategy_id: strategyId, start_date: startDate, end_date: endDate });
-export const restoreFalconRun = (runId) => apiClient.post('/falcon/runs/restore', { run_id: runId });
-export const restoreFalconRunsBatch = (runIds) => apiClient.post('/falcon/runs/restore_batch', { run_ids: runIds });
-export const hardDeleteFalconRunsBatch = (runIds) => apiClient.post('/falcon/runs/hard_delete_batch', { run_ids: runIds });
-export const evolveFalcon = (strategyId) => apiClient.post('/falcon/evolve', { strategy_id: strategyId });
 
 /** 校验数据准确性 */
 export const verifyDataAccuracy = (tsCode = "688256.SH") => apiClient.get('/admin/data_verify', { params: { ts_code: tsCode } });
+
+// --- 数据管理仪表盘 ---
+/** 获取数据仪表盘概览 */
+export const getDataDashboard = () => apiClient.get('/admin/data/dashboard');
+/** 获取指定日期的数据状态 */
+export const getDayDataStatus = (date) => apiClient.get('/admin/data/day_status', { params: { date } });
+/** 触发指定日期的全量数据刷新 */
+export const syncSpecificDate = (date, tables = null) => apiClient.post('/admin/data/sync_date', null, { params: { date, tables } });
+
+// --- 用户AI配置 ---
+export const getUserAIConfig = () => apiClient.get('/admin/users/me/ai-config');
+export const updateUserAIConfig = (config) => apiClient.put('/admin/users/me/ai-config', config);
+
+// --- 用户提示词模板 ---
+export const getPromptTemplates = () => apiClient.get('/admin/users/me/prompt-templates');
+export const createPromptTemplate = (template) => apiClient.post('/admin/users/me/prompt-templates', template);
+export const updatePromptTemplate = (id, template) => apiClient.put(`/admin/users/me/prompt-templates/${id}`, template);
+export const deletePromptTemplate = (id) => apiClient.delete(`/admin/users/me/prompt-templates/${id}`);
+export const getSelectedTemplate = () => apiClient.get('/admin/users/me/selected-template');
+export const selectTemplate = (templateId) => apiClient.put('/admin/users/me/selected-template', { template_id: templateId });
+
+// --- 用户持仓 ---
+export const getUserHoldings = () => apiClient.get('/admin/users/me/holdings');
+export const updateUserHolding = (tsCode, holding) => apiClient.put(`/admin/users/me/holdings/${tsCode}`, holding);
+export const deleteUserHolding = (tsCode) => apiClient.delete(`/admin/users/me/holdings/${tsCode}`);
+
+// --- AI智能分析 ---
+export const analyzeStockWithAI = (tsCode, templateId, forceRefresh = false) => 
+  apiClient.post('/admin/stock/analyze', { ts_code: tsCode, template_id: templateId, force_refresh: forceRefresh });
+
+// --- 主线龙头选股 ---
+export const getMainlineLeaders = (params = {}) => apiClient.get('/admin/mainline/leaders', { params });
+export const getStockMainlineAnalysis = (tsCode) => apiClient.get(`/admin/stock/${tsCode}/mainline_analysis`);
+export const getStockIndicators = (tsCode, limit = 100) => apiClient.get(`/admin/stock/${tsCode}/indicators`, { params: { limit } });
+
+// --- 文档管理 ---
+export const getDocsList = (params = {}) => apiClient.get('/admin/docs/list', { params });
+export const getDocContent = (docId) => apiClient.get(`/admin/docs/${docId}`);
+export const publishDoc = (doc) => apiClient.post('/admin/docs/publish', doc);
+export const deleteDoc = (docId) => apiClient.delete(`/admin/docs/${docId}`);

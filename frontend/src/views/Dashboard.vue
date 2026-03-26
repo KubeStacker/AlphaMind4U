@@ -134,6 +134,102 @@
       </div>
     </div>
 
+    <!-- 主线龙头推荐 -->
+    <div v-if="mainlineLeaders || loadingLeaders" class="px-2 md:px-0">
+      <div class="bg-business-dark p-4 rounded-2xl shadow-lg border border-business-light">
+        <div class="flex items-center justify-between gap-2 mb-3">
+          <div class="flex items-center space-x-2">
+            <div class="w-1.5 h-4 bg-business-accent rounded-full"></div>
+            <h3 class="text-xs font-bold text-slate-200 tracking-wide">主线龙头推荐</h3>
+          </div>
+          <span v-if="mainlineLeaders?.trade_date" class="text-[10px] text-slate-400">{{ mainlineLeaders.trade_date }}</span>
+        </div>
+        
+        <div v-if="loadingLeaders" class="py-6 text-center text-slate-400 text-xs">
+          <div class="w-6 h-6 border-2 border-business-accent border-t-transparent rounded-full animate-spin mx-auto mb-2"></div>
+          加载中...
+        </div>
+        
+        <div v-else-if="!mainlineLeaders || !mainlineLeaders.mainlines || mainlineLeaders.mainlines.length === 0" 
+             class="py-6 text-center text-slate-500 text-xs">
+          {{ mainlineLeaders?.message || '暂无主线龙头数据' }}
+          <div v-if="mainlineLeaders?.market_env" class="mt-2 text-amber-400">
+            市场环境: {{ mainlineLeaders.market_env.suggestion }}
+          </div>
+        </div>
+        
+        <div v-else class="space-y-4">
+          <!-- 市场环境提示 -->
+          <div v-if="mainlineLeaders?.market_env" 
+               class="rounded border px-3 py-2 text-xs"
+               :class="mainlineLeaders.market_env.trend === 'up' ? 'border-emerald-700/40 bg-emerald-500/10 text-emerald-300' : 
+                       mainlineLeaders.market_env.trend === 'down' ? 'border-red-700/40 bg-red-500/10 text-red-300' : 
+                       'border-slate-700/40 bg-slate-500/10 text-slate-300'">
+            <span class="font-bold">市场趋势:</span> {{ mainlineLeaders.market_env.trend === 'up' ? '上涨' : mainlineLeaders.market_env.trend === 'down' ? '下跌' : '震荡' }}
+            <span class="ml-2">|</span>
+            <span class="ml-2 font-bold">情绪:</span> {{ fmt(mainlineLeaders.market_env.sentiment, 0) }}
+            <span class="ml-2">|</span>
+            <span class="ml-2">{{ mainlineLeaders.market_env.suggestion }}</span>
+          </div>
+          
+          <!-- 主线板块列表 -->
+          <div v-for="(mainline, idx) in mainlineLeaders.mainlines" :key="idx" 
+               class="rounded-xl border border-slate-700/50 bg-slate-900/30 p-3">
+            <div class="flex items-center justify-between mb-2">
+              <div class="flex items-center space-x-2">
+                <span class="text-sm font-bold text-business-highlight">{{ mainline.sector }}</span>
+                <span class="text-[9px] px-1.5 py-0.5 rounded bg-business-accent/20 text-business-accent">
+                  强度 {{ fmt(mainline.strength, 0) }}
+                </span>
+                <span v-if="mainline.limit_ups > 0" class="text-[9px] px-1.5 py-0.5 rounded bg-red-500/20 text-red-400">
+                  涨停 {{ mainline.limit_ups }}
+                </span>
+              </div>
+              <span class="text-[9px] text-slate-500">
+                板块共振 {{ fmt(mainline.resonance, 0) }}%
+              </span>
+            </div>
+            
+            <!-- 龙头股列表 -->
+            <div v-if="mainline.leaders && mainline.leaders.length > 0" class="space-y-2">
+              <div v-for="(stock, sidx) in mainline.leaders.slice(0, 3)" :key="sidx"
+                   class="flex items-center justify-between text-xs border-t border-slate-700/30 pt-2 first:border-0 first:pt-0">
+                <div class="flex items-center space-x-2">
+                  <span class="text-[10px] text-slate-500 w-4">{{ sidx + 1 }}</span>
+                  <div>
+                    <div class="font-semibold text-slate-200">{{ stock.name }}</div>
+                    <div class="text-[9px] text-slate-500 font-mono">{{ stock.ts_code }}</div>
+                  </div>
+                </div>
+                <div class="text-right">
+                  <div class="flex items-center space-x-2">
+                    <span class="font-bold text-slate-200">{{ fmt(stock.close, 2) }}</span>
+                    <span :class="stock.pct_chg >= 0 ? 'text-red-400' : 'text-emerald-400'">
+                      {{ stock.pct_chg >= 0 ? '+' : '' }}{{ fmt(stock.pct_chg, 2, '%') }}
+                    </span>
+                  </div>
+                  <div class="flex items-center space-x-1 mt-0.5">
+                    <span class="text-[9px] px-1 rounded" 
+                          :class="stock.score >= 80 ? 'bg-red-500/20 text-red-400' : 
+                                  stock.score >= 60 ? 'bg-orange-500/20 text-orange-400' : 
+                                  'bg-slate-500/20 text-slate-400'">
+                      {{ stock.score }}分
+                    </span>
+                    <span v-if="stock.risk_reward" class="text-[9px] text-slate-500">
+                      盈亏比{{ stock.risk_reward }}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div v-else class="text-[10px] text-slate-500 italic py-1">
+              暂无符合条件的龙头股
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div v-if="sentimentPreview || previewError" class="px-2 md:px-0">
       <div class="bg-business-dark p-4 rounded-2xl shadow-lg border border-business-light">
         <div class="flex items-center justify-between gap-2 mb-2">
@@ -298,7 +394,7 @@
 
 <script setup>
 import { ref, onMounted, onBeforeUnmount } from 'vue';
-import { getMainlineHistory, getMarketSentiment, getSentimentPreview, getMarketSuggestion, getBacktestResult, getBacktestGrid, getBacktestWalkforward, syncSentiment, getTasksStatus } from '@/services/api';
+import { getMainlineHistory, getMarketSentiment, getSentimentPreview, getMarketSuggestion, getBacktestResult, getBacktestGrid, getBacktestWalkforward, syncSentiment, getTasksStatus, getMainlineLeaders } from '@/services/api';
 import { ChatBubbleLeftRightIcon } from '@heroicons/vue/20/solid'
 
 const loadingTrend = ref(false);
@@ -333,6 +429,10 @@ const tradingBrief = ref({
   mainline: '',
   action: ''
 });
+
+// 主线龙头推荐数据
+const mainlineLeaders = ref(null);
+const loadingLeaders = ref(false);
 
 const classifyRegimeByMa5 = (ma5) => {
   if (!Number.isFinite(ma5)) return '震荡';
@@ -1133,11 +1233,40 @@ const fetchMarketSentiment = async () => {
   }
 };
 
+// 加载主线龙头推荐
+const fetchMainlineLeaders = async () => {
+  loadingLeaders.value = true;
+  try {
+    const res = await getMainlineLeaders({ limit: 3, min_score: 60 });
+    if (res.data.status === 'success') {
+      mainlineLeaders.value = res.data;
+    } else {
+      mainlineLeaders.value = null;
+    }
+  } catch (e) {
+    console.error('加载主线龙头失败', e);
+    mainlineLeaders.value = null;
+  } finally {
+    loadingLeaders.value = false;
+  }
+};
+
+// 获取信号颜色
+const getSignalColor = (level) => {
+  if (!level) return 'text-slate-400';
+  if (level === '强势') return 'text-red-400';
+  if (level === '中性偏多') return 'text-orange-400';
+  if (level === '中性') return 'text-slate-400';
+  if (level === '偏弱') return 'text-blue-400';
+  return 'text-green-400';
+};
+
 onMounted(async () => {
   updateViewport();
   window.addEventListener('resize', updateViewport);
   fetchMainlineHistory();
   fetchMarketSentiment();
+  fetchMainlineLeaders();
 });
 
 onBeforeUnmount(() => {

@@ -29,7 +29,9 @@ CREATE TABLE IF NOT EXISTS stock_basic (
     enname      VARCHAR(100),
     curr_type   VARCHAR(10),
     list_status VARCHAR(5),
-    is_hs       VARCHAR(5)
+    is_hs       VARCHAR(5),
+    pinyin      VARCHAR(100),
+    pinyin_abbr VARCHAR(20)
 );
 """
 
@@ -73,30 +75,6 @@ CREATE TABLE IF NOT EXISTS stock_concept_details (
 );
 """
 
-# -- 财务指标表 (stock_financials) --
-CREATE_STOCK_FINANCIALS_TABLE_SQL = """
-CREATE TABLE IF NOT EXISTS stock_financials (
-    ts_code     VARCHAR(15),
-    ann_date    DATE,
-    end_date    DATE,
-    eps         DOUBLE,
-    dt_eps      DOUBLE,
-    total_revenue_ps DOUBLE,
-    revenue_ps  DOUBLE,
-    capital_rese_ps DOUBLE,
-    surplus_rese_ps DOUBLE,
-    undist_profit_ps DOUBLE,
-    extra_item  DOUBLE,
-    profit_dedt DOUBLE,
-    gross_margin DOUBLE,
-    net_profit_margin DOUBLE,
-    roe         DOUBLE,
-    roa         DOUBLE,
-    debt_to_assets DOUBLE,
-    PRIMARY KEY (ts_code, end_date)
-);
-"""
-
 # -- 个股资金流向表 (stock_moneyflow) --
 CREATE_STOCK_MONEYFLOW_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS stock_moneyflow (
@@ -120,24 +98,8 @@ CREATE TABLE IF NOT EXISTS stock_moneyflow (
     sell_elg_amount DOUBLE,
     net_mf_vol      DOUBLE,
     net_mf_amount   DOUBLE,
+    net_mf_ratio    DOUBLE,
     PRIMARY KEY (ts_code, trade_date)
-);
-"""
-
-# -- 策略推荐记录表 (用于回测) --
-CREATE_STRATEGY_RECOMMENDATIONS_TABLE_SQL = """
-CREATE TABLE IF NOT EXISTS strategy_recommendations (
-    recommend_date  DATE NOT NULL,
-    ts_code         VARCHAR(15) NOT NULL,
-    name            VARCHAR(50),
-    score           DOUBLE,
-    strategy_name   VARCHAR(50),
-    filters_used    JSON,
-    p1_return       DOUBLE,
-    p3_return       DOUBLE,
-    p5_return       DOUBLE,
-    p10_return      DOUBLE,
-    PRIMARY KEY (recommend_date, ts_code, strategy_name)
 );
 """
 
@@ -270,99 +232,58 @@ CREATE TABLE IF NOT EXISTS mainline_scores (
 
 """
 
-# -- Falcon 运行记录 --
-CREATE_FALCON_RUNS_TABLE_SQL = """
-CREATE TABLE IF NOT EXISTS falcon_runs (
-    run_id BIGINT PRIMARY KEY DEFAULT nextval('falcon_runs_id_seq'),
-    strategy_id VARCHAR(80) NOT NULL,
-    strategy_version INTEGER NOT NULL,
-    trade_date DATE NOT NULL,
-    params_json JSON,
-    summary_json JSON,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    is_deleted BOOLEAN DEFAULT FALSE,
-    deleted_at TIMESTAMP,
-    deleted_by VARCHAR(120)
+# -- 用户AI配置表 (user_ai_config) --
+CREATE_USER_AI_CONFIG_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS user_ai_config (
+    user_id         INTEGER PRIMARY KEY,
+    model_provider  VARCHAR(50) DEFAULT 'deepseek',
+    model_name      VARCHAR(100),
+    api_key         VARCHAR(500),
+    base_url        VARCHAR(500),
+    system_prompt   TEXT,
+    max_tokens      INTEGER DEFAULT 4096,
+    temperature     DOUBLE DEFAULT 0.7,
+    selected_template_id INTEGER,
+    updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 """
 
-CREATE_FALCON_PICKS_TABLE_SQL = """
-CREATE TABLE IF NOT EXISTS falcon_picks (
-    run_id BIGINT NOT NULL,
-    rank_no INTEGER NOT NULL,
-    strategy_id VARCHAR(80) NOT NULL,
-    trade_date DATE NOT NULL,
-    ts_code VARCHAR(20) NOT NULL,
-    name VARCHAR(80),
-    strategy_score DOUBLE,
-    confidence DOUBLE,
-    signal_label VARCHAR(40),
-    score_breakdown JSON,
-    is_deleted BOOLEAN DEFAULT FALSE,
-    PRIMARY KEY (run_id, rank_no)
+# -- 用户提示词模板表 (user_prompt_templates) --
+CREATE_USER_PROMPT_TEMPLATES_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS user_prompt_templates (
+    id              INTEGER PRIMARY KEY,
+    user_id         INTEGER NOT NULL,
+    name            VARCHAR(100) NOT NULL,
+    content         TEXT NOT NULL,
+    is_default      BOOLEAN DEFAULT FALSE,
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 """
 
-CREATE_FALCON_EVAL_TABLE_SQL = """
-CREATE TABLE IF NOT EXISTS falcon_pick_eval (
-    run_id BIGINT NOT NULL,
-    strategy_id VARCHAR(80) NOT NULL,
-    trade_date DATE NOT NULL,
-    ts_code VARCHAR(20) NOT NULL,
-    ret_5d DOUBLE,
-    ret_10d DOUBLE,
-    hit_5d BOOLEAN,
-    hit_10d BOOLEAN,
-    PRIMARY KEY (run_id, ts_code)
+# -- 用户持仓表 (user_holdings) --
+CREATE_USER_HOLDINGS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS user_holdings (
+    user_id         INTEGER NOT NULL,
+    ts_code         VARCHAR(15) NOT NULL,
+    shares          DOUBLE DEFAULT 0,
+    avg_cost        DOUBLE DEFAULT 0,
+    updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, ts_code)
 );
 """
 
-CREATE_FALCON_STATE_TABLE_SQL = """
-CREATE TABLE IF NOT EXISTS falcon_strategy_state (
-    strategy_id VARCHAR(80) PRIMARY KEY,
-    version INTEGER NOT NULL,
-    params_json JSON,
-    note VARCHAR(200),
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-"""
-
-CREATE_FALCON_DAILY_SCORE_TABLE_SQL = """
-CREATE TABLE IF NOT EXISTS falcon_strategy_daily_score (
-    strategy_id VARCHAR(80) NOT NULL,
-    trade_date DATE NOT NULL,
-    score DOUBLE,
-    details JSON,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (strategy_id, trade_date)
-);
-"""
-
-CREATE_FALCON_EVOLUTION_LOG_TABLE_SQL = """
-CREATE TABLE IF NOT EXISTS falcon_evolution_log (
-    id BIGINT PRIMARY KEY DEFAULT nextval('falcon_runs_id_seq'),
-    strategy_id VARCHAR(80) NOT NULL,
-    prev_version INTEGER,
-    next_version INTEGER,
-    prev_params JSON,
-    next_params JSON,
-    score_before DOUBLE,
-    score_after DOUBLE,
-    promoted BOOLEAN,
-    details JSON,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-"""
-
-CREATE_FALCON_OP_LOG_TABLE_SQL = """
-CREATE TABLE IF NOT EXISTS falcon_op_log (
-    id BIGINT PRIMARY KEY DEFAULT nextval('falcon_runs_id_seq'),
-    strategy_id VARCHAR(80),
-    op_type VARCHAR(40) NOT NULL,
-    run_ids JSON,
-    detail JSON,
-    operator VARCHAR(120),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+# -- AI分析结果缓存表 (ai_analysis_cache) --
+CREATE_AI_ANALYSIS_CACHE_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS ai_analysis_cache (
+    id              INTEGER,
+    user_id         INTEGER NOT NULL,
+    ts_code         VARCHAR(15) NOT NULL,
+    trade_date      DATE NOT NULL,
+    analysis_result TEXT NOT NULL,
+    model_name      VARCHAR(100),
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, ts_code, trade_date)
 );
 """
 
@@ -385,7 +306,6 @@ CREATE TABLE IF NOT EXISTS etl_tasks (
 
 ALL_TABLES_SQL = [
     "CREATE SEQUENCE IF NOT EXISTS users_id_seq START 1;",
-    "CREATE SEQUENCE IF NOT EXISTS falcon_runs_id_seq START 1;",
     CREATE_USERS_TABLE_SQL,
     CREATE_STOCK_BASIC_TABLE_SQL,
     CREATE_DAILY_PRICE_TABLE_SQL,
@@ -394,27 +314,19 @@ ALL_TABLES_SQL = [
     CREATE_STOCK_CONCEPTS_TABLE_SQL,
     CREATE_STOCK_CONCEPT_DETAILS_TABLE_SQL,
     "CREATE INDEX IF NOT EXISTS idx_concept_details_tscode ON stock_concept_details (ts_code);",
-    CREATE_STOCK_FINANCIALS_TABLE_SQL,
     CREATE_STOCK_MONEYFLOW_TABLE_SQL,
     "CREATE INDEX IF NOT EXISTS idx_moneyflow_date ON stock_moneyflow (trade_date);",
-    CREATE_STRATEGY_RECOMMENDATIONS_TABLE_SQL,
     CREATE_MARKET_INDEX_TABLE_SQL,
     CREATE_MARKET_SENTIMENT_TABLE_SQL,
     CREATE_STOCK_MARGIN_TABLE_SQL,
     CREATE_WATCHLIST_TABLE_SQL,
     CREATE_MAINLINE_SCORES_TABLE_SQL,
-    CREATE_FALCON_RUNS_TABLE_SQL,
+    CREATE_USER_AI_CONFIG_TABLE_SQL,
+    CREATE_USER_PROMPT_TEMPLATES_TABLE_SQL,
+    CREATE_USER_HOLDINGS_TABLE_SQL,
+    CREATE_AI_ANALYSIS_CACHE_TABLE_SQL,
+    CREATE_ETL_TASKS_TABLE_SQL,
     "CREATE INDEX IF NOT EXISTS idx_stock_margin_date ON stock_margin (trade_date);",
     "CREATE INDEX IF NOT EXISTS idx_stock_margin_tscode ON stock_margin (ts_code);",
-    CREATE_FALCON_PICKS_TABLE_SQL,
-    CREATE_FALCON_EVAL_TABLE_SQL,
-    CREATE_FALCON_STATE_TABLE_SQL,
-    CREATE_FALCON_DAILY_SCORE_TABLE_SQL,
-    CREATE_FALCON_EVOLUTION_LOG_TABLE_SQL,
-    CREATE_FALCON_OP_LOG_TABLE_SQL,
-    CREATE_ETL_TASKS_TABLE_SQL,
-    "CREATE INDEX IF NOT EXISTS idx_falcon_runs_strategy_date ON falcon_runs (strategy_id, trade_date);",
-    "CREATE INDEX IF NOT EXISTS idx_falcon_picks_run ON falcon_picks (run_id);",
-    "CREATE INDEX IF NOT EXISTS idx_falcon_eval_run ON falcon_pick_eval (run_id);",
-    "CREATE INDEX IF NOT EXISTS idx_falcon_op_strategy_time ON falcon_op_log (strategy_id, created_at);",
+    "CREATE INDEX IF NOT EXISTS idx_ai_analysis_cache_user_tscode ON ai_analysis_cache (user_id, ts_code);",
 ]

@@ -21,7 +21,7 @@ class FinancialsTask(BaseTask):
             force_sync: 强制重新同步已存在的季度
         """
         from datetime import datetime
-        from etl.config import settings
+        from core.config import settings
         
         current_year = datetime.now().year
         current_month = datetime.now().month

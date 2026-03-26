@@ -6,7 +6,6 @@ const Login = () => import('@/views/Login.vue')
 const Dashboard = () => import('@/views/Dashboard.vue')
 const Watchlist = () => import('@/views/Watchlist.vue')
 const Settings = () => import('@/views/Settings.vue')
-const Falcon = () => import('@/views/Falcon.vue')
 const AppLayout = () => import('@/components/AppLayout.vue')
 
 
@@ -39,12 +38,6 @@ const router = createRouter({
             path: 'settings',
             name: 'settings',
             component: Settings,
-            meta: { requiresAuth: true }
-        },
-        {
-            path: 'falcon',
-            name: 'falcon',
-            component: Falcon,
             meta: { requiresAuth: true }
         }
       ]

@@ -13,3 +13,5 @@ venv.bak/
 htmlcov/
 .DS_Store
 data/
+.git/
+docs/

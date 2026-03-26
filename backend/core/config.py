@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     # Long token (标准token)
     long_tushare_token: str = ""
     
+    # DuckDB 配置
+    duckdb_memory_limit: str = "400MB"
+    duckdb_threads: str = "2"
+    
     @property
     def tushare_token(self) -> str:
         """根据token类型返回对应的token"""

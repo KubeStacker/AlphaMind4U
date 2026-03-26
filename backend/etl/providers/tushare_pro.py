@@ -1,7 +1,7 @@
 import tushare as ts
 import pandas as pd
 import time
-from etl.config import settings
+from core.config import settings
 from etl.providers.base import DataProvider
 import logging
 
@@ -131,6 +131,17 @@ class TushareProvider(DataProvider):
         params = {"src": src}
         if ts_code:
             params["ts_code"] = ts_code
+
+        # pro.realtime_quote 只支持 dc 源，sina 源直接使用 ts.realtime_quote
+        if src == "sina":
+            try:
+                ts.set_token(settings.tushare_token)
+                df = ts.realtime_quote(**params)
+                if df is not None and not df.empty:
+                    return _normalize_quote_df(df)
+            except Exception as e:
+                logger.warning(f"ts.realtime_quote(sina) 失败: {e}")
+                return pd.DataFrame()
 
         # 优先尝试 pro 接口；若接口不可用，自动回退到 ts.realtime_quote
         try:

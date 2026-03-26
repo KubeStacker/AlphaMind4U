@@ -42,14 +42,8 @@
             @focus="handleSearchInput"
             @blur="hideSearchResults"
             class="flex-1 bg-slate-900/80 border border-slate-700 rounded px-3 py-2 text-xs text-slate-100 focus:outline-none focus:ring-1 focus:ring-business-accent"
-            placeholder="输入代码/名称/首字母搜索 (例如 600519, 茅台, GJ)"
+            placeholder="输入代码/名称搜索 (例如 600519, 茅台)"
           />
-          <button
-            @click="handleAdd"
-            class="px-4 py-2 text-xs font-semibold rounded bg-business-accent text-white hover:brightness-110 transition shrink-0"
-          >
-            添加
-          </button>
         </div>
         <!-- 搜索结果下拉 -->
         <div
@@ -60,10 +54,21 @@
             v-for="stock in searchResults"
             :key="stock.ts_code"
             @mousedown.prevent="selectSearchResult(stock)"
-            class="px-3 py-2 hover:bg-slate-700 cursor-pointer flex justify-between items-center border-b border-slate-700/50 last:border-0"
+            class="px-3 py-2 hover:bg-slate-700 cursor-pointer flex justify-between items-center border-b border-slate-700/50 last:border-0 group"
           >
-            <span class="text-slate-200 font-mono text-xs">{{ stock.ts_code }}</span>
-            <span class="text-slate-400 text-xs">{{ stock.name }}</span>
+            <div class="flex items-center gap-2">
+              <span class="text-slate-200 font-mono text-xs">{{ stock.ts_code }}</span>
+              <span class="text-slate-400 text-xs">{{ stock.name }}</span>
+            </div>
+            <button
+              @mousedown.prevent.stop="selectSearchResult(stock)"
+              class="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-emerald-500/20 text-emerald-400 hover:text-emerald-300"
+              title="添加到自选"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+              </svg>
+            </button>
           </div>
         </div>
       </div>
@@ -74,13 +79,38 @@
       <!-- 表头 (仅桌面端) -->
       <div class="hidden md:grid md:grid-cols-12 gap-4 px-6 py-2 text-[10px] font-bold text-slate-500 uppercase tracking-wider border-b border-slate-800">
         <div class="col-span-2">标的信息</div>
-        <div class="col-span-2 text-right">最新行情</div>
-        <div class="col-span-7">专业分析与 10D 历史</div>
+        <div class="col-span-1 text-right">持仓/盈亏</div>
+        <div class="col-span-1 text-right">最新行情</div>
+        <div class="col-span-6">专业分析与 10D 历史</div>
         <div class="col-span-1 text-right">操作</div>
+        <div class="col-span-1 text-right">AI</div>
       </div>
 
       <div v-if="!rows.length && !loading" class="bg-business-dark p-12 rounded-2xl border border-business-light text-center text-slate-500 text-xs">
         暂无自选股，请先添加
+      </div>
+
+      <!-- 总仓位汇总 -->
+      <div v-if="totalPortfolioValue > 0" class="bg-business-dark rounded-2xl border border-purple-500/30 p-4 md:px-6">
+        <div class="flex flex-wrap items-center justify-between gap-4">
+          <div class="flex items-center gap-4">
+            <span class="text-[10px] font-bold text-purple-400 uppercase tracking-wider">总仓位</span>
+            <span class="text-sm font-mono font-bold text-white">{{ fmt(totalPortfolioValue, 0) }}</span>
+          </div>
+          <div class="flex items-center gap-6 text-[11px]">
+            <div class="text-right">
+              <span class="text-slate-500">总成本</span>
+              <span class="ml-1 font-mono text-slate-300">{{ fmt(totalCost, 0) }}</span>
+            </div>
+            <div class="text-right">
+              <span class="text-slate-500">总盈亏</span>
+              <span class="ml-1 font-mono" :class="totalPnL >= 0 ? 'text-red-400' : 'text-emerald-400'">
+                {{ totalPnL >= 0 ? '+' : '' }}{{ fmt(totalPnL, 0) }}
+                <span class="text-[10px]">({{ totalPnLPct >= 0 ? '+' : '' }}{{ fmt(totalPnLPct, 2, '%') }})</span>
+              </span>
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- 股票行 -->
@@ -106,16 +136,34 @@
             </span>
           </div>
 
-          <!-- 2. 行情数据 -->
-          <div class="col-span-2 flex md:flex-col justify-between md:items-end gap-1">
-            <div class="text-[13px] font-mono font-bold text-slate-100">{{ fmt(item.price, 2) }}</div>
-            <div class="text-[11px] font-mono font-bold" :class="numColor(item.pct)">
+          <!-- 2. 持仓/盈亏 -->
+          <div class="col-span-1 flex md:flex-col justify-end items-center gap-1">
+            <div v-if="holdings[item.ts_code]?.shares > 0" class="text-right">
+              <div class="text-[11px] font-mono text-slate-300">{{ holdings[item.ts_code].shares }}股</div>
+              <div class="text-[10px] font-mono text-slate-400">成本: {{ fmt(calcPnL(item)?.cost, 0) }}</div>
+              <div class="text-[10px] font-mono" :class="calcPnL(item)?.pnl >= 0 ? 'text-red-400' : 'text-emerald-400'">
+                {{ calcPnL(item)?.pnl >= 0 ? '+' : '' }}{{ fmt(calcPnL(item)?.pnl, 0) }}
+                <span class="text-[9px]">({{ calcPnL(item)?.pnlPct >= 0 ? '+' : '' }}{{ fmt(calcPnL(item)?.pnlPct, 2, '%') }})</span>
+              </div>
+              <div v-if="totalPortfolioValue > 0" class="text-[9px] font-mono text-slate-500">
+                占比 {{ fmt(calcPnL(item)?.current / totalPortfolioValue * 100, 1, '%') }}
+              </div>
+            </div>
+            <button @click.stop="openHoldingModal(item)" class="text-[9px] text-slate-600 hover:text-purple-400 font-bold">
+              {{ holdings[item.ts_code]?.shares > 0 ? '编辑' : '+持仓' }}
+            </button>
+          </div>
+
+          <!-- 3. 行情数据 -->
+          <div class="col-span-1 flex md:flex-col justify-end items-center gap-1">
+            <div class="text-[13px] font-mono font-bold text-slate-100 text-right">{{ fmt(item.price, 2) }}</div>
+            <div class="text-[11px] font-mono font-bold text-right" :class="numColor(item.pct)">
               {{ item.pct >= 0 ? '+' : '' }}{{ fmt(item.pct, 2, '%') }}
             </div>
           </div>
 
-          <!-- 3. 点评与历史 (核心优化区) -->
-          <div class="col-span-7 flex flex-col lg:flex-row gap-3 lg:gap-6 pt-3 md:pt-0 border-t md:border-t-0 border-slate-800/50">
+          <!-- 4. 点评与历史 (核心优化区) -->
+          <div class="col-span-6 flex flex-col lg:flex-row gap-3 lg:gap-6 pt-3 md:pt-0 border-t md:border-t-0 border-slate-800/50">
             <!-- 建议与历史圆点 -->
             <div class="flex flex-col gap-2 shrink-0 lg:w-40">
               <div class="flex items-center gap-2">
@@ -198,11 +246,23 @@
           </div>
 
           <!-- 4. 操作区 -->
-          <div class="col-span-1 flex justify-end md:items-center">
+          <div class="col-span-1 flex flex-col items-end justify-center gap-1">
             <button @click.stop="handleRemove(item.ts_code)" class="p-2 text-slate-600 hover:text-rose-400 hover:bg-rose-500/10 rounded-full transition-all">
               <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
               </svg>
+            </button>
+          </div>
+
+          <!-- 5. AI分析按钮 -->
+          <div class="col-span-1 flex justify-end items-center">
+            <button 
+              @click.stop="analyzeWithAI(item)" 
+              :disabled="analyzingStock === item.ts_code"
+              class="px-3 py-1.5 rounded-lg text-[10px] font-bold transition-all"
+              :class="analyzingStock === item.ts_code ? 'bg-purple-800 text-purple-300' : 'bg-purple-600/30 text-purple-400 hover:bg-purple-600 hover:text-white border border-purple-500/30'"
+            >
+              {{ analyzingStock === item.ts_code ? '分析中...' : 'AI分析' }}
             </button>
           </div>
         </div>
@@ -449,13 +509,101 @@
         </div>
       </div>
     </div>
+
+    <!-- 持仓编辑弹窗 -->
+    <div v-if="showHoldingModal" class="fixed inset-0 z-[200] bg-black/80 flex items-center justify-center p-4" @click="showHoldingModal = false">
+      <div class="bg-[#1a1a2e] border border-slate-600 rounded-xl w-full max-w-sm overflow-hidden" @click.stop>
+        <div class="flex items-center justify-between p-4 border-b border-slate-700">
+          <h3 class="text-white font-bold text-sm">编辑持仓</h3>
+          <button @click="showHoldingModal = false" class="text-slate-400 hover:text-white">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+        <div class="p-4 space-y-4">
+          <div class="text-center">
+            <div class="text-white font-bold">{{ holdingStock?.name }}</div>
+            <div class="text-slate-500 text-xs">{{ holdingStock?.ts_code }}</div>
+          </div>
+          <div class="space-y-2">
+            <label class="block text-[10px] font-bold text-slate-500 uppercase">持仓数量</label>
+            <input v-model.number="holdingForm.shares" type="number" min="0" step="100" class="w-full bg-business-darker border border-business-light rounded-xl px-4 py-2.5 text-xs font-medium text-white focus:outline-none focus:border-purple-500" />
+          </div>
+          <div class="space-y-2">
+            <label class="block text-[10px] font-bold text-slate-500 uppercase">成本价</label>
+            <input v-model.number="holdingForm.avg_cost" type="number" min="0" step="0.01" class="w-full bg-business-darker border border-business-light rounded-xl px-4 py-2.5 text-xs font-medium text-white focus:outline-none focus:border-purple-500" />
+          </div>
+          <div v-if="holdingForm.shares > 0 && holdingForm.avg_cost > 0 && holdingStock?.price" class="bg-slate-800/50 rounded-lg p-3 text-xs">
+            <div class="flex justify-between mb-1">
+              <span class="text-slate-500">成本总额</span>
+              <span class="text-white font-mono">{{ (holdingForm.shares * holdingForm.avg_cost).toFixed(2) }}</span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-slate-500">盈亏</span>
+              <span :class="((holdingStock.price - holdingForm.avg_cost) / holdingForm.avg_cost) >= 0 ? 'text-red-400' : 'text-emerald-400'" class="font-mono">
+                {{ ((holdingStock.price - holdingForm.avg_cost) / holdingForm.avg_cost) >= 0 ? '+' : '' }}{{ (((holdingStock.price - holdingForm.avg_cost) / holdingForm.avg_cost) * 100).toFixed(2) }}%
+              </span>
+            </div>
+          </div>
+          <div class="flex gap-3 mt-6">
+            <button v-if="holdings[holdingStock?.ts_code]?.shares > 0" @click="handleRemove(holdingStock.ts_code); showHoldingModal = false; delete holdings[holdingStock.ts_code]" class="flex-1 py-2.5 rounded-lg text-[11px] font-bold text-red-400 border border-red-500/30 hover:bg-red-500/10">删除持仓</button>
+            <button @click="saveHolding" class="flex-1 py-2.5 rounded-lg text-[11px] font-bold bg-purple-600 text-white hover:bg-purple-500">保存</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- AI分析结果弹窗 -->
+    <div v-if="aiAnalysisModal.visible" class="fixed inset-0 z-[200] bg-black/80 flex items-center justify-center p-2" @click="aiAnalysisModal.visible = false">
+      <div class="bg-[#1a1a2e] border border-slate-600 rounded-xl w-full max-w-2xl max-h-[85vh] overflow-hidden flex flex-col" @click.stop>
+        <div class="flex items-center justify-between p-4 border-b border-slate-700 shrink-0">
+          <div class="flex items-center gap-2">
+            <SparklesIcon class="w-4 h-4 text-purple-400" />
+            <h3 class="text-white font-bold text-sm">AI 智能分析</h3>
+            <span v-if="aiAnalysisModal.stock" class="text-slate-400 text-xs">{{ aiAnalysisModal.stock.name }}</span>
+            <span v-if="aiAnalysisModal.fromCache" class="text-[9px] px-1.5 py-0.5 rounded bg-slate-700 text-slate-400">缓存</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <button 
+              @click="analyzeWithAI(aiAnalysisModal.stock, true)" 
+              :disabled="analyzingStock === aiAnalysisModal.stock?.ts_code"
+              class="px-2 py-1 rounded text-[10px] font-bold transition-all border border-purple-500/30 text-purple-400 hover:bg-purple-600 hover:text-white disabled:opacity-50"
+            >
+              {{ analyzingStock === aiAnalysisModal.stock?.ts_code ? '刷新中...' : '强制刷新' }}
+            </button>
+            <button @click="aiAnalysisModal.visible = false" class="text-slate-400 hover:text-white">
+              <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        </div>
+        <div class="overflow-y-auto p-4 flex-1">
+          <div v-if="aiAnalysisModal.loading" class="flex items-center justify-center h-40">
+            <div class="animate-spin w-8 h-8 border-2 border-purple-500 border-t-transparent rounded-full"></div>
+          </div>
+          <div v-else-if="aiAnalysisModal.result" class="prose prose-sm prose-invert max-w-none text-slate-300 text-xs leading-relaxed ai-analysis-content" v-html="renderMarkdown(aiAnalysisModal.result)"></div>
+          <div v-else class="text-center text-slate-500 py-8">
+            暂无分析结果
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup>
 import { onBeforeUnmount, onMounted, ref, reactive, computed } from 'vue';
-import { getWatchlistRealtime, addToWatchlist, removeFromWatchlist, getStockKline, searchStocks } from '@/services/api';
+import { getWatchlistRealtime, addToWatchlist, removeFromWatchlist, getStockKline, getUserHoldings, updateUserHolding, deleteUserHolding, analyzeStockWithAI, getSelectedTemplate } from '@/services/api';
+import { marked } from 'marked';
+import { useStockSearch } from '@/composables/useStockSearch';
 import { use } from 'echarts/core';
+
+marked.setOptions({
+  breaks: true,
+  gfm: true,
+});
 import { CanvasRenderer } from 'echarts/renderers';
 import { CandlestickChart, LineChart, BarChart } from 'echarts/charts';
 import { GridComponent, TooltipComponent, DataZoomComponent, LegendComponent, VisualMapComponent } from 'echarts/components';
@@ -481,6 +629,16 @@ const newCode = ref('');
 const expandedComments = ref({});  // 展开的专业点评
 const hoveredDay = ref(null);  // 当前hover的10D节点
 const klineHoveredIndex = ref(-1);  // K线图当前hover的索引
+
+// 持仓相关
+const holdings = ref({});  // { ts_code: { shares, avg_cost } }
+const showHoldingModal = ref(false);
+const holdingStock = ref(null);
+const holdingForm = reactive({ shares: 0, avg_cost: 0 });
+
+// AI分析相关
+const aiAnalysisModal = ref({ visible: false, stock: null, loading: false, result: '', fromCache: false });
+const analyzingStock = ref(null);
 
 const handleUpdateAxisPointer = (event) => {
   const info = event.dataIndex;
@@ -515,46 +673,41 @@ const handleKeydown = (e) => {
 };
 
 // 搜索功能
-const searchResults = ref([]);
-const searchLoading = ref(false);
-const showSearchResults = ref(false);
 const klinePopupRef = ref(null);
 let searchTimer = null;
 let timer = null;
+
+// 使用新的搜索composable
+const {
+  searchResults,
+  searchLoading,
+  showSearchResults,
+  search,
+  hideResults,
+  clearResults
+} = useStockSearch();
 
 const handleSearchInput = () => {
   if (searchTimer) clearTimeout(searchTimer);
   const q = newCode.value.trim();
   if (q.length < 1) {
-    searchResults.value = [];
-    showSearchResults.value = false;
+    clearResults();
     return;
   }
-  searchLoading.value = true;
-  searchTimer = setTimeout(async () => {
-    try {
-      const res = await searchStocks(q, 8);
-      searchResults.value = res.data?.data || [];
-      showSearchResults.value = searchResults.value.length > 0;
-    } catch (e) {
-      console.error('搜索失败', e);
-      searchResults.value = [];
-    } finally {
-      searchLoading.value = false;
-    }
-  }, 300);
+  // 使用更短的延迟，提升响应速度
+  searchTimer = setTimeout(() => {
+    search(q, 8);
+  }, 100);
 };
 
 const selectSearchResult = (stock) => {
   newCode.value = stock.ts_code;
-  showSearchResults.value = false;
+  clearResults();
   handleAdd();
 };
 
 const hideSearchResults = () => {
-  setTimeout(() => {
-    showSearchResults.value = false;
-  }, 200);
+  hideResults();
 };
 
 const detailModal = reactive({
@@ -794,6 +947,7 @@ const refreshNow = async (showLoading = true) => {
     rows.value = body.data || [];
     isTradingTime.value = !!body.is_trading_time;
     message.value = body.message || '';
+    await fetchHoldings();
   } catch (e) {
     message.value = e?.response?.data?.detail || e?.message || '刷新失败';
   } finally {
@@ -826,6 +980,113 @@ const handleRemove = async (tsCode) => {
   }
 };
 
+// 持仓管理
+const fetchHoldings = async () => {
+  try {
+    const res = await getUserHoldings();
+    const h = {};
+    (res.data || []).forEach(item => {
+      h[item.ts_code] = { shares: item.shares, avg_cost: item.avg_cost };
+    });
+    holdings.value = h;
+  } catch (e) {
+    console.error('获取持仓失败', e);
+  }
+};
+
+const openHoldingModal = (item) => {
+  holdingStock.value = item;
+  const existing = holdings.value[item.ts_code];
+  holdingForm.shares = existing?.shares || 0;
+  holdingForm.avg_cost = existing?.avg_cost || 0;
+  showHoldingModal.value = true;
+};
+
+const saveHolding = async () => {
+  if (!holdingStock.value) return;
+  try {
+    if (holdingForm.shares <= 0) {
+      await deleteUserHolding(holdingStock.value.ts_code);
+    } else {
+      await updateUserHolding(holdingStock.value.ts_code, holdingForm);
+    }
+    holdings.value[holdingStock.value.ts_code] = { ...holdingForm };
+    showHoldingModal.value = false;
+  } catch (e) {
+    alert('保存失败: ' + (e.response?.data?.detail || e.message));
+  }
+};
+
+const calcPnL = (item) => {
+  const h = holdings.value[item.ts_code];
+  if (!h || !h.shares || !h.avg_cost) return null;
+  const cost = h.shares * h.avg_cost;
+  const current = h.shares * item.price;
+  const pnl = current - cost;
+  const pnlPct = ((item.price - h.avg_cost) / h.avg_cost) * 100;
+  return { pnl, pnlPct, cost, current };
+};
+
+// 总仓位计算
+const totalPortfolioValue = computed(() => {
+  let total = 0;
+  for (const item of rows.value) {
+    const h = holdings.value[item.ts_code];
+    if (h?.shares > 0 && item.price) {
+      total += h.shares * item.price;
+    }
+  }
+  return total;
+});
+
+const totalCost = computed(() => {
+  let total = 0;
+  for (const item of rows.value) {
+    const h = holdings.value[item.ts_code];
+    if (h?.shares > 0 && h.avg_cost) {
+      total += h.shares * h.avg_cost;
+    }
+  }
+  return total;
+});
+
+const totalPnL = computed(() => totalPortfolioValue.value - totalCost.value);
+
+const totalPnLPct = computed(() => {
+  if (totalCost.value <= 0) return 0;
+  return (totalPnL.value / totalCost.value) * 100;
+});
+
+// Markdown渲染
+const renderMarkdown = (text) => {
+  if (!text) return '';
+  try {
+    return marked.parse(text);
+  } catch (e) {
+    return text;
+  }
+};
+
+// AI分析
+const analyzeWithAI = async (item, forceRefresh = false) => {
+  analyzingStock.value = item.ts_code;
+  if (!forceRefresh) {
+    aiAnalysisModal.value = { visible: true, stock: item, loading: true, result: '', fromCache: false };
+  } else {
+    aiAnalysisModal.value.loading = true;
+  }
+  try {
+    const res = await analyzeStockWithAI(item.ts_code, null, forceRefresh);
+    aiAnalysisModal.value.result = res.data.analysis;
+    aiAnalysisModal.value.fromCache = res.data.from_cache || false;
+  } catch (e) {
+    aiAnalysisModal.value.result = '分析失败: ' + (e.response?.data?.detail || e.message);
+  } finally {
+    aiAnalysisModal.value.loading = false;
+    analyzingStock.value = null;
+  }
+};
+
 onMounted(async () => {
   window.addEventListener('keydown', handleKeydown);
   document.addEventListener('click', handleDocumentClick, true);
@@ -840,4 +1101,77 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+.ai-analysis-content :deep(h1),
+.ai-analysis-content :deep(h2),
+.ai-analysis-content :deep(h3),
+.ai-analysis-content :deep(h4) {
+  color: #e2e8f0;
+  font-weight: bold;
+  margin-top: 1em;
+  margin-bottom: 0.5em;
+}
+.ai-analysis-content :deep(h1) { font-size: 1.1em; }
+.ai-analysis-content :deep(h2) { font-size: 1.05em; }
+.ai-analysis-content :deep(h3) { font-size: 1em; }
+
+.ai-analysis-content :deep(p) {
+  margin-bottom: 0.75em;
+  line-height: 1.7;
+}
+
+.ai-analysis-content :deep(ul),
+.ai-analysis-content :deep(ol) {
+  margin-left: 1.2em;
+  margin-bottom: 0.75em;
+}
+
+.ai-analysis-content :deep(li) {
+  margin-bottom: 0.25em;
+}
+
+.ai-analysis-content :deep(strong) {
+  color: #f1f5f9;
+  font-weight: 600;
+}
+
+.ai-analysis-content :deep(em) {
+  color: #94a3b8;
+}
+
+.ai-analysis-content :deep(code) {
+  background: #1e293b;
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+
+.ai-analysis-content :deep(blockquote) {
+  border-left: 3px solid #6366f1;
+  padding-left: 1em;
+  margin-left: 0;
+  color: #94a3b8;
+}
+
+.ai-analysis-content :deep(table) {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 1em;
+}
+
+.ai-analysis-content :deep(th),
+.ai-analysis-content :deep(td) {
+  border: 1px solid #334155;
+  padding: 0.4em 0.6em;
+  text-align: left;
+}
+
+.ai-analysis-content :deep(th) {
+  background: #1e293b;
+  font-weight: 600;
+}
+
+.ai-analysis-content :deep(hr) {
+  border-color: #334155;
+  margin: 1em 0;
+}
 </style>

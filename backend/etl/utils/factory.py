@@ -1,6 +1,6 @@
 from etl.providers.base import DataProvider
 from etl.providers.tushare_pro import TushareProvider
-from etl.config import settings
+from core.config import settings
 
 class ProviderFactory:
     _instance = None

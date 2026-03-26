@@ -27,3 +27,9 @@ python-jose[cryptography]
 tushare
 tenacity
 apscheduler
+
+# 拼音支持
+pypinyin
+
+# HTTP客户端
+httpx
