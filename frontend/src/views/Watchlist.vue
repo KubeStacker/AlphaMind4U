@@ -1,5 +1,5 @@
 <template>
-  <div class="space-y-4 md:space-y-6 max-w-6xl mx-auto pb-8 relative">
+  <div class="space-y-4 md:space-y-5 max-w-5xl mx-auto pb-8 relative">
     <!-- 顶部管理栏 -->
     <div v-if="!zenMode" class="bg-business-dark p-4 rounded-2xl shadow-lg border border-business-light">
       <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -72,214 +72,264 @@
           </div>
         </div>
       </div>
+
+      <div class="mt-3 flex flex-col gap-2 border-t border-business-light pt-3 md:flex-row md:items-center md:justify-between">
+        <div class="flex flex-wrap items-center gap-2 text-[10px]">
+          <span class="rounded-full border border-business-accent/30 bg-business-accent/10 px-2.5 py-1 font-bold text-business-accent">
+            {{ refreshStatusText }}
+          </span>
+          <span class="rounded-full border border-slate-700 bg-slate-900/70 px-2.5 py-1 font-mono text-slate-300">
+            {{ refreshCycleText }}
+          </span>
+          <span class="text-slate-500">
+            {{ message || '列表按当前模式自动更新' }}
+          </span>
+        </div>
+        <div class="text-[10px] font-mono text-slate-500">
+          上次刷新 {{ lastRefreshAt || '--:--:--' }}
+        </div>
+      </div>
     </div>
 
     <!-- 行情列表 -->
-    <div v-if="!zenMode" class="space-y-3">
-      <!-- 表头 (仅桌面端) -->
-      <div class="hidden md:grid md:grid-cols-12 gap-4 px-6 py-2 text-[10px] font-bold text-slate-500 uppercase tracking-wider border-b border-slate-800">
-        <div class="col-span-2">标的信息</div>
-        <div class="col-span-1 text-right">持仓/盈亏</div>
-        <div class="col-span-1 text-right">最新行情</div>
-        <div class="col-span-6">专业分析与 10D 历史</div>
-        <div class="col-span-1 text-right">操作</div>
-        <div class="col-span-1 text-right">AI</div>
-      </div>
-
-      <div v-if="!rows.length && !loading" class="bg-business-dark p-12 rounded-2xl border border-business-light text-center text-slate-500 text-xs">
+    <div v-if="!zenMode" class="space-y-4">
+      <div
+        v-if="!rows.length && !loading"
+        class="bg-business-dark p-12 rounded-2xl border border-business-light text-center text-slate-500 text-xs"
+      >
         暂无自选股，请先添加
       </div>
 
-      <!-- 总仓位汇总 -->
-      <div v-if="totalPortfolioValue > 0" class="bg-business-dark rounded-2xl border border-purple-500/30 p-4 md:px-6">
-        <div class="flex flex-wrap items-center justify-between gap-4">
-          <div class="flex items-center gap-4">
-            <span class="text-[10px] font-bold text-purple-400 uppercase tracking-wider">总仓位</span>
-            <span class="text-sm font-mono font-bold text-white">{{ fmt(totalPortfolioValue, 0) }}</span>
-          </div>
-          <div class="flex items-center gap-6 text-[11px]">
-            <div class="text-right">
-              <span class="text-slate-500">总成本</span>
-              <span class="ml-1 font-mono text-slate-300">{{ fmt(totalCost, 0) }}</span>
+      <section class="bg-business-dark rounded-2xl border border-business-light shadow-business overflow-hidden">
+        <div class="px-4 py-4 md:px-5 border-b border-business-light">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 class="text-sm font-bold text-white tracking-wide">持仓跟踪</h3>
+              <p class="mt-1 text-[11px] text-slate-400">保留持仓盈亏和执行信息，列表只显示结论，不再默认展开 10D 历史。</p>
             </div>
-            <div class="text-right">
-              <span class="text-slate-500">总盈亏</span>
+            <div class="flex flex-wrap items-center gap-2 text-[10px]">
+              <span class="rounded-full border border-business-accent/30 bg-business-accent/10 px-2.5 py-1 font-bold text-business-accent">
+                {{ holdingRows.length }}只持仓
+              </span>
+              <span
+                v-if="totalPortfolioValue > 0"
+                class="rounded-full border border-slate-700 bg-slate-900/70 px-2.5 py-1 font-mono text-slate-300"
+              >
+                总市值 {{ fmt(totalPortfolioValue, 0) }}
+              </span>
+            </div>
+          </div>
+
+          <div v-if="totalPortfolioValue > 0" class="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-slate-400">
+            <span>
+              总成本
+              <span class="ml-1 font-mono text-slate-200">{{ fmt(totalCost, 0) }}</span>
+            </span>
+            <span>
+              总盈亏
               <span class="ml-1 font-mono" :class="totalPnL >= 0 ? 'text-red-400' : 'text-emerald-400'">
                 {{ totalPnL >= 0 ? '+' : '' }}{{ fmt(totalPnL, 0) }}
-                <span class="text-[10px]">({{ totalPnLPct >= 0 ? '+' : '' }}{{ fmt(totalPnLPct, 2, '%') }})</span>
+              </span>
+            </span>
+            <span>
+              组合收益率
+              <span class="ml-1 font-mono" :class="totalPnLPct >= 0 ? 'text-red-400' : 'text-emerald-400'">
+                {{ totalPnLPct >= 0 ? '+' : '' }}{{ fmt(totalPnLPct, 2, '%') }}
+              </span>
+            </span>
+          </div>
+        </div>
+
+        <div v-if="holdingRows.length" class="p-3 md:p-4 space-y-3">
+          <div
+            v-for="item in holdingRows"
+            :key="`holding-${item.ts_code}`"
+            class="rounded-2xl border px-4 py-3 transition-all"
+            :class="watchCardClass(item, 'holding')"
+          >
+            <div class="grid gap-3 md:grid-cols-[minmax(0,1.1fr)_96px_minmax(0,1.7fr)_auto] md:items-center">
+              <div class="min-w-0 flex items-start justify-between gap-3">
+                <button class="min-w-0 text-left" data-kline-trigger="1" @click.stop="toggleKline(item, $event)">
+                  <div class="truncate text-[13px] font-bold text-white hover:text-business-accent transition-colors">
+                    {{ item.name || '-' }}
+                  </div>
+                  <div class="mt-0.5 text-[10px] font-mono text-slate-500">{{ item.ts_code }}</div>
+                </button>
+                <span class="shrink-0 rounded-full border border-business-accent/30 bg-business-accent/10 px-2 py-0.5 text-[10px] font-bold text-business-accent">
+                  持仓
+                </span>
+              </div>
+
+              <div class="text-left md:text-right">
+                <div class="text-[13px] font-mono font-bold text-slate-100">{{ fmt(item.price, 2) }}</div>
+                <div class="mt-1 text-[11px] font-mono font-bold" :class="numColor(item.pct)">
+                  {{ item.pct >= 0 ? '+' : '' }}{{ fmt(item.pct, 2, '%') }}
+                </div>
+              </div>
+
+              <div class="min-w-0 space-y-1.5">
+                <div class="flex flex-wrap items-center gap-2">
+                  <span class="rounded-full border px-2 py-0.5 text-[10px] font-bold" :class="watchSignalClass(item)">
+                    {{ getSignalText(item) }}
+                  </span>
+                  <span
+                    v-if="getAggressiveLabel(item)"
+                    class="rounded-full border border-red-500/30 bg-red-500/10 px-2 py-0.5 text-[10px] font-bold text-red-300"
+                  >
+                    {{ getAggressiveLabel(item) }}
+                  </span>
+                </div>
+                <p class="text-[12px] leading-5" :class="isAggressiveItem(item) ? 'text-red-200' : 'text-slate-300'">
+                  {{ getConclusionText(item) }}
+                </p>
+              </div>
+
+              <div class="flex flex-col gap-2 md:items-end">
+                <div class="text-[10px] text-slate-400 md:text-right">
+                  <div>{{ holdings[item.ts_code]?.shares || 0 }}股 @ {{ fmt(holdings[item.ts_code]?.avg_cost, 2) }}</div>
+                  <template v-if="calcPnL(item)">
+                    <div class="mt-1 font-mono" :class="calcPnL(item)?.pnl >= 0 ? 'text-red-400' : 'text-emerald-400'">
+                      {{ calcPnL(item)?.pnl >= 0 ? '+' : '' }}{{ fmt(calcPnL(item)?.pnl, 0) }}
+                      <span>({{ calcPnL(item)?.pnlPct >= 0 ? '+' : '' }}{{ fmt(calcPnL(item)?.pnlPct, 2, '%') }})</span>
+                    </div>
+                    <div v-if="totalPortfolioValue > 0" class="mt-1 text-slate-500">
+                      仓位占比 {{ fmt(calcPnL(item)?.current / totalPortfolioValue * 100, 1, '%') }}
+                    </div>
+                  </template>
+                  <div v-else class="mt-1 text-slate-500">未录成本，暂不计算盈亏</div>
+                </div>
+                <div class="flex flex-wrap gap-2 md:justify-end">
+                  <button @click.stop="openDetailModal(item)" class="rounded-lg border border-slate-700 bg-slate-900/60 px-2.5 py-1 text-[10px] font-bold text-slate-300 hover:border-sky-500/40 hover:text-sky-300">
+                    详情
+                  </button>
+                  <button @click.stop="openHoldingModal(item)" class="rounded-lg border border-business-accent/30 bg-business-accent/10 px-2.5 py-1 text-[10px] font-bold text-business-accent hover:bg-business-accent hover:text-white">
+                    持仓
+                  </button>
+                  <button
+                    @click.stop="analyzeWithAI(item)"
+                    :disabled="analyzingStock === item.ts_code"
+                    class="rounded-lg border border-purple-500/30 bg-purple-500/10 px-2.5 py-1 text-[10px] font-bold text-purple-300 hover:bg-purple-500 hover:text-white disabled:opacity-60"
+                  >
+                    {{ analyzingStock === item.ts_code ? 'AI中' : 'AI' }}
+                  </button>
+                  <button @click.stop="handleRemove(item.ts_code)" class="rounded-lg border border-rose-500/30 bg-rose-500/10 px-2.5 py-1 text-[10px] font-bold text-rose-300 hover:bg-rose-500 hover:text-white">
+                    删除
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div v-else class="px-4 py-8 text-center text-[11px] text-slate-500">
+          暂无持仓股，录入持仓后会自动归到这里。
+        </div>
+      </section>
+
+      <section class="bg-business-dark rounded-2xl border border-business-light shadow-business overflow-hidden">
+        <div class="px-4 py-4 md:px-5 border-b border-business-light">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 class="text-sm font-bold text-white tracking-wide">观察列表</h3>
+              <p class="mt-1 text-[11px] text-slate-400">非持仓标的只给结论，适合一口气扫几十只；出现“试错 / 主动进攻”会直接标红。</p>
+            </div>
+            <div class="flex flex-wrap items-center gap-2 text-[10px]">
+              <span class="rounded-full border border-slate-700 bg-slate-900/70 px-2.5 py-1 font-bold text-slate-300">
+                {{ observationRows.length }}只观察
+              </span>
+              <span
+                v-if="aggressiveObservationCount > 0"
+                class="rounded-full border border-red-500/30 bg-red-500/10 px-2.5 py-1 font-bold text-red-300"
+              >
+                {{ aggressiveObservationCount }}只红标
               </span>
             </div>
           </div>
         </div>
-      </div>
 
-      <!-- 股票行 -->
-      <div
-        v-for="item in rows"
-        :key="item.ts_code"
-        class="bg-business-dark rounded-2xl border border-business-light hover:border-business-accent/40 transition-all shadow-business group"
-      >
-        <div class="grid grid-cols-1 md:grid-cols-12 gap-3 md:gap-4 p-4 md:px-6 md:py-4 items-center">
-          <!-- 1. 标的信息 -->
-          <div class="col-span-2 flex items-center gap-3 md:block" data-kline-trigger="1" @click.stop="toggleKline(item, $event)">
-            <div class="cursor-pointer">
-              <div class="text-[13px] font-bold text-white group-hover:text-business-accent transition-colors">{{ item.name || '-' }}</div>
-              <div class="text-[10px] text-slate-500 font-mono mt-0.5">{{ item.ts_code }}</div>
-            </div>
-            <!-- 移动端标签显示在名称旁 -->
-            <span
-              v-if="item.analyze?.suggestion"
-              class="md:hidden px-1.5 py-0.5 rounded text-[9px] font-black"
-              :class="suggestionColor(item.analyze.suggestion)"
-            >
-              {{ item.analyze.suggestion }}
-            </span>
-          </div>
-
-          <!-- 2. 持仓/盈亏 -->
-          <div class="col-span-1 flex md:flex-col justify-end items-center gap-1">
-            <div v-if="holdings[item.ts_code]?.shares > 0" class="text-right">
-              <div class="text-[11px] font-mono text-slate-300">{{ holdings[item.ts_code].shares }}股</div>
-              <div class="text-[10px] font-mono text-slate-400">成本: {{ fmt(calcPnL(item)?.cost, 0) }}</div>
-              <div class="text-[10px] font-mono" :class="calcPnL(item)?.pnl >= 0 ? 'text-red-400' : 'text-emerald-400'">
-                {{ calcPnL(item)?.pnl >= 0 ? '+' : '' }}{{ fmt(calcPnL(item)?.pnl, 0) }}
-                <span class="text-[9px]">({{ calcPnL(item)?.pnlPct >= 0 ? '+' : '' }}{{ fmt(calcPnL(item)?.pnlPct, 2, '%') }})</span>
-              </div>
-              <div v-if="totalPortfolioValue > 0" class="text-[9px] font-mono text-slate-500">
-                占比 {{ fmt(calcPnL(item)?.current / totalPortfolioValue * 100, 1, '%') }}
-              </div>
-            </div>
-            <button @click.stop="openHoldingModal(item)" class="text-[9px] text-slate-600 hover:text-purple-400 font-bold">
-              {{ holdings[item.ts_code]?.shares > 0 ? '编辑' : '+持仓' }}
-            </button>
-          </div>
-
-          <!-- 3. 行情数据 -->
-          <div class="col-span-1 flex md:flex-col justify-end items-center gap-1">
-            <div class="text-[13px] font-mono font-bold text-slate-100 text-right">{{ fmt(item.price, 2) }}</div>
-            <div class="text-[11px] font-mono font-bold text-right" :class="numColor(item.pct)">
-              {{ item.pct >= 0 ? '+' : '' }}{{ fmt(item.pct, 2, '%') }}
-            </div>
-          </div>
-
-          <!-- 4. 点评与历史 (核心优化区) -->
-          <div class="col-span-6 flex flex-col lg:flex-row gap-3 lg:gap-6 pt-3 md:pt-0 border-t md:border-t-0 border-slate-800/50">
-            <!-- 建议与历史圆点 -->
-            <div class="flex flex-col gap-2 shrink-0 lg:w-40">
-              <div class="flex items-center gap-2">
-                <span
-                  v-if="item.analyze?.suggestion"
-                  class="hidden md:inline-block px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-tighter"
-                  :class="suggestionColor(item.analyze.suggestion)"
-                >
-                  {{ item.analyze.suggestion }}
+        <div v-if="observationRows.length" class="p-3 md:p-4 space-y-2.5">
+          <div
+            v-for="item in observationRows"
+            :key="`observation-${item.ts_code}`"
+            class="rounded-2xl border px-4 py-3 transition-all"
+            :class="watchCardClass(item, 'observation')"
+          >
+            <div class="grid gap-3 md:grid-cols-[minmax(0,1.1fr)_96px_minmax(0,1.7fr)_auto] md:items-center">
+              <div class="min-w-0 flex items-start justify-between gap-3">
+                <button class="min-w-0 text-left" data-kline-trigger="1" @click.stop="toggleKline(item, $event)">
+                  <div class="truncate text-[13px] font-bold text-white hover:text-business-accent transition-colors">
+                    {{ item.name || '-' }}
+                  </div>
+                  <div class="mt-0.5 text-[10px] font-mono text-slate-500">{{ item.ts_code }}</div>
+                </button>
+                <span class="shrink-0 rounded-full border border-slate-700 bg-slate-900/70 px-2 py-0.5 text-[10px] font-bold text-slate-300">
+                  观察
                 </span>
-                <span class="text-[9px] text-slate-500 font-bold font-mono">10D HIST</span>
-                <button
-                  v-if="item.analyze"
-                  @click.stop="openDetailModal(item)"
-                  class="ml-auto lg:hidden text-[10px] text-sky-400 font-bold"
-                >
+              </div>
+
+              <div class="text-left md:text-right">
+                <div class="text-[13px] font-mono font-bold text-slate-100">{{ fmt(item.price, 2) }}</div>
+                <div class="mt-1 text-[11px] font-mono font-bold" :class="numColor(item.pct)">
+                  {{ item.pct >= 0 ? '+' : '' }}{{ fmt(item.pct, 2, '%') }}
+                </div>
+              </div>
+
+              <div class="min-w-0 space-y-1.5">
+                <div class="flex flex-wrap items-center gap-2">
+                  <span class="rounded-full border px-2 py-0.5 text-[10px] font-bold" :class="watchSignalClass(item)">
+                    {{ getSignalText(item) }}
+                  </span>
+                  <span
+                    v-if="getAggressiveLabel(item)"
+                    class="rounded-full border border-red-500/30 bg-red-500/10 px-2 py-0.5 text-[10px] font-bold text-red-300"
+                  >
+                    {{ getAggressiveLabel(item) }}
+                  </span>
+                </div>
+                <p class="text-[12px] leading-5" :class="isAggressiveItem(item) ? 'text-red-200' : 'text-slate-300'">
+                  {{ getConclusionText(item) }}
+                </p>
+              </div>
+
+              <div class="flex flex-wrap gap-2 md:justify-end">
+                <button @click.stop="openDetailModal(item)" class="rounded-lg border border-slate-700 bg-slate-900/60 px-2.5 py-1 text-[10px] font-bold text-slate-300 hover:border-sky-500/40 hover:text-sky-300">
                   详情
                 </button>
-              </div>
-              
-              <div class="flex items-center gap-1.5">
-                <div
-                  v-for="(day, idx) in [...(item.analyze?.history || [])].reverse()"
-                  :key="idx"
-                  class="relative"
-                >
-                  <div
-                    class="w-2.5 h-2.5 md:w-3 md:h-3 rounded-full cursor-pointer border border-black/20 hover:scale-125 transition-transform"
-                    :class="dotColor(day.suggestion, day.tone)"
-                    @mouseenter="hoveredDay = day; checkTooltipPosition($event)"
-                    @mouseleave="hoveredDay = null"
-                  ></div>
-                  <!-- Tooltip -->
-                  <div
-                    v-if="hoveredDay === day"
-                    :class="[
-                      'absolute z-50 left-1/2 -translate-x-1/2 px-2 py-1.5 bg-slate-800 border border-slate-600 rounded-lg shadow-2xl text-[10px] text-white whitespace-nowrap',
-                      tooltipPosition === 'top' ? 'bottom-full mb-2' : 'top-full mt-2'
-                    ]"
-                  >
-                    <div class="font-bold border-b border-slate-700 pb-1 mb-1">{{ day.date || '-' }}</div>
-                    <div class="flex items-center gap-2">
-                      <span :class="String(day.suggestion || '').includes('关注') ? 'text-red-400' : String(day.suggestion || '').includes('减仓') ? 'text-emerald-400' : 'text-slate-300'">{{ day.suggestion || '-' }}</span>
-                      <span class="text-slate-500 px-1 border border-slate-700 rounded text-[9px]">{{ day.tone || '-' }}</span>
-                    </div>
-                    <div class="text-slate-400 mt-1 italic">{{ (day.patterns || []).join(', ') || '无形态' }}</div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <!-- 专家点评片段 -->
-            <div class="flex-1 space-y-1.5">
-              <div class="flex flex-wrap gap-2">
-                <div 
-                  v-for="(seg, sIdx) in parseCommentary(item.analyze?.summary)" 
-                  :key="sIdx"
-                  class="flex items-center bg-slate-900/40 rounded-lg border border-slate-800/60 overflow-hidden"
-                >
-                  <span v-if="seg.tag" class="px-1.5 py-0.5 text-[9px] font-bold text-slate-100" :class="tagColor(seg.tag)">
-                    {{ seg.tag }}
-                  </span>
-                  <span class="px-2 py-0.5 text-[10px] text-slate-300">{{ seg.text }}</span>
-                </div>
-              </div>
-              <!-- 桌面端详情按钮 -->
-              <div class="hidden lg:block">
+                <button @click.stop="openHoldingModal(item)" class="rounded-lg border border-business-accent/30 bg-business-accent/10 px-2.5 py-1 text-[10px] font-bold text-business-accent hover:bg-business-accent hover:text-white">
+                  +持仓
+                </button>
                 <button
-                  v-if="item.analyze"
-                  @click.stop="openDetailModal(item)"
-                  class="text-[10px] text-sky-400 hover:text-sky-300 font-bold transition-colors flex items-center gap-1"
+                  @click.stop="analyzeWithAI(item)"
+                  :disabled="analyzingStock === item.ts_code"
+                  class="rounded-lg border border-purple-500/30 bg-purple-500/10 px-2.5 py-1 text-[10px] font-bold text-purple-300 hover:bg-purple-500 hover:text-white disabled:opacity-60"
                 >
-                  查看深度分析报告
-                  <svg xmlns="http://www.w3.org/2000/svg" class="h-2.5 w-2.5" viewBox="0 0 20 20" fill="currentColor">
-                    <path fill-rule="evenodd" d="M10.293 3.293a1 1 0 011.414 0l6 6a1 1 0 010 1.414l-6 6a1 1 0 01-1.414-1.414L14.586 11H3a1 1 0 110-2h11.586l-4.293-4.293a1 1 0 010-1.414z" clip-rule="evenodd" />
-                  </svg>
+                  {{ analyzingStock === item.ts_code ? 'AI中' : 'AI' }}
+                </button>
+                <button @click.stop="handleRemove(item.ts_code)" class="rounded-lg border border-rose-500/30 bg-rose-500/10 px-2.5 py-1 text-[10px] font-bold text-rose-300 hover:bg-rose-500 hover:text-white">
+                  删除
                 </button>
               </div>
             </div>
           </div>
-
-          <!-- 4. 操作区 -->
-          <div class="col-span-1 flex flex-col items-end justify-center gap-1">
-            <button @click.stop="handleRemove(item.ts_code)" class="p-2 text-slate-600 hover:text-rose-400 hover:bg-rose-500/10 rounded-full transition-all">
-              <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-              </svg>
-            </button>
-          </div>
-
-          <!-- 5. AI分析按钮 -->
-          <div class="col-span-1 flex justify-end items-center">
-            <button 
-              @click.stop="analyzeWithAI(item)" 
-              :disabled="analyzingStock === item.ts_code"
-              class="px-3 py-1.5 rounded-lg text-[10px] font-bold transition-all"
-              :class="analyzingStock === item.ts_code ? 'bg-purple-800 text-purple-300' : 'bg-purple-600/30 text-purple-400 hover:bg-purple-600 hover:text-white border border-purple-500/30'"
-            >
-              {{ analyzingStock === item.ts_code ? '分析中...' : 'AI分析' }}
-            </button>
-          </div>
         </div>
-      </div>
+
+        <div v-else class="px-4 py-8 text-center text-[11px] text-slate-500">
+          暂无观察股，未录入持仓的自选会自动出现在这里。
+        </div>
+      </section>
     </div>
 
     <!-- Zen模式全屏覆盖 -->
     <div
       v-if="zenMode"
       class="fixed inset-0 z-50 bg-black flex flex-col items-center justify-center"
-      @click="zenMode = false"
+      @click="exitZenMode"
     >
       <div class="text-center" @click.stop>
         <div class="text-[10px] text-gray-600 mb-12">轻触空白处退出</div>
-        <div class="flex flex-wrap justify-center gap-12 max-w-5xl">
+        <div class="flex flex-wrap justify-center gap-12 max-w-4xl">
           <div
-            v-for="item in rows"
+            v-for="item in holdingRows"
             :key="item.ts_code"
             class="flex flex-col items-center min-w-[100px]"
           >
@@ -294,8 +344,8 @@
             </div>
           </div>
         </div>
-        <div v-if="!rows.length" class="text-gray-500 text-lg mt-20">
-          暂无自选股
+        <div v-if="!holdingRows.length" class="text-gray-500 text-lg mt-20">
+          暂无持仓股
         </div>
       </div>
     </div>
@@ -697,6 +747,7 @@ marked.setOptions({
 import { CanvasRenderer } from 'echarts/renderers';
 import { CandlestickChart, LineChart, BarChart } from 'echarts/charts';
 import { GridComponent, TooltipComponent, DataZoomComponent, LegendComponent, VisualMapComponent } from 'echarts/components';
+import { SparklesIcon } from '@heroicons/vue/20/solid';
 import VChart from 'vue-echarts';
 import { useKlineChart } from '@/composables/useKlineChart';
 
@@ -714,10 +765,9 @@ const REFRESH_MS_ZEN = 10000;
 const loading = ref(false);
 const isTradingTime = ref(false);
 const message = ref('');
+const lastRefreshAt = ref('');
 const rows = ref([]);
 const newCode = ref('');
-const expandedComments = ref({});  // 展开的专业点评
-const hoveredDay = ref(null);  // 当前hover的10D节点
 const klineHoveredIndex = ref(-1);  // K线图当前hover的索引
 
 // 持仓相关
@@ -737,28 +787,22 @@ const handleUpdateAxisPointer = (event) => {
   }
 };
 
-const tooltipPosition = ref('top');  // tooltip显示位置
-
-const checkTooltipPosition = (event) => {
-  const rect = event.target.getBoundingClientRect();
-  const spaceAbove = rect.top;
-  const spaceBelow = window.innerHeight - rect.bottom;
-  tooltipPosition.value = spaceAbove > spaceBelow ? 'top' : 'bottom';
-};
-
 // Zen模式
 const zenMode = ref(false);
 
 const toggleZenMode = () => {
   zenMode.value = !zenMode.value;
-  if (zenMode.value) {
-    startAutoRefresh();
-  }
+  startAutoRefresh();
+};
+
+const exitZenMode = () => {
+  zenMode.value = false;
+  startAutoRefresh();
 };
 
 const handleKeydown = (e) => {
   if (e.key === 'Escape' && zenMode.value) {
-    zenMode.value = false;
+    exitZenMode();
   }
 };
 
@@ -770,7 +814,6 @@ let timer = null;
 // 使用新的搜索composable
 const {
   searchResults,
-  searchLoading,
   showSearchResults,
   search,
   hideResults,
@@ -965,42 +1008,12 @@ const fmt = (v, digits = 2, suffix = '') => {
   return `${n.toFixed(digits)}${suffix}`;
 };
 
+const formatClock = (date = new Date()) => date.toLocaleTimeString('zh-CN', { hour12: false });
+
 const numColor = (v) => {
   const n = Number(v);
   if (!Number.isFinite(n) || n === 0) return 'text-slate-300';
   return n > 0 ? 'text-red-400' : 'text-emerald-400';
-};
-
-const parseCommentary = (summary) => {
-  if (!summary) return [{ tag: null, text: '-' }];
-
-  // 按 | 分割不同视角
-  const segments = summary.split('|').map(s => s.trim()).filter(Boolean);
-
-  return segments.map(seg => {
-    // 提取标签 【机构】【游资】【形态】
-    const tagMatch = seg.match(/^【(.+?)】(.+)$/);
-    if (tagMatch) {
-      return {
-        tag: tagMatch[1],
-        text: tagMatch[2].trim()
-      };
-    }
-    return {
-      tag: null,
-      text: seg
-    };
-  });
-};
-
-const tagColor = (tag) => {
-  if (tag === '结论') return 'bg-red-500/20 text-red-400 border border-red-500/30';
-  if (tag === '计划') return 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30';
-  if (tag === '风险') return 'bg-rose-500/20 text-rose-300 border border-rose-500/30';
-  if (tag === '机构') return 'bg-blue-500/20 text-blue-400 border border-blue-500/30';
-  if (tag === '游资') return 'bg-orange-500/20 text-orange-400 border border-orange-500/30';
-  if (tag === '形态') return 'bg-purple-500/20 text-purple-400 border border-purple-500/30';
-  return 'bg-slate-700 text-slate-300';
 };
 
 const decisionScoreColor = (score) => {
@@ -1022,19 +1035,10 @@ const getLevelBg = (level) => {
 
 const suggestionColor = (s) => {
   if (!s || s === '观望') return 'bg-slate-700 text-slate-300';
-  if (s.includes('关注') || s.includes('试错')) return 'bg-red-500/20 text-red-400 border border-red-500/30';
+  if (s.includes('试错') || s.includes('主动进攻')) return 'bg-red-500/20 text-red-400 border border-red-500/30';
+  if (s.includes('关注')) return 'bg-amber-500/20 text-amber-300 border border-amber-500/30';
   if (s.includes('减仓') || s.includes('持币') || s.includes('回避')) return 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30';
   return 'bg-slate-700 text-slate-300';
-};
-
-const dotColor = (s, tone) => {
-  const sStr = String(s || '');
-  const toneStr = String(tone || '');
-  if (toneStr.includes('爆发') || sStr.includes('试错') || sStr.includes('关注')) return 'bg-red-500';
-  if (toneStr.includes('杀跌') || sStr.includes('减仓') || sStr.includes('持币') || sStr.includes('回避')) return 'bg-emerald-500';
-  if (toneStr.includes('看多')) return 'bg-red-900/60';
-  if (toneStr.includes('看空')) return 'bg-emerald-900/60';
-  return 'bg-slate-700';
 };
 
 const stopAutoRefresh = () => {
@@ -1068,6 +1072,7 @@ const refreshNow = async (showLoading = true, syncHoldings = false) => {
     rows.value = body.data || [];
     isTradingTime.value = !!body.is_trading_time;
     message.value = body.message || '';
+    lastRefreshAt.value = formatClock();
     if (syncHoldings) {
       await fetchHoldings();
     }
@@ -1162,6 +1167,86 @@ const calcPnL = (item) => {
   const pnl = current - cost;
   const pnlPct = ((item.price - h.avg_cost) / h.avg_cost) * 100;
   return { pnl, pnlPct, cost, current };
+};
+
+const hasHolding = (tsCode) => Number(holdings.value[tsCode]?.shares || 0) > 0;
+
+const holdingRows = computed(() => rows.value.filter(item => hasHolding(item.ts_code)));
+const observationRows = computed(() => rows.value.filter(item => !hasHolding(item.ts_code)));
+const refreshStatusText = computed(() => {
+  if (loading.value) return '刷新中';
+  return isTradingTime.value ? '自动实时刷新' : '自动轮询';
+});
+const refreshCycleText = computed(() => {
+  if (zenMode.value) return `专注模式 ${Math.round(REFRESH_MS_ZEN / 1000)}s`;
+  return isTradingTime.value
+    ? `盘中 ${Math.round(REFRESH_MS_TRADING / 1000)}s`
+    : `盘后 ${Math.round(REFRESH_MS_IDLE / 1000)}s`;
+});
+
+const truncateText = (text, limit = 64) => {
+  const raw = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!raw) return '暂无结论';
+  if (raw.length <= limit) return raw;
+  return `${raw.slice(0, limit).trim()}...`;
+};
+
+const getRawConclusion = (item) => {
+  const direct = String(item?.analyze?.conclusion || '').trim();
+  if (direct) return direct;
+
+  const summary = String(item?.analyze?.summary || '').trim();
+  if (summary) {
+    const segments = summary.split('|').map(part => part.trim()).filter(Boolean);
+    const conclusion = segments.find(part => part.startsWith('【结论】')) || segments[0];
+    if (conclusion) {
+      return conclusion.replace(/^【[^】]+】/, '').trim();
+    }
+  }
+
+  const suggestion = String(item?.analyze?.suggestion || '').trim();
+  return suggestion ? `建议 ${suggestion}` : '暂无结论';
+};
+
+const getConclusionText = (item) => truncateText(getRawConclusion(item), 70);
+
+const getSignalText = (item) => {
+  const suggestion = String(item?.analyze?.suggestion || '').trim();
+  if (suggestion) return suggestion;
+  if (getRawConclusion(item).includes('主动进攻')) return '主动进攻';
+  return '观望';
+};
+
+const getAggressiveLabel = (item) => {
+  const combined = `${item?.analyze?.suggestion || ''} ${item?.analyze?.conclusion || ''} ${item?.analyze?.summary || ''}`;
+  if (combined.includes('主动进攻')) return '主动进攻';
+  if (combined.includes('试错')) return '试错';
+  return '';
+};
+
+const isAggressiveItem = (item) => !!getAggressiveLabel(item);
+
+const aggressiveObservationCount = computed(() => observationRows.value.filter(isAggressiveItem).length);
+
+const watchSignalClass = (item) => {
+  if (isAggressiveItem(item)) return 'border-red-500/30 bg-red-500/10 text-red-300';
+
+  const signal = getSignalText(item);
+  if (signal.includes('关注')) return 'border-amber-500/30 bg-amber-500/10 text-amber-300';
+  if (signal.includes('减仓') || signal.includes('回避') || signal.includes('持币')) {
+    return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300';
+  }
+  return 'border-slate-700 bg-slate-900/70 text-slate-300';
+};
+
+const watchCardClass = (item, kind = 'observation') => {
+  if (isAggressiveItem(item)) {
+    return 'border-red-500/30 bg-red-500/[0.06] shadow-[0_0_0_1px_rgba(239,68,68,0.06)]';
+  }
+  if (kind === 'holding') {
+    return 'border-business-accent/20 bg-business-accent/[0.04]';
+  }
+  return 'border-business-light bg-slate-950/20';
 };
 
 // 总仓位计算

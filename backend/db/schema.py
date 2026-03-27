@@ -195,13 +195,17 @@ CREATE_WATCHLIST_TABLE_SQL = """
 
 CREATE TABLE IF NOT EXISTS watchlist (
 
-    ts_code         VARCHAR(15) PRIMARY KEY,
+    user_id         INTEGER NOT NULL,
+
+    ts_code         VARCHAR(15) NOT NULL,
 
     name            VARCHAR(50),
 
     remark          VARCHAR(255),
 
-    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (user_id, ts_code)
 
 );
 

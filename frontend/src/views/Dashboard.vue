@@ -1,322 +1,381 @@
 <template>
-  <div class="space-y-4 md:space-y-6 animate-in fade-in duration-500 max-w-6xl mx-auto pb-8">
-    <!-- Market Sentiment Overview -->
-    <div class="bg-business-dark p-4 rounded-2xl shadow-lg border border-business-light w-full">
-      <div class="flex flex-col sm:flex-row sm:items-center justify-between mb-4 gap-3">
-        <div class="flex items-center space-x-2">
-          <div class="w-1.5 h-4 bg-business-warning rounded-full"></div>
-          <h2 class="text-sm font-bold text-slate-400">市场情绪趋势</h2>
-        </div>
-        <div class="flex flex-wrap items-center gap-2 text-[10px]">
+  <div class="space-y-3 md:space-y-4 max-w-6xl mx-auto pb-6">
+    <section class="dashboard-panel panel-warm bg-business-dark rounded-2xl border border-business-light shadow-business overflow-hidden">
+      <div class="h-px bg-gradient-to-r from-amber-400/70 via-business-highlight/30 to-transparent"></div>
+      <div class="p-2.5 md:p-3.5 border-b border-business-light">
+        <div class="flex flex-col gap-2 xl:flex-row xl:items-start xl:justify-between">
+          <div class="space-y-1.5">
+            <div class="inline-flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.24em] text-amber-300">
+              <span class="h-2 w-2 rounded-full bg-amber-400"></span>
+              情绪驾驶舱
+            </div>
+            <div class="flex flex-wrap items-center gap-2">
+              <h1 class="text-base md:text-lg font-bold tracking-tight text-white">
+                {{ sentimentHero.title }}
+              </h1>
+              <span
+                class="rounded-full border px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.2em]"
+                :class="sentimentHero.badgeClass"
+              >
+                {{ sentimentHero.bandLabel }}
+              </span>
+              <span class="text-[10px] text-slate-500">
+                最新交易日 {{ tradingBrief.tradeDate || '-' }}
+              </span>
+            </div>
+            <p class="max-w-3xl text-[12px] leading-[18px] text-slate-400">
+              {{ sentimentHero.summary }}
+            </p>
+          </div>
+
+          <div class="flex flex-wrap items-center gap-2 text-[10px]">
             <button
               @click="openBacktestModal"
-              class="px-2 py-0.5 bg-business-accent/20 text-business-accent rounded border border-business-accent/30 hover:bg-business-accent hover:text-white transition"
+              class="h-7 px-2.5 rounded-lg border border-business-light bg-slate-900/50 text-slate-300 font-bold transition-all hover:border-business-accent hover:text-white"
             >
-              查看回测结果
+              查看回测
             </button>
             <button
               @click="handleSyncSentiment"
               :disabled="syncingSentiment"
-              class="px-2 py-0.5 rounded border transition"
-              :class="syncingSentiment ? 'bg-emerald-200 text-emerald-900 border-emerald-200' : 'bg-emerald-800/40 text-emerald-300 border-emerald-700 hover:bg-emerald-700 hover:text-white'"
+              class="h-7 px-2.5 rounded-lg border font-bold transition-all disabled:opacity-60"
+              :class="syncingSentiment ? 'border-emerald-300 bg-emerald-300 text-emerald-950' : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500 hover:text-white'"
             >
               {{ syncingSentiment ? '同步中...' : '同步情绪' }}
             </button>
             <button
               @click="handlePreviewSentiment"
               :disabled="predictingSentiment"
-              class="px-2 py-0.5 rounded border transition"
-              :class="predictingSentiment ? 'bg-amber-200 text-amber-900 border-amber-200' : 'bg-amber-800/40 text-amber-300 border-amber-700 hover:bg-amber-700 hover:text-white'"
+              class="h-7 px-2.5 rounded-lg border font-bold transition-all disabled:opacity-60"
+              :class="predictingSentiment ? 'border-amber-300 bg-amber-300 text-amber-950' : 'border-amber-500/30 bg-amber-500/10 text-amber-300 hover:bg-amber-500 hover:text-white'"
             >
               {{ predictingSentiment ? '预测中...' : '预测情绪' }}
             </button>
-            <button
-              @click="minimalTooltipMode = !minimalTooltipMode"
-              class="px-2 py-0.5 rounded border transition"
-              :class="minimalTooltipMode ? 'bg-slate-200 text-slate-900 border-slate-200' : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'"
-            >
-              {{ minimalTooltipMode ? '极简模式: 开' : '极简模式: 关' }}
-            </button>
-            <div class="flex items-center space-x-2">
-              <span class="px-2 py-0.5 bg-red-500/20 text-red-400 rounded">85+ 沸腾/止盈</span>
-              <span class="px-2 py-0.5 bg-blue-500/20 text-blue-400 rounded">25- 冰点/潜伏</span>
-            </div>
+          </div>
         </div>
       </div>
-      <div class="h-52 sm:h-40 w-full">
-        <v-chart :option="marketSentimentChartOption" autoresize />
-      </div>
-    </div>
 
-    <div class="px-2 md:px-0">
-      <div class="bg-business-dark p-5 rounded-2xl shadow-business border border-business-light flex flex-col">
-        <div class="flex flex-wrap items-center justify-between gap-3 mb-6">
-          <div class="flex items-center space-x-3">
-            <div class="w-1 h-4 bg-business-highlight rounded-full"></div>
-            <h2 class="text-sm font-bold text-white uppercase tracking-wider">近10日主线演变</h2>
-            <div v-if="currentMainline.name" class="px-2 py-1 rounded bg-business-highlight/10 border border-business-highlight/30">
-              <span class="text-[10px] text-business-highlight font-bold">
-                {{ currentMainline.name }} {{ currentMainline.score ? `(${currentMainline.score})` : '' }}
+      <div class="p-2.5 md:p-3.5 space-y-2.5">
+        <div class="flex flex-wrap gap-1.5">
+          <div
+            v-for="card in sentimentMetricCards"
+            :key="card.label"
+            class="inline-flex items-center gap-1.5 rounded-full border px-2 py-1"
+            :class="card.toneClass"
+          >
+            <div class="text-[9px] text-slate-500">{{ card.label }}</div>
+            <div class="text-[11px] font-bold text-white">{{ card.value }}</div>
+          </div>
+        </div>
+
+        <div class="grid gap-2.5 xl:grid-cols-[1.15fr,0.85fr]">
+          <div class="rounded-lg border border-business-light bg-slate-900/35 p-2.5">
+            <div class="flex items-center justify-between gap-2">
+              <p class="text-[11px] font-bold text-white">今日结论</p>
+              <div class="rounded-lg border border-business-accent/30 bg-business-accent/10 px-2.5 py-1 text-[10px] font-bold text-business-accent">
+                置信度 {{ tradingBrief.confidence || '-' }}
+              </div>
+            </div>
+
+            <div class="mt-2 rounded-lg border border-business-light/80 bg-business-darker/45 divide-y divide-business-light/70">
+              <div
+                v-for="item in sentimentActionItems"
+                :key="item.label"
+                class="flex items-start gap-2.5 px-2.5 py-2"
+              >
+                <div class="w-12 shrink-0 text-[10px] text-slate-500">{{ item.label }}</div>
+                <div class="flex-1 text-[12px] font-semibold leading-[18px] text-slate-100">{{ item.value }}</div>
+              </div>
+
+              <div class="px-2.5 py-2">
+                <div class="flex items-start gap-2.5">
+                  <div class="w-12 shrink-0 text-[10px] text-slate-500">主线</div>
+                  <div class="flex-1">
+                    <div class="text-[12px] font-semibold text-slate-100">
+                      {{ currentMainline.name || '主线待确认' }}
+                    </div>
+                    <div class="mt-0.5 text-[10px] leading-4 text-slate-400">
+                      {{ currentMainline.reason || '当前没有明确主线时，先按情绪节奏控制仓位。' }}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="mt-2 rounded-lg border border-business-accent/20 bg-business-accent/10 px-2.5 py-2">
+              <div class="text-[10px] text-business-accent/80">
+                {{ sentimentHero.strategyTitle }}
+              </div>
+              <p class="mt-1 text-[12px] leading-[18px] text-slate-100">
+                {{ tradingBrief.action || '暂无执行建议' }}
+              </p>
+            </div>
+          </div>
+
+          <div class="rounded-lg border border-amber-500/15 bg-gradient-to-br from-amber-500/[0.06] via-business-accent/[0.05] to-slate-900/40 p-2.5">
+            <div class="flex items-center justify-between gap-2">
+              <div>
+                <p class="text-[11px] font-bold text-slate-200">盘中辅助</p>
+                <p class="mt-0.5 text-[10px] text-slate-500">预测和统一建议集中显示</p>
+              </div>
+              <span class="text-[10px] text-slate-500">{{ sentimentPreview?.as_of || '未生成' }}</span>
+            </div>
+
+            <div v-if="previewError" class="mt-2.5 rounded-lg border border-rose-500/20 bg-rose-500/10 px-2.5 py-2 text-[12px] text-rose-200">
+              {{ previewError }}
+            </div>
+
+            <div v-else-if="sentimentPreview" class="mt-2.5 grid grid-cols-2 gap-1.5 text-[11px] sm:grid-cols-4">
+              <div class="rounded-lg border border-business-light/80 bg-business-darker/60 px-2 py-2">
+                <div class="text-slate-500">预测日</div>
+                <div class="mt-1 font-semibold text-white">{{ sentimentPreview.predicted_trade_date || '-' }}</div>
+              </div>
+              <div class="rounded-lg border border-business-light/80 bg-business-darker/60 px-2 py-2">
+                <div class="text-slate-500">预测分</div>
+                <div class="mt-1 font-semibold text-white">{{ fmt(sentimentPreview.projected_score, 1) }}</div>
+              </div>
+              <div class="rounded-lg border border-business-light/80 bg-business-darker/60 px-2 py-2">
+                <div class="text-slate-500">沪深300</div>
+                <div class="mt-1 font-semibold text-white">{{ fmt(sentimentPreview.index_pct_chg, 3, '%') }}</div>
+              </div>
+              <div class="rounded-lg border border-business-light/80 bg-business-darker/60 px-2 py-2">
+                <div class="text-slate-500">科创50</div>
+                <div class="mt-1 font-semibold text-white">{{ fmt(sentimentPreview.star50_pct_chg, 3, '%') }}</div>
+              </div>
+            </div>
+
+            <div v-else class="mt-2.5 rounded-lg border border-business-light bg-business-darker/60 px-2.5 py-2 text-[12px] leading-[18px] text-slate-400">
+              点击“预测情绪”后，这里会补充次日预判与统一建议。
+            </div>
+
+            <div v-if="sentimentPreview?.plan?.next_day_strategy" class="mt-2.5 rounded-lg border border-amber-500/20 bg-amber-500/10 px-2.5 py-2">
+              <div class="text-[10px] text-amber-200/80">次日策略</div>
+              <p class="mt-1 text-[12px] leading-[18px] text-amber-50">
+                {{ sentimentPreview.plan?.next_day_strategy || '-' }}
+              </p>
+            </div>
+
+            <div class="mt-2.5 divide-y divide-business-light/70 rounded-lg border border-business-light/80 bg-business-darker/55">
+              <div
+                v-for="cue in sentimentDecisionCues"
+                :key="cue.label"
+                class="px-2.5 py-2"
+              >
+                <div class="text-[10px] text-slate-500">{{ cue.label }}</div>
+                <div class="mt-1 text-[12px] leading-[18px] text-slate-200">{{ cue.value }}</div>
+              </div>
+            </div>
+
+            <div v-if="marketSuggestion" class="mt-2.5 rounded-lg border border-business-accent/20 bg-business-accent/10 px-2.5 py-2">
+              <div class="text-[10px] text-business-accent/80">统一市场建议</div>
+              <p class="mt-1 text-[12px] leading-[18px] text-slate-200">
+                {{ marketSuggestion.action || '-' }} · 仓位 {{ fmt((Number(marketSuggestion.target_position) || 0) * 100, 0, '%') }} · 主线 {{ marketSuggestion.rationale?.top_mainline || '-' }} · 风控 {{ fmt(marketSuggestion.risk_controls?.stop_loss_pct, 1, '%') }} / {{ fmt(marketSuggestion.risk_controls?.take_profit_pct, 1, '%') }}
+              </p>
+            </div>
+
+            <div v-else-if="suggestionError" class="mt-2.5 rounded-lg border border-rose-500/20 bg-rose-500/10 px-2.5 py-2 text-[12px] text-rose-200">
+              建议生成失败: {{ suggestionError }}
+            </div>
+          </div>
+        </div>
+
+        <div class="rounded-lg border border-amber-500/15 bg-gradient-to-br from-amber-500/[0.05] to-slate-900/35 p-2.5">
+          <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div class="flex items-center gap-2">
+              <p class="text-[11px] font-bold text-white">市场情绪趋势</p>
+              <span class="text-[10px] text-slate-500">证据层</span>
+            </div>
+            <div class="text-[10px] text-slate-500">
+              85+ 沸腾 / 止盈 · 25- 冰点 / 观察
+            </div>
+          </div>
+
+          <div class="mt-2 h-40 w-full sm:h-48">
+            <v-chart :option="marketSentimentChartOption" autoresize />
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="dashboard-panel panel-cool bg-business-dark rounded-2xl border border-business-light shadow-business overflow-hidden">
+      <div class="h-px bg-gradient-to-r from-business-accent/80 via-business-highlight/35 to-transparent"></div>
+      <div class="p-3 md:p-4 border-b border-business-light">
+        <div class="flex flex-col gap-2 xl:flex-row xl:items-start xl:justify-between">
+          <div class="space-y-2">
+            <div class="inline-flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.24em] text-business-accent">
+              <span class="h-2 w-2 rounded-full bg-business-accent"></span>
+              主线作战板
+            </div>
+            <div class="flex flex-wrap items-center gap-2">
+              <h2 class="text-lg md:text-xl font-bold tracking-tight text-white">
+                {{ mainlineHeadline.title }}
+              </h2>
+              <span
+                v-if="currentMainline.name"
+                class="rounded-full border border-business-accent/25 bg-business-accent/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.2em] text-business-accent"
+              >
+                {{ currentMainline.name }}{{ currentMainline.score ? ` · ${fmt(currentMainline.score, 1)}` : '' }}
               </span>
             </div>
-          </div>
-          <div class="flex items-center space-x-2">
-            <button @click="isTooltipLocked = false" v-if="isTooltipLocked" class="text-[9px] font-bold text-business-accent bg-business-accent/10 px-2 py-0.5 rounded border border-business-accent/20 transition-all hover:bg-business-accent hover:text-white">解锁</button>
-            <span class="text-[9px] text-slate-500 font-medium bg-slate-800/50 px-2 py-1 rounded border border-slate-700">点击锁定浮窗</span>
-          </div>
-        </div>
-        <div class="h-64 sm:h-80 w-full relative">
-          <v-chart v-if="!loadingTrend && mainlineChartOption.series.length > 0" :option="mainlineChartOption" autoresize @click="handleChartClick" />
-          <div v-if="loadingTrend" class="absolute inset-0 flex items-center justify-center">
-             <div class="w-8 h-8 border-2 border-business-highlight border-t-transparent rounded-full animate-spin"></div>
-          </div>
-          <div v-if="!loadingTrend && mainlineChartOption.series.length === 0" class="absolute inset-0 flex flex-col items-center justify-center text-slate-500 space-y-2">
-             <p class="text-xs font-bold uppercase tracking-widest">暂无近10日主线数据</p>
-          </div>
-        </div>
-
-        <div v-if="trendAnalysis" class="mt-4 p-4 bg-slate-900/50 rounded-xl border border-slate-700/50">
-           <div class="flex items-start space-x-3">
-              <ChatBubbleLeftRightIcon class="w-5 h-5 text-business-accent mt-0.5 shrink-0" />
-              <div class="space-y-1">
-                 <h3 class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">量化推演结论</h3>
-                 <p class="text-xs text-slate-300 leading-relaxed font-medium whitespace-pre-line">
-                    {{ trendAnalysis }}
-                 </p>
-              </div>
-           </div>
-        </div>
-      </div>
-    </div>
-
-    <div
-      v-if="loadingTrend || loadingLeaders || mainlineOverview.current || mainlineOverview.continuous || mainlineFocusCards.length"
-      class="px-2 md:px-0"
-    >
-      <div class="bg-business-dark p-4 rounded-2xl shadow-lg border border-business-light">
-        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
-          <div>
-            <h3 class="text-xs font-bold text-slate-200 tracking-wide">10日主线看板</h3>
-            <p class="text-[10px] text-slate-500 mt-1">
-              {{ mainlineReview?.date_range?.start || '-' }} 至 {{ mainlineReview?.date_range?.end || '-' }}
+            <p class="max-w-4xl text-[13px] leading-5 text-slate-300">
+              {{ mainlineHeadline.summary }}
             </p>
           </div>
-          <div class="text-[10px] text-slate-400">
-            复盘交易日 {{ mainlineReview?.trade_days || 0 }} 天
+
+          <div class="text-[11px] leading-5 text-slate-500">
+            <div>{{ mainlineReview?.date_range?.start || '-' }} 至 {{ mainlineReview?.date_range?.end || '-' }}</div>
+            <div class="mt-1">复盘交易日 {{ mainlineReview?.trade_days || 0 }} 天</div>
           </div>
         </div>
+      </div>
 
-        <div v-if="loadingTrend || loadingLeaders" class="py-6 text-center text-slate-400 text-xs">
-          <div class="w-6 h-6 border-2 border-business-accent border-t-transparent rounded-full animate-spin mx-auto mb-2"></div>
-          加载中...
+      <div class="p-3 md:p-4 space-y-3">
+        <div v-if="loadingTrend || loadingLeaders" class="py-10 text-center text-sm text-slate-400">
+          <div class="mx-auto mb-3 h-8 w-8 animate-spin rounded-full border-2 border-business-accent border-t-transparent"></div>
+          主线数据加载中...
         </div>
 
         <div
-          v-else-if="!mainlineOverview.current && !mainlineOverview.continuous && mainlineFocusCards.length === 0"
-          class="py-6 text-center text-slate-500 text-xs"
+          v-else-if="!mainlineOverview.current && !mainlineOverview.continuous && focusedMainlineCards.length === 0"
+          class="rounded-xl border border-business-light bg-slate-900/35 px-4 py-8 text-center text-sm text-slate-500"
         >
           暂无主线聚焦数据
         </div>
 
-        <div v-else class="space-y-4">
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div class="rounded-xl border border-business-highlight/20 bg-business-highlight/5 p-3">
-              <div class="text-[10px] uppercase tracking-widest text-slate-500">当前最强主线</div>
-              <div class="mt-2 flex items-start justify-between gap-3">
-                <div>
-                  <div class="text-lg font-bold text-business-highlight">{{ mainlineOverview.current?.name || '-' }}</div>
-                  <div class="text-[10px] text-slate-400 mt-1 leading-relaxed">
-                    {{ mainlineOverview.current?.detail || '暂无明确主线' }}
-                  </div>
-                </div>
-                <div class="text-right shrink-0">
-                  <div class="text-[10px] text-slate-500">最新强度</div>
-                  <div class="text-lg font-semibold text-slate-100">{{ fmt(mainlineOverview.current?.score, 1) }}</div>
-                </div>
-              </div>
-            </div>
-
-            <div class="rounded-xl border border-emerald-600/20 bg-emerald-500/5 p-3">
-              <div class="text-[10px] uppercase tracking-widest text-slate-500">10日连续主线</div>
-              <div class="mt-2 flex items-start justify-between gap-3">
-                <div>
-                  <div class="text-lg font-bold text-emerald-300">{{ mainlineOverview.continuous?.name || '-' }}</div>
-                  <div class="text-[10px] text-slate-400 mt-1 leading-relaxed">
-                    {{ mainlineOverview.continuous?.detail || '近10日暂无连续主线' }}
-                  </div>
-                </div>
-                <div class="text-right shrink-0">
-                  <div class="text-[10px] text-slate-500">复盘强度</div>
-                  <div class="text-lg font-semibold text-slate-100">{{ fmt(mainlineOverview.continuous?.score, 1) }}</div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div v-if="mainlineReview?.summary" class="rounded-xl border border-sky-700/30 bg-sky-500/10 px-3 py-2 text-xs text-sky-100 leading-relaxed">
-            {{ mainlineReview.summary }}
-          </div>
-
-          <div class="grid grid-cols-1 xl:grid-cols-2 gap-3">
+        <template v-else>
+          <div class="grid gap-2 md:grid-cols-3">
             <div
-              v-for="sector in mainlineFocusCards"
-              :key="sector.name"
-              class="rounded-xl border border-slate-700/50 bg-slate-900/30 p-3"
+              v-for="card in mainlineSummaryCards"
+              :key="card.label"
+              class="rounded-lg border px-3 py-2"
+              :class="card.toneClass"
             >
-              <div class="flex flex-wrap items-start justify-between gap-2">
-                <div>
-                  <div class="flex flex-wrap items-center gap-2">
-                    <div class="text-sm font-bold text-business-highlight">{{ sector.name }}</div>
-                    <span
-                      v-for="label in sector.labels"
-                      :key="`${sector.name}-${label}`"
-                      class="text-[9px] px-1.5 py-0.5 rounded border border-business-accent/30 bg-business-accent/10 text-business-accent"
-                    >
-                      {{ label }}
+              <div class="text-[10px] text-slate-500">{{ card.label }}</div>
+              <div class="mt-1 text-sm font-bold text-white">{{ card.value }}</div>
+              <div class="mt-0.5 text-[10px] leading-4 text-slate-400">{{ card.description }}</div>
+            </div>
+          </div>
+
+          <div class="grid gap-2.5 xl:grid-cols-[1.15fr,0.85fr]">
+            <div class="overflow-hidden rounded-xl border border-business-light bg-slate-900/30">
+              <div class="divide-y divide-business-light/70">
+                <div
+                  v-for="sector in focusedMainlineCards"
+                  :key="sector.name"
+                  class="px-3 py-2.5"
+                  :class="sector.panelClass"
+                >
+                  <div class="flex items-start gap-3">
+                    <span class="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-business-darker text-[10px] font-bold text-white">
+                      {{ sector.displayRank }}
                     </span>
-                  </div>
-                  <div class="text-[10px] text-slate-400 mt-1">{{ sector.detail }}</div>
-                </div>
-                <div class="text-right text-[10px] text-slate-400">
-                  <div>强度 {{ fmt(sector.score, 1) }}</div>
-                  <div v-if="sector.resonanceText">{{ sector.resonanceText }}</div>
-                </div>
-              </div>
 
-              <div class="grid grid-cols-2 lg:grid-cols-4 gap-2 mt-3 text-[11px]">
-                <div class="rounded border border-slate-700/40 bg-slate-950/40 px-2 py-2">
-                  <div class="text-slate-500">上榜天数</div>
-                  <div class="text-slate-200 font-semibold mt-0.5">{{ sector.activeDaysText }}</div>
-                </div>
-                <div class="rounded border border-slate-700/40 bg-slate-950/40 px-2 py-2">
-                  <div class="text-slate-500">连续天数</div>
-                  <div class="text-slate-200 font-semibold mt-0.5">{{ sector.consecutiveDaysText }}</div>
-                </div>
-                <div class="rounded border border-slate-700/40 bg-slate-950/40 px-2 py-2">
-                  <div class="text-slate-500">涨停峰值</div>
-                  <div class="text-slate-200 font-semibold mt-0.5">{{ sector.limitUpsText }}</div>
-                </div>
-                <div class="rounded border border-slate-700/40 bg-slate-950/40 px-2 py-2">
-                  <div class="text-slate-500">主线样本</div>
-                  <div class="text-slate-200 font-semibold mt-0.5">{{ sector.stockCountText }}</div>
-                </div>
-              </div>
+                    <div class="min-w-0 flex-1">
+                      <div class="flex flex-wrap items-center gap-1.5">
+                        <div class="truncate text-sm font-bold text-white">{{ sector.name }}</div>
+                        <span
+                          class="rounded-full border px-1.5 py-0.5 text-[9px] font-bold"
+                          :class="sector.roleClass"
+                        >
+                          {{ sector.roleLabel }}
+                        </span>
+                        <span
+                          class="rounded-full border px-1.5 py-0.5 text-[9px] font-semibold"
+                          :class="sector.heatClass"
+                        >
+                          {{ sector.heatLabel }}
+                        </span>
+                      </div>
 
-              <div class="mt-3">
-                <div class="flex items-center justify-between mb-2">
-                  <span class="text-[10px] uppercase tracking-widest text-slate-500">Top 5 个股</span>
-                  <span class="text-[10px] text-slate-500">{{ sector.stockHint }}</span>
-                </div>
-                <div v-if="sector.stocks.length" class="space-y-2">
-                  <div
-                    v-for="(stock, sidx) in sector.stocks"
-                    :key="`${sector.name}-${stock.tsCode || stock.name}-${sidx}`"
-                    class="flex items-center justify-between rounded border border-slate-700/30 bg-slate-950/30 px-2 py-2 text-xs"
-                  >
-                    <div class="flex items-center gap-2 min-w-0">
-                      <span class="text-[10px] text-slate-500 w-4 shrink-0">{{ sidx + 1 }}</span>
-                      <div class="min-w-0">
-                        <div class="font-semibold text-slate-200 truncate">{{ stock.name }}</div>
-                        <div class="text-[10px] text-slate-500 font-mono truncate">{{ stock.tsCode || '-' }}</div>
-                        <div v-if="stock.note" class="text-[10px] text-slate-500 truncate">{{ stock.note }}</div>
+                      <div class="mt-1 text-[12px] leading-5 text-slate-300">{{ sector.detail }}</div>
+                      <div class="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-slate-400">
+                        <span>上榜 {{ sector.activeDaysText }}</span>
+                        <span>连续 {{ sector.consecutiveDaysText }}</span>
+                        <span>涨停 {{ sector.limitUpsText }}</span>
+                        <span>样本 {{ sector.stockCountText }}</span>
                       </div>
                     </div>
-                    <div class="text-right shrink-0 ml-3">
-                      <div v-if="stock.badge" class="text-slate-200 font-semibold">{{ stock.badge }}</div>
-                      <div :class="stock.changeClass">{{ stock.changeText }}</div>
+
+                    <div class="shrink-0 text-right">
+                      <div class="text-lg font-black text-white">{{ fmt(sector.score, 1) }}</div>
+                      <button
+                        @click="toggleMainlineExpansion(sector.name)"
+                        class="mt-1 h-6 px-2 rounded-md border border-business-light bg-business-darker/80 text-[9px] font-bold text-slate-300 transition-all hover:border-business-highlight hover:text-white"
+                      >
+                        {{ expandedMainlineName === sector.name ? '收起龙头' : '看龙头' }}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div v-if="expandedMainlineName === sector.name" class="mt-2.5 grid gap-1.5 sm:grid-cols-2">
+                    <div
+                      v-for="(stock, sidx) in sector.stocks"
+                      :key="`${sector.name}-${stock.tsCode || stock.name}-${sidx}`"
+                      class="rounded-lg border border-business-light/70 bg-business-darker/60 px-2.5 py-2"
+                    >
+                      <div class="flex items-center justify-between gap-2">
+                        <div class="min-w-0">
+                          <div class="flex items-center gap-1.5">
+                            <span class="text-[9px] text-slate-500">{{ sidx + 1 }}</span>
+                            <span class="truncate text-[12px] font-semibold text-slate-100">{{ stock.name }}</span>
+                          </div>
+                          <div class="mt-0.5 truncate font-mono text-[9px] text-slate-500">{{ stock.tsCode || '-' }}</div>
+                        </div>
+                        <div class="text-right">
+                          <div class="text-[11px]" :class="stock.changeClass">{{ stock.changeText }}</div>
+                          <div v-if="stock.badge" class="mt-0.5 text-[9px] text-slate-400">{{ stock.badge }}</div>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>
-                <div v-else class="text-[10px] text-slate-500 italic">
-                  暂无明确龙头股
+              </div>
+            </div>
+
+            <div class="space-y-2.5">
+              <div class="rounded-xl border border-business-highlight/15 bg-gradient-to-br from-business-highlight/[0.06] to-slate-900/35 p-3">
+                <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p class="text-[10px] font-bold text-slate-500">趋势证据</p>
+                    <h2 class="mt-1 text-sm font-bold text-white">近10日主线演变</h2>
+                  </div>
+                  <div class="text-[10px] text-slate-500">图表只保留当前聚焦的最多 3 条主线</div>
+                </div>
+
+                <div class="relative mt-3 h-60 w-full sm:h-72">
+                  <v-chart
+                    v-if="!loadingTrend && mainlineChartOption.series.length > 0"
+                    :option="mainlineChartOption"
+                    autoresize
+                  />
+                  <div v-if="loadingTrend" class="absolute inset-0 flex items-center justify-center">
+                    <div class="h-8 w-8 animate-spin rounded-full border-2 border-business-accent border-t-transparent"></div>
+                  </div>
+                  <div
+                    v-if="!loadingTrend && mainlineChartOption.series.length === 0"
+                    class="absolute inset-0 flex flex-col items-center justify-center space-y-2 text-slate-500"
+                  >
+                    <p class="text-xs font-bold uppercase tracking-[0.24em]">暂无近10日主线数据</p>
+                  </div>
+                </div>
+              </div>
+
+              <div v-if="trendAnalysis" class="rounded-xl border border-business-accent/15 bg-gradient-to-br from-business-accent/[0.05] to-slate-900/35 p-3">
+                <div class="flex items-start gap-3">
+                  <ChatBubbleLeftRightIcon class="mt-0.5 h-5 w-5 shrink-0 text-business-accent" />
+                  <div class="space-y-1">
+                    <h3 class="text-[10px] font-bold text-slate-500">量化推演结论</h3>
+                    <p class="text-[13px] leading-5 text-slate-300 whitespace-pre-line">
+                      {{ trendAnalysis }}
+                    </p>
+                  </div>
                 </div>
               </div>
             </div>
           </div>
-        </div>
+        </template>
       </div>
-    </div>
-
-    <div v-if="tradingBrief.action" class="px-2 md:px-0">
-      <div class="bg-business-dark p-4 rounded-2xl shadow-lg border border-business-light">
-        <div class="flex items-center justify-between gap-2 mb-2">
-          <h3 class="text-xs font-bold text-slate-200 tracking-wide">最新交易日简报</h3>
-          <span class="text-[10px] text-slate-400">{{ tradingBrief.tradeDate || '-' }}</span>
-        </div>
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-          <div class="rounded border border-slate-700/60 bg-slate-900/40 px-3 py-2">
-            <span class="text-slate-500">市场状态</span>
-            <p class="text-slate-200 font-semibold mt-0.5">{{ tradingBrief.regime || '-' }}</p>
-          </div>
-          <div class="rounded border border-slate-700/60 bg-slate-900/40 px-3 py-2">
-            <span class="text-slate-500">情绪评分</span>
-            <p class="text-slate-200 font-semibold mt-0.5">{{ tradingBrief.scoreText || '-' }}</p>
-          </div>
-          <div class="rounded border border-slate-700/60 bg-slate-900/40 px-3 py-2">
-            <span class="text-slate-500">策略置信度</span>
-            <p class="text-slate-200 font-semibold mt-0.5">{{ tradingBrief.confidence || '-' }}</p>
-          </div>
-          <div class="rounded border border-slate-700/60 bg-slate-900/40 px-3 py-2 sm:col-span-2">
-            <span class="text-slate-500">主线</span>
-            <p class="text-slate-200 font-semibold mt-0.5">{{ tradingBrief.mainline || '-' }}</p>
-          </div>
-        </div>
-        <div class="mt-2 rounded border border-amber-700/40 bg-amber-500/10 px-3 py-2">
-          <span class="text-[11px] text-amber-300">执行建议</span>
-          <p class="text-xs text-amber-100 mt-0.5 leading-relaxed">{{ tradingBrief.action }}</p>
-        </div>
-      </div>
-    </div>
-
-    <div v-if="sentimentPreview || previewError" class="px-2 md:px-0">
-      <div class="bg-business-dark p-4 rounded-2xl shadow-lg border border-business-light">
-        <div class="flex items-center justify-between gap-2 mb-2">
-          <h3 class="text-xs font-bold text-slate-200 tracking-wide">盘中情绪预测</h3>
-          <span class="text-[10px] text-slate-400">{{ sentimentPreview?.as_of || '-' }}</span>
-        </div>
-        <div v-if="previewError" class="rounded border border-red-700/40 bg-red-500/10 px-3 py-2 text-xs text-red-300">
-          {{ previewError }}
-        </div>
-        <div v-else-if="sentimentPreview" class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-          <div class="rounded border border-slate-700/60 bg-slate-900/40 px-3 py-2">
-            <span class="text-slate-500">预测交易日</span>
-            <p class="text-slate-200 font-semibold mt-0.5">{{ sentimentPreview.predicted_trade_date || '-' }}</p>
-          </div>
-          <div class="rounded border border-slate-700/60 bg-slate-900/40 px-3 py-2">
-            <span class="text-slate-500">预测评分</span>
-            <p class="text-slate-200 font-semibold mt-0.5">{{ fmt(sentimentPreview.projected_score, 1) }}</p>
-          </div>
-          <div class="rounded border border-slate-700/60 bg-slate-900/40 px-3 py-2">
-            <span class="text-slate-500">沪深300 涨跌幅</span>
-            <p class="text-slate-200 font-semibold mt-0.5">{{ fmt(sentimentPreview.index_pct_chg, 3, '%') }}</p>
-          </div>
-          <div class="rounded border border-slate-700/60 bg-slate-900/40 px-3 py-2">
-            <span class="text-slate-500">科创50 涨跌幅</span>
-            <p class="text-slate-200 font-semibold mt-0.5">{{ fmt(sentimentPreview.star50_pct_chg, 3, '%') }}</p>
-          </div>
-          <div class="rounded border border-amber-700/40 bg-amber-500/10 px-3 py-2 sm:col-span-2">
-            <span class="text-[11px] text-amber-300">预测策略</span>
-            <p class="text-xs text-amber-100 mt-0.5 leading-relaxed">
-              {{ sentimentPreview.plan?.next_day_strategy || '-' }}
-            </p>
-          </div>
-          <div v-if="marketSuggestion" class="rounded border border-sky-700/40 bg-sky-500/10 px-3 py-2 sm:col-span-2">
-            <span class="text-[11px] text-sky-300">统一市场建议（预览）</span>
-            <div class="grid grid-cols-2 gap-x-2 gap-y-1 mt-1 text-sky-100">
-              <div>动作: {{ marketSuggestion.action || '-' }}</div>
-              <div>仓位: {{ fmt((Number(marketSuggestion.target_position) || 0) * 100, 0, '%') }}</div>
-              <div>置信度: {{ fmt(marketSuggestion.confidence, 1) }}</div>
-              <div>主线: {{ marketSuggestion.rationale?.top_mainline || '-' }}</div>
-              <div>止损: {{ fmt(marketSuggestion.risk_controls?.stop_loss_pct, 1, '%') }}</div>
-              <div>止盈: {{ fmt(marketSuggestion.risk_controls?.take_profit_pct, 1, '%') }}</div>
-            </div>
-          </div>
-          <div v-else-if="suggestionError" class="rounded border border-red-700/40 bg-red-500/10 px-3 py-2 text-xs text-red-300 sm:col-span-2">
-            建议生成失败: {{ suggestionError }}
-          </div>
-        </div>
-      </div>
-    </div>
+    </section>
 
     <div
       v-if="showBacktestModal"
@@ -431,13 +490,14 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onBeforeUnmount } from 'vue';
+import { computed, ref, onMounted, onBeforeUnmount } from 'vue';
 import { getMainlineHistory, getMarketSentiment, getSentimentPreview, getMarketSuggestion, getBacktestResult, getBacktestGrid, getBacktestWalkforward, syncSentiment, getTasksStatus, getMainlineLeaders } from '@/services/api';
 import { ChatBubbleLeftRightIcon } from '@heroicons/vue/20/solid'
 
 const loadingTrend = ref(false);
 const trendAnalysis = ref('');
-const isTooltipLocked = ref(false);
+const mainlineChartDates = ref([]);
+const expandedMainlineName = ref('');
 const showBacktestModal = ref(false);
 const loadingBacktest = ref(false);
 const backtestError = ref('');
@@ -465,15 +525,26 @@ const recentSentiments = ref([]);
 const tradingBrief = ref({
   tradeDate: '',
   regime: '',
+  regimeBase: '',
+  trendText: '',
   scoreText: '',
+  scoreValue: null,
+  rawScore: null,
   confidence: '',
+  confidenceScore: null,
   mainline: '',
+  mainlineShort: '',
+  position: '',
+  attack: '',
+  risk: '',
+  advice: '',
   action: ''
 });
 
 // 主线龙头推荐数据
 const mainlineLeaders = ref(null);
 const loadingLeaders = ref(false);
+const MAINLINE_CHART_COLORS = ['#3b82f6', '#06b6d4', '#f59e0b'];
 
 const classifyRegimeByMa5 = (ma5) => {
   if (!Number.isFinite(ma5)) return '震荡';
@@ -526,11 +597,135 @@ const calcStd = (arr) => {
   return Math.sqrt(variance);
 };
 
+const clampNumber = (value, min, max) => {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return min;
+  return Math.max(min, Math.min(max, n));
+};
+
+const getSentimentBand = (score) => {
+  if (!Number.isFinite(score)) {
+    return { label: '等待数据', strategyTitle: '先等情绪信号完成' };
+  }
+  if (score >= 85) {
+    return { label: '沸腾区', strategyTitle: '情绪过热，重点是兑现而不是追高' };
+  }
+  if (score >= 70) {
+    return { label: '高热区', strategyTitle: '情绪偏热，顺势做主线但不打高潮尾段' };
+  }
+  if (score >= 55) {
+    return { label: '修复区', strategyTitle: '情绪修复，主线核心可以主动配置' };
+  }
+  if (score > 42) {
+    return { label: '拉锯区', strategyTitle: '情绪反复，只做赔率清晰的位置' };
+  }
+  if (score > 25) {
+    return { label: '低温区', strategyTitle: '情绪偏冷，先防守，等待承接确认' };
+  }
+  return { label: '冰点区', strategyTitle: '情绪冰点，轻仓观察，不急于抄底' };
+};
+
+const getSentimentTheme = (regime) => {
+  if (regime === '强势') {
+    return {
+      badgeClass: 'border-rose-400/30 bg-rose-400/10 text-rose-200',
+      panelClass: 'border-rose-400/20 bg-rose-500/10',
+      scoreClass: 'text-rose-200',
+      progressClass: 'bg-gradient-to-r from-rose-500 via-amber-400 to-yellow-300',
+      signalLabel: '进攻窗口',
+    };
+  }
+  if (regime === '偏强') {
+    return {
+      badgeClass: 'border-amber-400/30 bg-amber-400/10 text-amber-200',
+      panelClass: 'border-amber-400/20 bg-amber-500/10',
+      scoreClass: 'text-amber-100',
+      progressClass: 'bg-gradient-to-r from-amber-500 via-orange-400 to-cyan-300',
+      signalLabel: '修复窗口',
+    };
+  }
+  if (regime === '偏弱') {
+    return {
+      badgeClass: 'border-emerald-400/30 bg-emerald-400/10 text-emerald-200',
+      panelClass: 'border-emerald-400/20 bg-emerald-500/10',
+      scoreClass: 'text-emerald-100',
+      progressClass: 'bg-gradient-to-r from-emerald-500 via-cyan-400 to-slate-300',
+      signalLabel: '防守窗口',
+    };
+  }
+  if (regime === '弱势') {
+    return {
+      badgeClass: 'border-blue-400/30 bg-blue-400/10 text-blue-200',
+      panelClass: 'border-blue-400/20 bg-blue-500/10',
+      scoreClass: 'text-blue-100',
+      progressClass: 'bg-gradient-to-r from-blue-500 via-slate-400 to-slate-300',
+      signalLabel: '冷却窗口',
+    };
+  }
+  return {
+    badgeClass: 'border-cyan-400/30 bg-cyan-400/10 text-cyan-200',
+    panelClass: 'border-cyan-400/20 bg-cyan-500/10',
+    scoreClass: 'text-cyan-100',
+    progressClass: 'bg-gradient-to-r from-cyan-500 via-sky-400 to-slate-300',
+    signalLabel: '拉锯窗口',
+  };
+};
+
+const getMainlineHeat = (score) => {
+  if (score >= 35) {
+    return {
+      label: '高热',
+      heatClass: 'border-rose-400/30 bg-rose-400/10 text-rose-200',
+      progressClass: 'bg-gradient-to-r from-rose-500 via-amber-400 to-yellow-300',
+      surfaceClass: 'border-rose-400/15 bg-rose-500/6',
+    };
+  }
+  if (score >= 25) {
+    return {
+      label: '升温',
+      heatClass: 'border-amber-400/30 bg-amber-400/10 text-amber-200',
+      progressClass: 'bg-gradient-to-r from-amber-500 via-orange-400 to-cyan-300',
+      surfaceClass: 'border-amber-400/15 bg-amber-500/6',
+    };
+  }
+  if (score >= 15) {
+    return {
+      label: '观察',
+      heatClass: 'border-cyan-400/30 bg-cyan-400/10 text-cyan-200',
+      progressClass: 'bg-gradient-to-r from-cyan-500 via-sky-400 to-emerald-300',
+      surfaceClass: 'border-cyan-400/15 bg-cyan-500/6',
+    };
+  }
+  return {
+    label: '试探',
+    heatClass: 'border-slate-500/40 bg-slate-500/10 text-slate-200',
+    progressClass: 'bg-gradient-to-r from-slate-500 via-slate-400 to-slate-300',
+    surfaceClass: 'border-white/8 bg-white/[0.02]',
+  };
+};
+
 const buildTradingBrief = () => {
   const sentiment = latestSentiment.value;
   const tradeDate = latestSentimentDate.value || '';
   if (!sentiment || !tradeDate) {
-    tradingBrief.value = { tradeDate: '', regime: '', scoreText: '', confidence: '', mainline: '', action: '' };
+    tradingBrief.value = {
+      tradeDate: '',
+      regime: '',
+      regimeBase: '',
+      trendText: '',
+      scoreText: '',
+      scoreValue: null,
+      rawScore: null,
+      confidence: '',
+      confidenceScore: null,
+      mainline: '',
+      mainlineShort: '',
+      position: '',
+      attack: '',
+      risk: '',
+      advice: '',
+      action: '',
+    };
     return;
   }
 
@@ -628,11 +823,324 @@ const buildTradingBrief = () => {
   tradingBrief.value = {
     tradeDate,
     regime: `${regime} (${trendText}${pendingText})`,
+    regimeBase: regime,
+    trendText,
     scoreText: Number.isFinite(ma5) ? `MA5 ${ma5.toFixed(1)} / 100` : '-',
+    scoreValue: Number.isFinite(ma5) ? ma5 : null,
+    rawScore: Number.isFinite(score) ? score : null,
     confidence: confidenceText,
+    confidenceScore,
     mainline: mainlinePart,
+    mainlineShort: topName || reviewNames[0] || '',
+    position,
+    attack,
+    risk,
+    advice,
     action: `建议仓位 ${position}；进攻: ${attack}；风控: ${risk}。按 2-5 个交易日节奏执行，避免因次日单点信号切换策略。${advicePart}。`
   };
+};
+
+const sentimentHero = computed(() => {
+  const score = Number(tradingBrief.value.scoreValue);
+  const previewScore = Number(sentimentPreview.value?.projected_score);
+  const regime = tradingBrief.value.regimeBase || '';
+  const band = getSentimentBand(score);
+  const theme = getSentimentTheme(regime);
+  const mainlineName = currentMainline.value?.name || tradingBrief.value.mainlineShort || '主线待确认';
+
+  let title = '等待更清晰的情绪确认';
+  if (regime === '强势') title = '情绪强势，主线内主动进攻';
+  else if (regime === '偏强') title = '情绪修复，核心方向可提仓';
+  else if (regime === '震荡') title = '情绪拉锯，只打高胜率回踩';
+  else if (regime === '偏弱') title = '情绪偏弱，先防守后出手';
+  else if (regime === '弱势') title = '情绪冰冷，先缩手等拐点';
+
+  let previewSummary = '未生成盘中预测，先按收盘信号执行。';
+  if (Number.isFinite(previewScore) && Number.isFinite(score)) {
+    if (previewScore >= score + 2) {
+      previewSummary = `次日预估继续回暖到 ${previewScore.toFixed(1)}，可以优先看主线承接。`;
+    } else if (previewScore <= score - 2) {
+      previewSummary = `次日预估降温到 ${previewScore.toFixed(1)}，明早先看冲高回落风险。`;
+    } else {
+      previewSummary = `次日预估维持在 ${previewScore.toFixed(1)} 左右，策略以延续为主。`;
+    }
+  }
+
+  const summaryParts = [];
+  if (tradingBrief.value.position) summaryParts.push(`建议仓位 ${tradingBrief.value.position}`);
+  if (mainlineName) summaryParts.push(`主线先看 ${mainlineName}`);
+  if (tradingBrief.value.attack) summaryParts.push(tradingBrief.value.attack);
+  summaryParts.push(previewSummary);
+
+  return {
+    title,
+    bandLabel: band.label,
+    strategyTitle: band.strategyTitle,
+    summary: summaryParts.join('；'),
+    scoreDisplay: Number.isFinite(score) ? score.toFixed(1) : '--',
+    scoreClass: theme.scoreClass,
+    progressClass: theme.progressClass,
+    progressWidth: `${clampNumber(Number.isFinite(score) ? score : 0, 4, 100)}%`,
+    badgeClass: theme.badgeClass,
+    panelClass: theme.panelClass,
+    signalLabel: theme.signalLabel,
+    asideTitle: Number.isFinite(score)
+      ? `${band.label}，${tradingBrief.value.trendText || '跟随强弱变化'}`
+      : '等待情绪数据',
+  };
+});
+
+const sentimentMetricCards = computed(() => {
+  const previewCard = sentimentPreview.value
+    ? {
+        label: '次日预估',
+        value: fmt(sentimentPreview.value.projected_score, 1),
+        description: `${sentimentPreview.value.predicted_trade_date || '-'} · ${sentimentPreview.value.plan?.next_day_strategy || '等待策略说明'}`,
+        toneClass: 'border-emerald-500/18 bg-emerald-500/[0.07]',
+      }
+    : {
+        label: '主线锚点',
+        value: currentMainline.value?.name || tradingBrief.value.mainlineShort || '-',
+        description: currentMainline.value?.reason || '暂无明确主线',
+        toneClass: 'border-cyan-500/18 bg-cyan-500/[0.07]',
+      };
+
+  return [
+    {
+      label: '最新交易日',
+      value: tradingBrief.value.tradeDate || '-',
+      description: tradingBrief.value.regime || '等待情绪数据完成',
+      toneClass: 'border-sky-500/18 bg-sky-500/[0.07]',
+    },
+    {
+      label: '情绪状态',
+      value: sentimentHero.value.bandLabel,
+      description: tradingBrief.value.scoreText || '-',
+      toneClass: 'border-amber-500/18 bg-amber-500/[0.08]',
+    },
+    {
+      label: '建议仓位',
+      value: tradingBrief.value.position || '-',
+      description: tradingBrief.value.attack || '等待主线确认',
+      toneClass: 'border-business-accent/18 bg-business-accent/[0.08]',
+    },
+    previewCard,
+  ];
+});
+
+const sentimentActionItems = computed(() => [
+  {
+    label: '仓位',
+    value: tradingBrief.value.position || '等待信号',
+    toneClass: 'border-business-accent/18 bg-business-accent/[0.08]',
+  },
+  {
+    label: '进攻方向',
+    value: tradingBrief.value.attack || '等待主线确认',
+    toneClass: 'border-amber-500/18 bg-amber-500/[0.08]',
+  },
+  {
+    label: '风控底线',
+    value: tradingBrief.value.risk || '先控制回撤',
+    toneClass: 'border-rose-500/18 bg-rose-500/[0.08]',
+  },
+]);
+
+const sentimentDecisionCues = computed(() => {
+  const previewSummary = sentimentPreview.value
+    ? `${sentimentPreview.value.predicted_trade_date || '-'} 预估 ${fmt(sentimentPreview.value.projected_score, 1)}，${sentimentPreview.value.plan?.next_day_strategy || '继续观察'}`
+    : '还没有盘中预测，先按收盘情绪和主线强度执行。';
+
+  const suggestionSummary = marketSuggestion.value
+    ? `${marketSuggestion.value.action || '-'} / 目标仓位 ${fmt((Number(marketSuggestion.value.target_position) || 0) * 100, 0, '%')} / 主线 ${marketSuggestion.value.rationale?.top_mainline || '-'}`
+    : suggestionError.value
+      ? `统一建议生成失败: ${suggestionError.value}`
+      : '需要时可点击“预测情绪”补充统一市场建议。';
+
+  return [
+    {
+      label: '市场状态',
+      value: tradingBrief.value.regime || '等待情绪数据',
+    },
+    {
+      label: '盘中预判',
+      value: previewSummary,
+    },
+    {
+      label: '统一建议',
+      value: suggestionSummary,
+    },
+  ];
+});
+
+const mainlineHeadline = computed(() => {
+  const current = mainlineOverview.value.current;
+  const continuous = mainlineOverview.value.continuous;
+
+  let title = '主线暂未收束，先控制试错';
+  if (current?.name && continuous?.name && current.name === continuous.name) {
+    title = `${current.name} 是当前最值得聚焦的方向`;
+  } else if (current?.name && continuous?.name) {
+    title = `先盯 ${current.name}，持续性再看 ${continuous.name}`;
+  } else if (current?.name) {
+    title = `${current.name} 是当前最强方向`;
+  } else if (continuous?.name) {
+    title = `${continuous.name} 仍是近10日持续主线`;
+  }
+
+  return {
+    title,
+    summary: mainlineReview.value?.summary
+      || current?.detail
+      || continuous?.detail
+      || '主线强度来自近10日复盘与实时龙头共振。',
+  };
+});
+
+const getMainlinePriorityScore = (sector) => {
+  const score = Number(sector?.score) || 0;
+  const activeDays = Number(sector?.activeDays) || 0;
+  const consecutiveDays = Number(sector?.consecutiveDays) || 0;
+  const limitUps = Number(sector?.limitUps) || 0;
+  const resonance = Number(sector?.resonance) || 0;
+  const labels = sector?.labels || [];
+
+  let priority = score * 1.35;
+  if (labels.includes('当前最强')) priority += 18;
+  if (labels.includes('10日连续')) priority += 16;
+  if (labels.includes('实时龙头')) priority += 10;
+  priority += Math.min(activeDays * 1.4, 10);
+  priority += Math.min(consecutiveDays * 4, 16);
+  priority += Math.min(limitUps * 1.8, 12);
+  priority += Math.min(resonance * 0.12, 8);
+
+  if (consecutiveDays < 2 && activeDays < 3 && score < 20) {
+    priority -= 12;
+  }
+
+  return priority;
+};
+
+const getMainlineRole = (sector, index) => {
+  const consecutiveDays = Number(sector?.consecutiveDays) || 0;
+  const limitUps = Number(sector?.limitUps) || 0;
+  const activeDays = Number(sector?.activeDays) || 0;
+  const labels = sector?.labels || [];
+
+  if (index === 0 || (labels.includes('当前最强') && (consecutiveDays >= 3 || limitUps >= 3))) {
+    return {
+      label: '主盯',
+      className: 'border-business-accent/30 bg-business-accent/10 text-business-accent',
+      note: '满足强度与持续性，优先深看',
+    };
+  }
+
+  if (consecutiveDays >= 3 || labels.includes('10日连续')) {
+    return {
+      label: '次盯',
+      className: 'border-business-highlight/30 bg-business-highlight/10 text-business-highlight',
+      note: '连续性更好，适合跟踪承接',
+    };
+  }
+
+  if (activeDays >= 2 || limitUps >= 2 || labels.includes('实时龙头')) {
+    return {
+      label: '备选',
+      className: 'border-amber-400/30 bg-amber-400/10 text-amber-200',
+      note: '有强度，但还要等连续性确认',
+    };
+  }
+
+  return {
+    label: '观察',
+    className: 'border-slate-500/40 bg-slate-500/10 text-slate-300',
+    note: '先看是否能走出连续性',
+  };
+};
+
+const getMainlinePanelClass = (roleLabel) => {
+  if (roleLabel === '主盯') {
+    return 'bg-business-accent/[0.05]';
+  }
+  if (roleLabel === '次盯') {
+    return 'bg-business-highlight/[0.05]';
+  }
+  if (roleLabel === '备选') {
+    return 'bg-amber-500/[0.05]';
+  }
+  return 'bg-slate-900/20';
+};
+
+const getMainlineRuleText = (sector) => {
+  const consecutiveDays = Number(sector?.consecutiveDays) || 0;
+  const limitUps = Number(sector?.limitUps) || 0;
+  const activeDays = Number(sector?.activeDays) || 0;
+
+  if (consecutiveDays >= 3 && limitUps >= 3) {
+    return '满足“连续 3 日走强 + 强度达标”，可以进入深看名单。';
+  }
+  if (consecutiveDays >= 3) {
+    return '连续性达标，重点看分歧后的承接和龙头换手。';
+  }
+  if (limitUps >= 3 || activeDays >= 5) {
+    return '强度存在，但还需要继续确认是否只是短线脉冲。';
+  }
+  return '当前更像预备方向，先观察再决定是否提高优先级。';
+};
+
+const mainlinePriorityCards = computed(() => (
+  (mainlineFocusCards.value || [])
+    .map((sector) => {
+      const heat = getMainlineHeat(Number(sector?.score));
+      const priorityScore = getMainlinePriorityScore(sector);
+      return {
+        ...sector,
+        priorityScore,
+        heatLabel: heat.label,
+        heatClass: heat.heatClass,
+      };
+    })
+    .sort((a, b) => Number(b?.priorityScore || 0) - Number(a?.priorityScore || 0))
+));
+
+const focusedMainlineCards = computed(() => (
+  mainlinePriorityCards.value.slice(0, 3).map((sector, index) => {
+    const role = getMainlineRole(sector, index);
+    return {
+      ...sector,
+      displayRank: index + 1,
+      panelClass: getMainlinePanelClass(role.label),
+      roleLabel: role.label,
+      roleClass: role.className,
+      ruleText: getMainlineRuleText(sector),
+      priorityText: role.note,
+    };
+  })
+));
+
+const mainlineSummaryCards = computed(() => [
+  {
+    label: '主盯方向',
+    value: mainlineOverview.value.current?.name || '等待数据',
+    description: mainlineOverview.value.current?.detail || '按最新主线强度排序。',
+    toneClass: 'border-business-accent/18 bg-business-accent/[0.08]',
+  },
+  {
+    label: '持续方向',
+    value: mainlineOverview.value.continuous?.name || '等待数据',
+    description: mainlineOverview.value.continuous?.detail || '优先看近10日能持续的方向。',
+    toneClass: 'border-business-highlight/18 bg-business-highlight/[0.08]',
+  },
+  {
+    label: '聚焦规则',
+    value: focusedMainlineCards.value.length ? `最多 ${focusedMainlineCards.value.length} 条` : '等待数据',
+    description: '按持续性、强度、共振筛选，Top5 龙头折叠展示。',
+    toneClass: 'border-amber-500/18 bg-amber-500/[0.08]',
+  },
+]);
+
+const toggleMainlineExpansion = (name) => {
+  expandedMainlineName.value = expandedMainlineName.value === name ? '' : name;
 };
 
 const waitForSentimentTaskDone = async (timeoutMs = 180000) => {
@@ -918,6 +1426,11 @@ const buildFocusCard = (name, labels = [], reviewLine = null) => {
     labels: [...labels],
     detail,
     score,
+    activeDays,
+    consecutiveDays,
+    limitUps,
+    stockCount,
+    resonance,
     resonanceText: Number.isFinite(resonance) ? `板块共振 ${Math.round(resonance)}%` : '',
     activeDaysText: Number.isFinite(activeDays) ? `${Math.round(activeDays)}天` : '-',
     consecutiveDaysText: Number.isFinite(consecutiveDays) ? `${Math.round(consecutiveDays)}天` : '-',
@@ -971,7 +1484,22 @@ const rebuildMainlineFocus = () => {
 
   appendCard(currentName, '当前最强', currentReview);
   appendCard(continuousLine?.name, '10日连续', continuousLine);
-  mainlineFocusCards.value = Array.from(cards.values());
+  (mainlineLeaders.value?.mainlines || []).slice(0, 4).forEach((item, index) => {
+    appendCard(item?.sector, index === 0 ? '实时龙头' : '候选方向');
+  });
+  reviewLines.slice(0, 4).forEach((item, index) => {
+    appendCard(item?.name, index === 0 ? '复盘重点' : '复盘跟踪', item);
+  });
+
+  mainlineFocusCards.value = Array.from(cards.values())
+    .sort((a, b) => Number(b?.score || 0) - Number(a?.score || 0))
+    .slice(0, 6);
+
+  if (expandedMainlineName.value && !mainlineFocusCards.value.some((item) => item.name === expandedMainlineName.value)) {
+    expandedMainlineName.value = '';
+  }
+
+  refreshMainlineChart();
 };
 
 const updateViewport = () => {
@@ -1042,16 +1570,158 @@ const marketSentimentChartOption = ref({
   series: []
 });
 
-const handleChartClick = () => {
-  isTooltipLocked.value = !isTooltipLocked.value;
-};
-
 const mainlineChartOption = ref({
-  grid: { top: 30, left: 30, right: 10, bottom: 60, containLabel: true },
+  grid: { top: 24, left: 24, right: 12, bottom: 48, containLabel: true },
+  tooltip: {},
+  legend: { bottom: 0, textStyle: { color: '#64748b', fontSize: 10 } },
   xAxis: { type: 'category', data: [] },
   yAxis: { type: 'value' },
   series: []
 });
+
+const getMainlinePointValue = (point) => {
+  if (typeof point === 'object' && point !== null) {
+    return Number(point.value) || 0;
+  }
+  return Number(point) || 0;
+};
+
+const getLatestSeriesValue = (seriesData = []) => {
+  for (let i = seriesData.length - 1; i >= 0; i -= 1) {
+    const value = getMainlinePointValue(seriesData[i]);
+    if (value > 0) {
+      return value;
+    }
+  }
+  return 0;
+};
+
+const refreshMainlineChart = () => {
+  const dates = mainlineChartDates.value || [];
+  const rawSeries = mainlineTrendSeries.value || [];
+
+  if (!dates.length || !rawSeries.length) {
+    mainlineChartOption.value = {
+      ...mainlineChartOption.value,
+      xAxis: { ...mainlineChartOption.value.xAxis, data: [] },
+      series: [],
+    };
+    return;
+  }
+
+  const focusNames = focusedMainlineCards.value.map((item) => item.name).filter(Boolean);
+  let selectedSeries = focusNames.length
+    ? focusNames
+      .map((name) => rawSeries.find((item) => item.name === name))
+      .filter(Boolean)
+    : [];
+
+  if (!selectedSeries.length) {
+    selectedSeries = [...rawSeries]
+      .sort((a, b) => getLatestSeriesValue(b?.data || []) - getLatestSeriesValue(a?.data || []))
+      .slice(0, 3);
+  }
+
+  mainlineChartOption.value = {
+    backgroundColor: 'transparent',
+    grid: { top: 24, left: 16, right: 12, bottom: 52, containLabel: true },
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'line' },
+      backgroundColor: 'rgba(15, 23, 42, 0.96)',
+      borderColor: '#334155',
+      textStyle: { color: '#cbd5e1', fontSize: 11 },
+      padding: 10,
+      confine: true,
+      formatter: (params) => {
+        const activeParams = (params || [])
+          .filter((item) => getMainlinePointValue(item?.data ?? item?.value) > 0)
+          .sort((a, b) => getMainlinePointValue(b?.data ?? b?.value) - getMainlinePointValue(a?.data ?? a?.value));
+
+        if (!activeParams.length) return '';
+
+        const date = activeParams[0].axisValue || activeParams[0].name || '-';
+        const rows = activeParams.map((param) => {
+          const point = param.data || {};
+          const score = getMainlinePointValue(point);
+          const stocks = Array.isArray(point.top_stocks) && point.top_stocks.length
+            ? point.top_stocks
+              .slice(0, 3)
+              .map((stock) => {
+                const pct = Number(stock?.pct_chg);
+                return `${stock?.name || '-'}${Number.isFinite(pct) ? ` ${toSignedPctText(pct, 1)}` : ''}`;
+              })
+              .join('、')
+            : '无龙头';
+
+          return `
+            <div style="margin-top:8px;">
+              <div style="display:flex;justify-content:space-between;gap:8px;">
+                <span style="color:${param.color};font-weight:700;">${param.seriesName}</span>
+                <span style="color:#f8fafc;font-weight:700;">${score.toFixed(1)}</span>
+              </div>
+              <div style="margin-top:4px;color:#94a3b8;font-size:10px;line-height:1.5;">${stocks}</div>
+            </div>
+          `;
+        }).join('');
+
+        return `<div style="min-width:180px;"><div style="font-weight:700;color:#e2e8f0;">${date}</div>${rows}</div>`;
+      },
+    },
+    legend: {
+      bottom: 0,
+      icon: 'circle',
+      itemWidth: 8,
+      itemHeight: 8,
+      textStyle: { color: '#64748b', fontSize: 10 },
+    },
+    xAxis: {
+      type: 'category',
+      data: dates,
+      boundaryGap: false,
+      axisLine: { lineStyle: { color: '#334155' } },
+      axisLabel: { color: '#64748b', fontSize: 10, rotate: 30 },
+    },
+    yAxis: {
+      type: 'value',
+      splitLine: { lineStyle: { color: '#1e293b', type: 'dashed' } },
+      axisLine: { show: false },
+      axisLabel: { color: '#64748b', fontSize: 10 },
+    },
+    series: selectedSeries.map((series, index) => ({
+      name: series.name,
+      type: 'line',
+      smooth: true,
+      showSymbol: false,
+      connectNulls: true,
+      lineStyle: {
+        width: 3,
+        color: MAINLINE_CHART_COLORS[index % MAINLINE_CHART_COLORS.length],
+      },
+      areaStyle: {
+        color: MAINLINE_CHART_COLORS[index % MAINLINE_CHART_COLORS.length],
+        opacity: 0.08,
+      },
+      itemStyle: {
+        color: MAINLINE_CHART_COLORS[index % MAINLINE_CHART_COLORS.length],
+      },
+      data: (series.data || []).map((point) => {
+        if (typeof point === 'object' && point !== null) {
+          return {
+            value: Number(point.value) || 0,
+            top_stocks: point.top_stocks || [],
+            limit_ups: point.limit_ups,
+            stock_count: point.stock_count,
+          };
+        }
+        return {
+          value: Number(point) || 0,
+          top_stocks: [],
+        };
+      }),
+    })),
+  };
+};
 
 const fetchMainlineHistory = async () => {
   loadingTrend.value = true;
@@ -1059,6 +1729,7 @@ const fetchMainlineHistory = async () => {
     const res = await getMainlineHistory(10);
     const data = res.data.status === 'success' ? res.data.data : res.data;
     const { dates, series, analysis } = data;
+    mainlineChartDates.value = Array.isArray(dates) ? dates : [];
     mainlineTrendSeries.value = Array.isArray(series) ? series : [];
 
     if (analysis && analysis.deduction) {
@@ -1078,161 +1749,15 @@ const fetchMainlineHistory = async () => {
     mainlineReview.value = analysis?.review_10d || null;
     buildTradingBrief();
     rebuildMainlineFocus();
-
-    if (!dates || !series || dates.length === 0) {
-      console.warn("Mainline History: No data returned", data);
-      mainlineChartOption.value = {
-        ...mainlineChartOption.value,
-        xAxis: { ...mainlineChartOption.value.xAxis, data: [] },
-        series: [],
-      };
-      return;
-    }
-
-    mainlineChartOption.value = {
-      backgroundColor: 'transparent',
-      grid: { top: 40, left: 10, right: 10, bottom: 60, containLabel: true },
-      tooltip: {
-        trigger: 'axis',
-        enterable: true,
-        confine: true,
-        position: (point, params, dom, rect, size) => {
-          const x = point[0];
-          const y = point[1];
-          const viewWidth = size.viewSize[0];
-          const viewHeight = size.viewSize[1];
-          const boxWidth = size.contentSize[0];
-          const boxHeight = size.contentSize[1];
-          
-          let posX = x + 20;
-          if (posX + boxWidth > viewWidth) {
-            posX = x - boxWidth - 20;
-          }
-          
-          let posY = y - boxHeight - 20;
-          if (posY < 0) {
-            posY = y + 20;
-          }
-          
-          return [posX, posY];
-        },
-        triggerOn: 'mousemove|click',
-        axisPointer: { type: 'shadow' },
-        backgroundColor: 'rgba(15, 23, 42, 0.95)',
-        borderColor: '#334155',
-        padding: 12,
-        textStyle: { color: '#cbd5e1', fontSize: 11 },
-        extraCssText: 'backdrop-filter: blur(4px); box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5); border-radius: 8px; z-index: 1000;',
-        formatter: (params) => {
-           if (!params || params.length === 0) return '';
-           const activeParams = params
-               .filter(p => {
-                  const val = typeof p.value === 'object' ? p.value.value : p.value;
-                  return (val || 0) > 0;
-               })
-               .sort((a, b) => {
-                  const valB = typeof b.value === 'object' ? b.value.value : b.value;
-                  const valA = typeof a.value === 'object' ? a.value.value : a.value;
-                  return (valB || 0) - (valA || 0);
-               });
-           
-           if (activeParams.length === 0) return '';
-
-           const date = activeParams[0].name;
-           const lockHint = isTooltipLocked.value ? 
-              '<span class="ml-2 text-[9px] bg-business-accent text-white px-1 rounded animate-pulse">LOCKED</span>' : 
-              '<span class="ml-2 text-[9px] text-slate-500">(点击锁定)</span>';
-
-           let html = `<div class="font-bold text-slate-200 text-xs mb-2 border-b border-slate-700 pb-1 flex justify-between items-center">
-                         <span class="truncate mr-2">${date} 主线强度</span>
-                         ${lockHint}
-                       </div>`;
-           
-           activeParams.slice(0, 5).forEach(param => {
-               const concept = param.seriesName;
-               const score = typeof param.value === 'object' ? param.value.value : param.value;
-               const dataNode = param.data || {};
-               
-               let stocksHtml = "";
-               if (Array.isArray(dataNode.top_stocks)) {
-                   if (dataNode.top_stocks.length > 0) {
-                       stocksHtml = dataNode.top_stocks.map(s => `
-                           <div style='display:flex;justify-content:space-between;align-items:center;line-height:1.4;'>
-                               <span style='overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:80px;'>${s.name}</span>
-                               <span style='color:#ef4444;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-weight:600;margin-left:8px;'>+${(s.pct_chg || 0).toFixed(1)}%</span>
-                           </div>
-                       `).join('');
-                   } else {
-                       stocksHtml = "<div class='text-slate-500 italic text-[9px]'>无符合条件的强势股</div>";
-                   }
-               } else if (typeof dataNode.top_stocks === 'string') {
-                   stocksHtml = dataNode.top_stocks;
-               } else {
-                   stocksHtml = "<div class='text-slate-500 italic text-[9px]'>无数据</div>";
-               }
-               
-               html += `
-                 <div class="mb-3 last:mb-0">
-                   <div class="flex justify-between items-center mb-1 px-1">
-                     <span class="font-bold text-business-highlight text-[11px] truncate mr-2">${concept}</span>
-                     <span class="text-[9px] text-slate-400 font-mono bg-slate-800 px-1 py-0.5 rounded shrink-0">强度: ${score}</span>
-                   </div>
-                   <div class="bg-slate-900/50 rounded-lg p-2 border border-slate-700/30 shadow-inner">
-                     <div class="text-[10px] font-medium text-slate-200">
-                       ${stocksHtml}
-                     </div>
-                   </div>
-                 </div>
-               `;
-           });
-           
-           return `<div style="max-height:280px; overflow-y:auto; padding-right:4px; min-width:160px; max-width:240px;">${html}</div>`;
-        }
-      },
-      legend: {
-        bottom: 0,
-        icon: 'circle',
-        itemWidth: 8,
-        itemHeight: 8,
-        textStyle: { color: '#64748b', fontSize: 9 },
-        pageTextStyle: { color: '#64748b' },
-        type: 'scroll'
-      },
-      xAxis: {
-        type: 'category',
-        data: dates,
-        axisLine: { lineStyle: { color: '#1e293b' } },
-        axisLabel: { color: '#475569', fontSize: 9, rotate: 45 }
-      },
-      yAxis: {
-        type: 'value',
-        splitLine: { lineStyle: { color: '#1e293b', type: 'dashed' } },
-        axisLabel: { color: '#475569', fontSize: 9 }
-      },
-      series: series.map(s => ({
-        name: s.name,
-        type: 'bar',
-        stack: 'total',
-        barWidth: '60%',
-        data: s.data.map(d => (typeof d === 'object' ? {
-          value: d.value,
-          top_stocks: d.top_stocks,
-          limit_ups: d.limit_ups,
-          breadth: d.breadth,
-          stock_count: d.stock_count,
-        } : d)),
-        emphasis: { focus: 'series' },
-        itemStyle: { borderRadius: [2, 2, 0, 0] }
-      }))
-    };
-    rebuildMainlineFocus();
   } catch (e) {
     console.error("History Error", e);
+    mainlineChartDates.value = [];
     mainlineTrendSeries.value = [];
     mainlineReview.value = null;
     currentMainline.value = { name: '', score: 0, reason: '' };
     mainlineFocusCards.value = [];
     mainlineOverview.value = { current: null, continuous: null };
+    refreshMainlineChart();
   } finally {
     loadingTrend.value = false;
   }
@@ -1485,11 +2010,26 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.shadow-business {
-  box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.5);
+.dashboard-panel {
+  position: relative;
 }
 
-/* Custom scrollbar for tooltip */
+.dashboard-panel::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.9;
+}
+
+.panel-warm::before {
+  background: radial-gradient(circle at top left, rgba(245, 158, 11, 0.08), transparent 38%);
+}
+
+.panel-cool::before {
+  background: radial-gradient(circle at top right, rgba(6, 182, 212, 0.08), transparent 38%);
+}
+
 ::-webkit-scrollbar {
   width: 4px;
 }

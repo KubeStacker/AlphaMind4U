@@ -156,7 +156,7 @@ curl -X POST "http://localhost:8000/admin/etl/sentiment?days=365&sync_index=fals
 | `/sentiment/preview` | GET | 情绪预览 |
 | `/stock/analyze` | POST | 个股AI分析（摘要驱动、结论优先、返回更短） |
 | `/stock/search` | GET | 股票搜索（支持拼音首字母） |
-| `/stock/{ts_code}/kline` | GET | 股票K线数据 |
+| `/stock/{ts_code}/kline` | GET | 股票K线数据（交易日且日线未落库时会补当日临时 bar） |
 | `/stock/{ts_code}/mainline_analysis` | GET | 个股主线归属分析（返回 `mapped_sector` / `is_mainline` 等） |
 | `/tasks/status` | GET | 任务状态 |
 | `/auth/token` | POST | 获取令牌 |
@@ -175,11 +175,11 @@ curl -X POST "http://localhost:8000/admin/etl/sentiment?days=365&sync_index=fals
 | `/users/me/selected-template` | PUT | 更新选中模板 |
 | `/users/password` | PUT | 修改密码 |
 | `/users/{user_id}` | DELETE | 删除用户 |
-| `/watchlist` | GET | 关注列表 |
-| `/watchlist` | POST | 添加关注 |
-| `/watchlist/realtime` | GET | 实时关注数据（支持 `analysis_depth=compact|full`，高频轮询推荐 `compact`） |
-| `/watchlist/{ts_code}/analysis` | GET | 单只自选股深度分析（详情弹窗按需加载） |
-| `/watchlist/{ts_code}` | DELETE | 删除关注 |
+| `/watchlist` | GET | 当前登录用户的关注列表 |
+| `/watchlist` | POST | 为当前登录用户添加关注 |
+| `/watchlist/realtime` | GET | 当前登录用户的实时关注数据（支持 `analysis_depth=compact|full`，交易日优先展示当日快照，高频轮询推荐 `compact`） |
+| `/watchlist/{ts_code}/analysis` | GET | 当前登录用户自选内单只股票的深度分析（详情弹窗按需加载） |
+| `/watchlist/{ts_code}` | DELETE | 删除当前登录用户的关注 |
 
 ## 代码风格指南
 
@@ -290,7 +290,7 @@ curl -X POST "http://localhost:8000/admin/etl/sentiment?days=365&sync_index=fals
 - `market_index`
 - `market_sentiment`
 - `stock_margin`
-- `watchlist`
+- `watchlist`（按 `user_id + ts_code` 复合主键隔离每个用户的自选盯盘）
 - `mainline_scores`
 - `user_ai_config`
 - `user_prompt_templates`
@@ -304,9 +304,13 @@ curl -X POST "http://localhost:8000/admin/etl/sentiment?days=365&sync_index=fals
 - 主线分析会对过细概念做宽主题归并，并过滤预增、次新、地域国改等事件噪声，避免把短期标签误判为主线
 - 主线映射当前会把 `stock_basic.industry` 作为全行业锚点，并对同方向的重复概念做衰减，减少“相关概念堆叠”造成的误判
 - 通信链当前已拆分为 `光通信` / `通信网络` / `算力基建`，避免把 `中际旭创`、`烽火通信` 这类不同子方向压成同一主线
-- Dashboard 主线看板当前聚焦“近10日主线演变 + 当前最强主线 + 10日连续主线 + 每条主线Top5个股”，不再展示概念热力饼图
+- Dashboard 首页当前拆成“情绪驾驶舱 + 主线作战板”，并与 Watchlist 保持同一套克制风格：情绪区顶部收成摘要条和条目式结论，再下钻到更短的情绪趋势图；主线最多展示 3 条，并以紧凑行列表呈现，板块内 Top5 龙头默认折叠，避免首页信息过载
+- Dashboard 配色当前采用低饱和冷暖分区：情绪区偏暖色、主线区偏冷色，只做轻微层次变化，不使用高饱和装饰色块
+- Watchlist 当前拆成“持仓跟踪 + 观察列表”两段：非持仓自选自动归入观察列表，列表默认只展示结论不展示 10D 历史，顶部不再单独放汇总卡；出现“试错 / 主动进攻”时需标红浮出，专注模式只展示持仓股
 - 当前 `concepts_task` 已支持“`short token` 优先同花顺、失败回退 Tushare concept/concept_detail”；若库内 `stock_concepts.src` 只有 `ts`，说明目前并未拿到同花顺概念成分
-- 高频盯盘列表请优先调用 `/admin/watchlist/realtime?analysis_depth=compact`，详情再单独请求 `/admin/watchlist/{ts_code}/analysis`
+- 高频盯盘列表请优先调用 `/admin/watchlist/realtime?analysis_depth=compact`，详情再单独请求 `/admin/watchlist/{ts_code}/analysis`；若今日日线尚未 ETL 入库，接口仍会优先返回当日实时/收盘后快照，`/admin/stock/{ts_code}/kline` 也会补一根当日临时 bar
+- 自选盯盘接口现按当前登录用户隔离，调用 `/admin/watchlist*` 时需携带 `Authorization: Bearer <token>`
+- 新增自选仅允许 `stock_basic` 中存在的代码；遗留无效代码会以空占位返回，便于前端清理，不再阻塞其他股票刷新
 - `/admin/stock/analyze` 默认使用压缩后的行情/资金/市场摘要构造提示词，不再注入关联个股推荐段；自定义模板优先使用 `{stock_snapshot}`、`{capital_flow_snapshot}`、`{market_context}`、`{holding_context}`、`{commentary_snapshot}`、`{analysis_snapshot}`
 - 使用任务队列（`/admin/tasks/status`）处理长时间运行的操作
 - Tushare API有限流——使用tenacity实现重试逻辑

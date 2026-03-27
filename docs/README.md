@@ -93,6 +93,13 @@ Jarvis-Quant
 - **输出**: 核心领涨主线排名、近 10 个交易日主线复盘摘要、当前最强/10日连续主线，以及主线下 Top 5 龙头股列表
 - **盘中预估**: 使用 realtime_quote 给出盘中主线强弱排序 (14:50 可用)
 
+### Dashboard 首页
+
+- **情绪驾驶舱**: 首页顶部先输出“今天怎么做”，把情绪区间、建议仓位、进攻方向、风控底线、盘中预测与统一市场建议压缩成摘要条和条目式结论，再给出更短的情绪趋势图作为证据层
+- **主线作战板**: 首页底部先输出“先盯哪条主线”，按“持续性 + 强度 + 共振”筛出最多 3 条主线，并以紧凑行列表展示主盯/次盯/备选顺序，再按需展开板块内 Top 5 龙头，最后补充近 10 日主线演变图和量化推演结论
+- **视觉风格**: 保持与 Watchlist 一致的克制商务底色，并用低饱和暖色区分情绪、低饱和冷色区分主线，避免单调但不做花哨装饰
+- **阅读顺序**: 设计目标是让用户打开 Dashboard 后一眼先看完情绪与主线结论，再决定是否下钻图表和龙头细节，不再需要在多个分散卡片之间自行拼接判断
+
 #### 层级三：个股推荐引擎
 
 - **目标**: 解决「具体买哪只」的问题
@@ -159,10 +166,10 @@ Jarvis-Quant
 | `/admin/market_sentiment` | GET | 市场情绪历史 |
 | `/admin/integrity` | GET | 数据完整性报告 |
 | `/admin/stock/analyze` | POST | 个股 AI 分析（摘要驱动、结论优先） |
-| `/admin/watchlist` | GET/POST | 自选列表管理 |
-| `/admin/watchlist/{ts_code}` | DELETE | 删除自选 |
-| `/admin/watchlist/realtime` | GET | 实时自选行情，支持 `analysis_depth=compact|full` |
-| `/admin/watchlist/{ts_code}/analysis` | GET | 单只自选股深度分析 |
+| `/admin/watchlist` | GET/POST | 当前登录用户的自选列表管理 |
+| `/admin/watchlist/{ts_code}` | DELETE | 删除当前登录用户自选 |
+| `/admin/watchlist/realtime` | GET | 当前登录用户的实时自选行情，支持 `analysis_depth=compact|full`，交易日优先展示当日快照 |
+| `/admin/watchlist/{ts_code}/analysis` | GET | 当前登录用户自选内单只股票深度分析 |
 
 ### 策略接口
 
@@ -231,7 +238,7 @@ curl "http://localhost:8000/admin/market/suggestion?use_preview=true"
 curl "http://localhost:8000/admin/mainline_history?days=10"
 
 # 主线和主线下龙头，优先输出近 10 日持续性更强的方向
-# Dashboard 主线看板当前使用 limit=5 展示每条主线 Top 5 个股
+# Dashboard 当前使用 limit=5 拉取主线龙头，页面优先突出每条主线最值得先看的几只核心龙头
 curl "http://localhost:8000/admin/mainline/leaders?limit=5&min_score=60"
 
 # 查看单只股票被映射到哪条主线，排查“新能源 vs 电力公用”这类相近题材误判
@@ -254,11 +261,22 @@ curl "http://localhost:8000/admin/market_sentiment?days=30"
 ### 自选盯盘
 
 ```bash
+# 登录获取 token（示例：admin / admin）
+TOKEN=$(curl -s -X POST "http://localhost:8000/auth/token" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "username=admin&password=admin" | python -c "import json,sys; print(json.load(sys.stdin)['access_token'])")
+
+# 自选盯盘接口按当前登录用户隔离，调用时需携带 token
 # 高频轮询建议走 compact，减少接口体积和后端内存抖动
-curl "http://localhost:8000/admin/watchlist/realtime?analysis_depth=compact&src=sina"
+curl "http://localhost:8000/admin/watchlist/realtime?analysis_depth=compact&src=sina" \
+  -H "Authorization: Bearer ${TOKEN}"
+
+# 若今日日线尚未同步，Watchlist 实时接口和 /admin/stock/{ts_code}/kline
+# 仍会优先拼接今日实时/收盘后快照；遗留无效代码会以空占位返回，便于前端清理
 
 # 某一只股票打开详情时，再按需取深度分析
-curl "http://localhost:8000/admin/watchlist/600519.SH/analysis"
+curl "http://localhost:8000/admin/watchlist/600519.SH/analysis" \
+  -H "Authorization: Bearer ${TOKEN}"
 ```
 
 ### AI 分析
@@ -337,7 +355,10 @@ curl -X POST "http://localhost:8000/admin/stock/analyze" \
 - 概念数据同步已支持“`short token` 优先同花顺、失败回退 Tushare concept/concept_detail”；当前若 `stock_concepts.src` 只有 `ts`，说明库内概念尚未切到同花顺口径
 - 如果发现概念覆盖不完整，可先用 `/admin/db/query` 抽样核对个股概念；例如新易盛在仅有 `ts` 数据时可能只落一条概念，需切换 `TUSHARE_TOKEN_TYPE=short` 后重新同步概念库
 - 盘中预估依赖 `realtime_quote` 的可用性与权限
-- 高频自选刷新建议使用 `/admin/watchlist/realtime?analysis_depth=compact`，详情页再单独调用 `/admin/watchlist/{ts_code}/analysis`
+- 高频自选刷新建议使用 `/admin/watchlist/realtime?analysis_depth=compact`，详情页再单独调用 `/admin/watchlist/{ts_code}/analysis`；若今日日线尚未 ETL 入库，接口仍会优先返回当日实时/收盘后快照，`/admin/stock/{ts_code}/kline` 也会补一根当日临时 bar
+- 自选盯盘接口按当前登录用户隔离，`watchlist` 表使用 `user_id + ts_code` 复合主键；旧版全局自选会在启动时迁移到现有用户名下
+- 新增自选仅允许 `stock_basic` 中已存在的代码；遗留无效代码会以空占位返回，便于前端删除，不再拖垮整批刷新
+- Watchlist 页面当前拆成“持仓跟踪 + 观察列表”：非持仓自选会自动归到观察列表，列表默认只展示结论不展示 10D 历史，顶部不再单独放汇总卡，`试错 / 主动进攻` 信号会标红浮出，专注模式只展示持仓股
 - `/admin/stock/analyze` 默认不再注入关联个股推荐段，自定义模板建议优先使用 `{stock_snapshot}`、`{capital_flow_snapshot}`、`{market_context}`、`{holding_context}`、`{commentary_snapshot}`、`{analysis_snapshot}`
 - 策略优化目标是「提高盈亏比 + 降低回撤」，无法承诺单日或单阶段绝对盈利
 

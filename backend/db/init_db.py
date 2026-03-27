@@ -4,6 +4,50 @@ import os
 from db.connection import get_db_connection, DATABASE_PATH
 from db.schema import ALL_TABLES_SQL
 
+
+def _migrate_watchlist_schema(con):
+    """
+    将旧版全局 watchlist 表迁移为按 user_id 隔离的新结构。
+    旧版自选是全局共享的；迁移时复制给当前所有已有用户，避免任一用户原有自选丢失。
+    """
+    watchlist_info = con.execute("PRAGMA table_info('watchlist')").fetchall()
+    if not watchlist_info:
+        return
+
+    columns = {row[1] for row in watchlist_info}
+    if "user_id" in columns:
+        return
+
+    print("检测到旧版 watchlist 表，开始迁移为按用户隔离结构...")
+    con.execute("ALTER TABLE watchlist RENAME TO watchlist_legacy")
+    con.execute(
+        """
+        CREATE TABLE watchlist (
+            user_id         INTEGER NOT NULL,
+            ts_code         VARCHAR(15) NOT NULL,
+            name            VARCHAR(50),
+            remark          VARCHAR(255),
+            created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (user_id, ts_code)
+        )
+        """
+    )
+
+    user_rows = con.execute("SELECT id FROM users ORDER BY id").fetchall()
+    if user_rows:
+        for user_id, in user_rows:
+            con.execute(
+                """
+                INSERT INTO watchlist (user_id, ts_code, name, remark, created_at)
+                SELECT ?, ts_code, name, remark, created_at
+                FROM watchlist_legacy
+                """,
+                (user_id,),
+            )
+
+    con.execute("DROP TABLE watchlist_legacy")
+    print("watchlist 表迁移完成：已切换为 user_id + ts_code 复合主键。")
+
 def initialize_database():
     """
     初始化数据库。如果数据库文件不存在，则创建它，并根据 schema.py 中的定义创建所有表。
@@ -36,6 +80,8 @@ def initialize_database():
                     ("admin", admin_password_hash, "admin")
                 )
                 print("默认管理员 'admin' 添加成功。")
+
+            _migrate_watchlist_schema(con)
             
             # 清理历史脏数据 (针对用户提到的 20260101/0102 幻觉数据)
             con.execute("DELETE FROM daily_price WHERE trade_date IN ('2026-01-01', '2026-01-02')")
@@ -71,4 +117,3 @@ def initialize_database():
 if __name__ == "__main__":
     # 当直接运行此脚本时，执行初始化
     initialize_database()
-

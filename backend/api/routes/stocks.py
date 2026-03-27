@@ -6,8 +6,10 @@ import math
 import threading
 import time
 from collections import OrderedDict
+from datetime import date, datetime
 from typing import Any, Dict, Optional
 
+import arrow
 import pandas as pd
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -22,7 +24,7 @@ router = APIRouter(tags=["Stocks"])
 _ANALYSIS_CACHE_LOCK = threading.Lock()
 _ANALYSIS_CACHE: OrderedDict[str, tuple[float, dict[str, Any]]] = OrderedDict()
 _ANALYSIS_CACHE_TTL_SECONDS = 900
-_ANALYSIS_CACHE_MAX_ENTRIES = 128
+_ANALYSIS_CACHE_MAX_ENTRIES = 256
 
 # --- 通用工具函数 ---
 
@@ -54,10 +56,225 @@ def _safe_float(v, default=None):
     except:
         return default
 
+
+def _sanitize_json_value(val: Any) -> Any:
+    if isinstance(val, dict):
+        return {k: _sanitize_json_value(v) for k, v in val.items()}
+    if isinstance(val, list):
+        return [_sanitize_json_value(v) for v in val]
+    if isinstance(val, tuple):
+        return [_sanitize_json_value(v) for v in val]
+    if isinstance(val, pd.Timestamp):
+        return val.isoformat()
+    if isinstance(val, (datetime, date)):
+        return val.isoformat()
+    if isinstance(val, float):
+        if math.isnan(val) or math.isinf(val):
+            return None
+        return val
+    try:
+        if pd.isna(val):
+            return None
+    except TypeError:
+        pass
+    return val
+
+
+def _normalize_trade_date(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, pd.Timestamp):
+        return value.strftime("%Y-%m-%d")
+    if isinstance(value, datetime):
+        return value.strftime("%Y-%m-%d")
+    if isinstance(value, date):
+        return value.strftime("%Y-%m-%d")
+
+    raw = str(value).strip()
+    if not raw:
+        return None
+
+    candidates = [raw]
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    if len(digits) >= 8:
+        candidates.append(digits[:8])
+
+    for candidate in candidates:
+        for fmt in ("YYYY-MM-DD", "YYYYMMDD", "YYYY-MM-DD HH:mm:ss", "YYYYMMDD HH:mm:ss"):
+            try:
+                return arrow.get(candidate, fmt).format("YYYY-MM-DD")
+            except Exception:
+                continue
+
+    try:
+        return arrow.get(raw).format("YYYY-MM-DD")
+    except Exception:
+        return raw[:10] if len(raw) >= 10 else None
+
+
+def _today_trade_date() -> str:
+    return arrow.now("Asia/Shanghai").format("YYYY-MM-DD")
+
+
+def _can_try_live_snapshot(latest_trade_date: Any = None) -> bool:
+    now = arrow.now("Asia/Shanghai")
+    if not trading_calendar.is_trading_day(now.date()):
+        return False
+    return _normalize_trade_date(latest_trade_date) != now.format("YYYY-MM-DD")
+
+
+def _extract_live_quote_snapshot(
+    raw_row: Any,
+    expected_ts_code: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    if raw_row is None:
+        return None
+
+    if isinstance(raw_row, pd.Series):
+        row_map = {str(k).lower(): raw_row[k] for k in raw_row.index}
+    elif isinstance(raw_row, dict):
+        row_map = {str(k).lower(): v for k, v in raw_row.items()}
+    else:
+        return None
+
+    ts_code = _normalize_ts_code(row_map.get("ts_code"))
+    if expected_ts_code and ts_code and ts_code != expected_ts_code:
+        return None
+
+    trade_date = _normalize_trade_date(row_map.get("trade_date") or row_map.get("date"))
+    price = _safe_float(row_map.get("price") or row_map.get("current") or row_map.get("close"))
+    if price is None:
+        return None
+
+    pre_close = _safe_float(row_map.get("pre_close") or row_map.get("yclose"))
+    pct = _safe_float(
+        row_map.get("pct_chg") or row_map.get("pct_change") or row_map.get("changepercent")
+    )
+    if price is not None and pre_close not in (None, 0) and pct is None:
+        pct = (price - pre_close) / pre_close * 100.0
+
+    open_price = _safe_float(row_map.get("open"), price)
+    high_price = _safe_float(row_map.get("high"))
+    low_price = _safe_float(row_map.get("low"))
+    baseline = [v for v in (open_price, price, pre_close) if v is not None]
+    if high_price is None and baseline:
+        high_price = max(baseline)
+    if low_price is None and baseline:
+        low_price = min(baseline)
+
+    volume = _safe_float(row_map.get("vol") or row_map.get("volume"))
+    amount = _safe_float(row_map.get("amount") or row_map.get("turnover"))
+
+    return {
+        "ts_code": ts_code or expected_ts_code,
+        "name": str(row_map.get("name") or "").strip(),
+        "trade_date": trade_date,
+        "quote_time": str(row_map.get("time") or "").strip() or None,
+        "open": open_price,
+        "high": high_price,
+        "low": low_price,
+        "close": price,
+        "pre_close": pre_close,
+        "pct": pct,
+        "volume_shares": volume,
+        "vol_lot": (volume / 100.0) if volume is not None else None,
+        "amount_yuan": amount,
+        "amount_k": (amount / 1000.0) if amount is not None else None,
+    }
+
+
+def _fetch_live_snapshot(ts_code: str, latest_trade_date: Any = None, src: str = "sina") -> Optional[Dict[str, Any]]:
+    if not _can_try_live_snapshot(latest_trade_date):
+        return None
+
+    try:
+        quote_df = sync_engine.provider.realtime_quote(ts_code=ts_code, src=src or "sina")
+    except Exception as exc:
+        logger.warning("获取 %s 实时快照失败: %s", ts_code, exc)
+        return None
+
+    if quote_df is None or quote_df.empty:
+        return None
+
+    today = _today_trade_date()
+    for _, quote_row in quote_df.iterrows():
+        snapshot = _extract_live_quote_snapshot(quote_row, expected_ts_code=ts_code)
+        if snapshot and snapshot.get("trade_date") == today:
+            return snapshot
+    return None
+
+
+def _merge_live_snapshot_into_df(df: pd.DataFrame, snapshot: Optional[Dict[str, Any]]) -> pd.DataFrame:
+    if snapshot is None or not snapshot.get("trade_date"):
+        return df
+
+    base = df.copy()
+    if base.empty:
+        base = pd.DataFrame(columns=["trade_date", "open", "high", "low", "close", "vol", "amount", "pct_chg"])
+
+    if "trade_date" in base.columns:
+        base["trade_date"] = base["trade_date"].map(_normalize_trade_date)
+
+    for col in ("open", "high", "low", "close", "vol", "amount", "pct_chg"):
+        if col not in base.columns:
+            base[col] = None
+        base[col] = pd.to_numeric(base[col], errors="coerce")
+
+    last_close = _safe_float(base.iloc[-1].get("close")) if not base.empty else None
+    snapshot_row = {col: None for col in base.columns}
+    snapshot_row.update({
+        "trade_date": snapshot["trade_date"],
+        "open": snapshot.get("open", last_close),
+        "high": snapshot.get("high"),
+        "low": snapshot.get("low"),
+        "close": snapshot.get("close"),
+        "vol": snapshot.get("vol_lot"),
+        "amount": snapshot.get("amount_k"),
+        "pct_chg": snapshot.get("pct"),
+    })
+
+    if snapshot_row["high"] is None:
+        candidates = [v for v in (snapshot_row["open"], snapshot_row["close"], snapshot.get("pre_close"), last_close) if v is not None]
+        snapshot_row["high"] = max(candidates) if candidates else snapshot_row["close"]
+    if snapshot_row["low"] is None:
+        candidates = [v for v in (snapshot_row["open"], snapshot_row["close"], snapshot.get("pre_close"), last_close) if v is not None]
+        snapshot_row["low"] = min(candidates) if candidates else snapshot_row["close"]
+
+    base = base.loc[base["trade_date"] != snapshot["trade_date"]].copy()
+    base = pd.concat([base, pd.DataFrame([snapshot_row])], ignore_index=True)
+    base["_sort_trade_date"] = pd.to_datetime(base["trade_date"], errors="coerce")
+    base = base.sort_values("_sort_trade_date").drop(columns="_sort_trade_date").reset_index(drop=True)
+
+    prepared = _prepare_watch_df(base)
+    for col in ("ma5", "ma10", "ma20", "ma60", "volume_ma5"):
+        if col in prepared.columns:
+            base[col] = prepared[col]
+
+    return base
+
+def _extract_watch_conclusion(payload: Dict[str, Any]) -> str:
+    detail = payload.get("detail") or {}
+    decision = detail.get("decision") or {}
+    conclusion = str(decision.get("summary") or "").strip()
+    if conclusion:
+        return conclusion
+
+    summary = str(payload.get("summary") or "").strip()
+    if summary:
+        for segment in summary.split("|"):
+            cleaned = segment.strip()
+            if cleaned.startswith("【结论】"):
+                return cleaned.replace("【结论】", "", 1).strip()
+        return summary
+
+    suggestion = str(payload.get("suggestion") or "").strip()
+    return f"建议 {suggestion}" if suggestion else "暂无结论"
+
+
 def _compact_watch_analysis(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {
+        "conclusion": _extract_watch_conclusion(payload),
         "summary": payload.get("summary", ""),
-        "history": payload.get("history", []),
         "suggestion": payload.get("suggestion", "观望"),
     }
 
@@ -136,7 +353,10 @@ def _build_watch_history(df: pd.DataFrame, lookback: int = 10) -> list[dict[str,
         })
     return history
 
-def _build_watch_analysis(ts_code: str) -> Dict[str, Any]:
+def _build_watch_analysis(
+    ts_code: str,
+    realtime_snapshot: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     """为自选股生成结构化分析结果。"""
     try:
         df = fetch_df(
@@ -149,10 +369,19 @@ def _build_watch_analysis(ts_code: str) -> Dict[str, Any]:
             """,
             (ts_code,),
         )
-        if df.empty or len(df) < 20:
+        if df.empty:
             return _empty_watch_analysis(include_detail=True)
 
-        df = _prepare_watch_df(df.iloc[::-1].reset_index(drop=True))
+        df = df.iloc[::-1].reset_index(drop=True)
+        latest_trade_date = df.iloc[-1]["trade_date"] if not df.empty else None
+        live_snapshot = realtime_snapshot or _fetch_live_snapshot(ts_code, latest_trade_date=latest_trade_date)
+        if live_snapshot:
+            df = _merge_live_snapshot_into_df(df, live_snapshot)
+
+        if len(df) < 20:
+            return _empty_watch_analysis(include_detail=True)
+
+        df = _prepare_watch_df(df)
 
         from etl.utils.kline_patterns import PatternRecognizer, get_professional_commentary_detailed
 
@@ -182,24 +411,40 @@ def _build_watch_analysis(ts_code: str) -> Dict[str, Any]:
             "detail": {},
         }
 
-def _get_watch_analysis(ts_code: str, force_refresh: bool = False) -> Dict[str, Any]:
+def _get_watch_analysis(
+    ts_code: str,
+    force_refresh: bool = False,
+    realtime_snapshot: Optional[Dict[str, Any]] = None,
+    allow_live_fetch: bool = True,
+) -> Dict[str, Any]:
+    live_snapshot = realtime_snapshot
+    if live_snapshot is None and allow_live_fetch:
+        live_snapshot = _fetch_live_snapshot(ts_code)
+
+    cache_key = ts_code
+    snapshot_trade_date = _normalize_trade_date(
+        live_snapshot.get("trade_date") if live_snapshot else None
+    )
+    if snapshot_trade_date:
+        cache_key = f"{ts_code}@{snapshot_trade_date}"
+
     now = time.time()
 
     with _ANALYSIS_CACHE_LOCK:
-        cached = _ANALYSIS_CACHE.get(ts_code)
+        cached = _ANALYSIS_CACHE.get(cache_key)
         if (
             cached
             and not force_refresh
             and now - cached[0] < _ANALYSIS_CACHE_TTL_SECONDS
         ):
-            _ANALYSIS_CACHE.move_to_end(ts_code)
+            _ANALYSIS_CACHE.move_to_end(cache_key)
             return cached[1]
 
-    analysis = _build_watch_analysis(ts_code)
+    analysis = _build_watch_analysis(ts_code, realtime_snapshot=live_snapshot)
 
     with _ANALYSIS_CACHE_LOCK:
-        _ANALYSIS_CACHE[ts_code] = (now, analysis)
-        _ANALYSIS_CACHE.move_to_end(ts_code)
+        _ANALYSIS_CACHE[cache_key] = (now, analysis)
+        _ANALYSIS_CACHE.move_to_end(cache_key)
         while len(_ANALYSIS_CACHE) > _ANALYSIS_CACHE_MAX_ENTRIES:
             _ANALYSIS_CACHE.popitem(last=False)
 
@@ -218,33 +463,76 @@ class HoldingUpdate(BaseModel):
 
 # ========== 自选股管理 ==========
 
+def _fetch_user_watchlist_df(user_id: int) -> pd.DataFrame:
+    return fetch_df(
+        """
+        SELECT ts_code, name, remark, created_at
+        FROM watchlist
+        WHERE user_id = ?
+        ORDER BY created_at DESC
+        """,
+        (user_id,),
+    )
+
+
+def _fetch_user_watchlist_codes(user_id: int) -> list[str]:
+    df = fetch_df(
+        """
+        SELECT ts_code
+        FROM watchlist
+        WHERE user_id = ?
+        ORDER BY created_at DESC
+        """,
+        (user_id,),
+    )
+    if df.empty:
+        return []
+    return [_normalize_ts_code(code) for code in df["ts_code"].tolist() if code]
+
+
+def _ensure_watchlist_membership(user_id: int, ts_code: str) -> None:
+    with get_db_connection() as con:
+        row = con.execute(
+            "SELECT 1 FROM watchlist WHERE user_id = ? AND ts_code = ?",
+            (user_id, ts_code),
+        ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="当前用户自选中不存在该股票")
+
+
 @router.get("/watchlist")
-def list_watchlist():
+async def list_watchlist(request: Request):
     """获取自选股列表"""
+    user_id = await get_current_user_id(request)
     try:
-        df = fetch_df("SELECT * FROM watchlist ORDER BY created_at DESC")
-        return {"status": "success", "data": df.to_dict('records')}
+        df = _fetch_user_watchlist_df(user_id)
+        records = [_sanitize_json_value(row) for row in df.to_dict("records")]
+        return {"status": "success", "data": records}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/watchlist")
-def add_to_watchlist(stock: WatchlistStock):
+async def add_to_watchlist(stock: WatchlistStock, request: Request):
     """添加股票到自选"""
+    user_id = await get_current_user_id(request)
     try:
         ts_code = _normalize_ts_code(stock.ts_code)
         if not ts_code:
             raise HTTPException(status_code=400, detail="无效股票代码")
         
-        # 尝试从stock_basic获取名称
+        basic = fetch_df("SELECT name FROM stock_basic WHERE ts_code = ?", (ts_code,))
+        if basic.empty:
+            raise HTTPException(status_code=400, detail="股票代码不存在")
         if not stock.name:
-            basic = fetch_df("SELECT name FROM stock_basic WHERE ts_code = ?", (ts_code,))
-            if not basic.empty:
-                stock.name = basic.iloc[0]['name']
+            stock.name = basic.iloc[0]["name"]
 
         with get_db_connection() as con:
             con.execute(
-                "INSERT OR REPLACE INTO watchlist (ts_code, name, remark) VALUES (?, ?, ?)",
-                (ts_code, stock.name, stock.remark)
+                """
+                INSERT OR REPLACE INTO watchlist (user_id, ts_code, name, remark)
+                VALUES (?, ?, ?, ?)
+                """,
+                (user_id, ts_code, stock.name, stock.remark)
             )
         return {"status": "success", "message": f"已添加 {ts_code}"}
     except HTTPException:
@@ -253,18 +541,23 @@ def add_to_watchlist(stock: WatchlistStock):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.delete("/watchlist/{ts_code}")
-def remove_from_watchlist(ts_code: str):
+async def remove_from_watchlist(ts_code: str, request: Request):
     """从自选删除股票"""
+    user_id = await get_current_user_id(request)
     try:
         norm_code = _normalize_ts_code(ts_code)
         with get_db_connection() as con:
-            con.execute("DELETE FROM watchlist WHERE ts_code = ?", (norm_code,))
+            con.execute(
+                "DELETE FROM watchlist WHERE user_id = ? AND ts_code = ?",
+                (user_id, norm_code),
+            )
         return {"status": "success", "message": f"已从自选删除 {norm_code}"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/watchlist/realtime")
-def get_watchlist_realtime(
+async def get_watchlist_realtime(
+    request: Request,
     codes: Optional[str] = None,
     src: str = "sina",
     include_analysis: bool = True,
@@ -282,70 +575,102 @@ def get_watchlist_realtime(
     if analysis_depth not in {"full", "compact"}:
         raise HTTPException(status_code=400, detail="analysis_depth 仅支持 full 或 compact")
 
+    user_id = await get_current_user_id(request)
+
+    user_watchlist_codes = _fetch_user_watchlist_codes(user_id)
+
     if codes:
         raw_codes = [c.strip() for c in codes.split(",") if c.strip()]
         norm_codes = [_normalize_ts_code(c) for c in raw_codes]
-        norm_codes = [c for c in norm_codes if c]
+        allowed_codes = set(user_watchlist_codes)
+        norm_codes = [c for c in norm_codes if c and c in allowed_codes]
     else:
-        db_watchlist = fetch_df("SELECT ts_code FROM watchlist")
-        raw_codes = db_watchlist['ts_code'].tolist() if not db_watchlist.empty else []
-        norm_codes = [_normalize_ts_code(c) for c in raw_codes]
-        norm_codes = [c for c in norm_codes if c]
+        norm_codes = [c for c in user_watchlist_codes if c]
 
-    if len(norm_codes) > 50:
-        norm_codes = norm_codes[:50]
-        logger.warning(f"自选股数量超过50只，已截断到50只")
+    max_codes = 80 if analysis_depth == "compact" else 50
+    if len(norm_codes) > max_codes:
+        norm_codes = norm_codes[:max_codes]
+        logger.warning(f"自选股数量超过{max_codes}只，已截断到{max_codes}只")
 
     if not norm_codes:
         return {"status": "success", "is_trading_time": False, "message": "自选股为空", "data": []}
 
+    watchlist_df = _fetch_user_watchlist_df(user_id)
+    watchlist_name_map: dict[str, str] = {}
+    if not watchlist_df.empty:
+        for _, row in watchlist_df.iterrows():
+            watch_code = _normalize_ts_code(row.get("ts_code"))
+            if watch_code:
+                watch_name = _sanitize_json_value(row.get("name"))
+                watchlist_name_map[watch_code] = watch_name or watch_code
+
+    tradable_codes = set()
+    basic_name_map: dict[str, str] = {}
+    placeholders = ",".join(["?"] * len(norm_codes))
+    basic_df = fetch_df(
+        f"SELECT ts_code, name FROM stock_basic WHERE ts_code IN ({placeholders})",
+        tuple(norm_codes),
+    )
+    if not basic_df.empty:
+        for _, row in basic_df.iterrows():
+            basic_code = _normalize_ts_code(row.get("ts_code"))
+            if basic_code:
+                tradable_codes.add(basic_code)
+                basic_name = _sanitize_json_value(row.get("name"))
+                basic_name_map[basic_code] = basic_name or basic_code
+
+    quote_candidate_codes = [c for c in norm_codes if c in tradable_codes]
+    display_name_map = {**watchlist_name_map, **basic_name_map}
+
     is_trading = trading_calendar.is_trading_time()
+    live_quote_day = trading_calendar.is_trading_day(arrow.now("Asia/Shanghai").date())
     rows = []
+    snapshot_time = None
 
-    if is_trading:
-        quote_df = sync_engine.provider.realtime_quote(ts_code=",".join(norm_codes), src=src or "sina")
+    if live_quote_day and quote_candidate_codes:
+        quote_df = sync_engine.provider.realtime_quote(
+            ts_code=",".join(quote_candidate_codes),
+            src=src or "sina",
+        )
         if quote_df is not None and not quote_df.empty:
-            col_map = {str(c).lower(): c for c in quote_df.columns}
-            price_col = col_map.get("price") or col_map.get("current") or col_map.get("close")
-            pre_close_col = col_map.get("pre_close") or col_map.get("yclose")
-            pct_col = col_map.get("pct_chg") or col_map.get("pct_change") or col_map.get("changepercent")
-            name_col = col_map.get("name")
-            vol_col = col_map.get("vol") or col_map.get("volume")
-            amount_col = col_map.get("amount") or col_map.get("turnover")
-
-            for _, row in quote_df.iterrows():
-                ts_code = _normalize_ts_code(str(row.get(col_map.get("ts_code", ""), "")))
-                if not ts_code:
+            today_trade_date = _today_trade_date()
+            for _, quote_row in quote_df.iterrows():
+                snapshot = _extract_live_quote_snapshot(quote_row)
+                ts_code = snapshot.get("ts_code") if snapshot else ""
+                if not ts_code or snapshot.get("trade_date") != today_trade_date:
                     continue
-
-                price = _safe_float(row.get(price_col)) if price_col else None
-                pre_close = _safe_float(row.get(pre_close_col)) if pre_close_col else None
-                pct = _safe_float(row.get(pct_col)) if pct_col else None
-                if price is not None and pre_close not in (None, 0) and pct is None:
-                    pct = (price - pre_close) / pre_close * 100.0
 
                 analyze_result = {}
                 if include_analysis:
-                    full_analysis = _get_watch_analysis(ts_code)
+                    full_analysis = _get_watch_analysis(
+                        ts_code,
+                        realtime_snapshot=snapshot,
+                        allow_live_fetch=False,
+                    )
                     analyze_result = (
                         full_analysis
                         if analysis_depth == "full"
                         else _compact_watch_analysis(full_analysis)
                     )
 
-                rows.append({
+                if snapshot.get("quote_time"):
+                    snapshot_time = max(snapshot_time or snapshot["quote_time"], snapshot["quote_time"])
+
+                rows.append(_sanitize_json_value({
                     "ts_code": ts_code,
-                    "name": str(row.get(name_col, "")) if name_col else "",
-                    "price": price,
-                    "pre_close": pre_close,
-                    "pct": pct,
-                    "vol": _safe_float(row.get(vol_col)) if vol_col else None,
-                    "amount": _safe_float(row.get(amount_col)) if amount_col else None,
+                    "name": snapshot.get("name") or ts_code,
+                    "trade_date": snapshot.get("trade_date"),
+                    "quote_time": snapshot.get("quote_time"),
+                    "price": snapshot.get("close"),
+                    "pre_close": snapshot.get("pre_close"),
+                    "pct": snapshot.get("pct"),
+                    "vol": snapshot.get("volume_shares"),
+                    "amount": snapshot.get("amount_yuan"),
                     "analyze": analyze_result
-                })
+                }))
     
     processed_codes = {r['ts_code'] for r in rows}
-    remaining_codes = [c for c in norm_codes if c not in processed_codes]
+    remaining_codes = [c for c in quote_candidate_codes if c not in processed_codes]
 
     if remaining_codes:
         placeholders = ",".join(["?"] * len(remaining_codes))
@@ -370,41 +695,85 @@ def get_watchlist_realtime(
             tc = row['ts_code']
             analyze_result = {}
             if include_analysis:
-                full_analysis = _get_watch_analysis(tc)
+                full_analysis = _get_watch_analysis(tc, allow_live_fetch=False)
                 analyze_result = (
                     full_analysis
                     if analysis_depth == "full"
                     else _compact_watch_analysis(full_analysis)
                 )
-            rows.append({
+            rows.append(_sanitize_json_value({
                 "ts_code": tc,
-                "name": name_map.get(tc, tc),
+                "name": display_name_map.get(tc) or name_map.get(tc, tc),
+                "trade_date": _normalize_trade_date(row.get("trade_date")),
+                "quote_time": None,
                 "price": row['price'],
                 "pre_close": row['pre_close'],
                 "pct": row['pct'],
                 "vol": row['vol'],
                 "amount": row['amount'],
                 "analyze": analyze_result
-            })
+            }))
+
+    rendered_codes = {r["ts_code"] for r in rows}
+    missing_codes = [c for c in norm_codes if c not in rendered_codes]
+    for tc in missing_codes:
+        if analysis_depth == "full":
+            analyze_result = _empty_watch_analysis(include_detail=True) if include_analysis else {}
+        else:
+            analyze_result = (
+                _compact_watch_analysis(_empty_watch_analysis(include_detail=False))
+                if include_analysis
+                else {}
+            )
+        rows.append(_sanitize_json_value({
+            "ts_code": tc,
+            "name": display_name_map.get(tc, tc),
+            "trade_date": None,
+            "quote_time": None,
+            "price": None,
+            "pre_close": None,
+            "pct": None,
+            "vol": None,
+            "amount": None,
+            "analyze": analyze_result,
+        }))
 
     idx_map = {c: i for i, c in enumerate(norm_codes)}
     rows.sort(key=lambda x: idx_map.get(x.get("ts_code"), 999))
 
+    if rows and len(processed_codes) > 0:
+        snapshot_label = _today_trade_date()
+        if snapshot_time:
+            snapshot_label = f"{snapshot_label} {snapshot_time}"
+        message = (
+            f"实时刷新中，已展示 {snapshot_label} 快照"
+            if is_trading
+            else f"已展示 {snapshot_label} 最新快照"
+        )
+    elif live_quote_day:
+        message = "实时行情暂不可用，已回退最近收盘数据"
+    else:
+        message = "非交易时段，已展示最近收盘数据"
+
     return {
         "status": "success",
-        "refresh_mode": "realtime" if is_trading else "static",
+        "refresh_mode": "realtime" if rows and len(processed_codes) > 0 else "static",
         "is_trading_time": is_trading,
-        "message": "实时刷新中" if is_trading else "非交易时段，已展示最近收盘数据",
+        "message": message,
+        "snapshot_trade_date": _today_trade_date() if rows and len(processed_codes) > 0 else None,
+        "snapshot_time": snapshot_time,
         "data": rows,
     }
 
 @router.get("/watchlist/{ts_code}/analysis")
-def get_watchlist_analysis(ts_code: str, force_refresh: bool = False):
+async def get_watchlist_analysis(ts_code: str, request: Request, force_refresh: bool = False):
     """获取单只自选股的深度分析，供详情弹窗按需加载。"""
     try:
+        user_id = await get_current_user_id(request)
         norm_code = _normalize_ts_code(ts_code)
         if not norm_code:
             raise HTTPException(status_code=400, detail="无效股票代码")
+        _ensure_watchlist_membership(user_id, norm_code)
         return {
             "status": "success",
             "ts_code": norm_code,
@@ -582,6 +951,11 @@ def get_stock_kline(ts_code: str, limit: int = 200):
         # 合并主力资金
         if not moneyflow_df.empty:
             df = df.merge(moneyflow_df, on='trade_date', how='left')
+
+        latest_trade_date = df.iloc[-1]["trade_date"] if not df.empty else None
+        live_snapshot = _fetch_live_snapshot(norm_code, latest_trade_date=latest_trade_date)
+        if live_snapshot:
+            df = _merge_live_snapshot_into_df(df, live_snapshot)
         
         # 处理factors（均线），并处理NaN值
         result = []
@@ -594,10 +968,7 @@ def get_stock_kline(ts_code: str, limit: int = 200):
                 except:
                     pass
             # 将NaN / Inf转换为None (JSON null)
-            for k, v in item.items():
-                if isinstance(v, float) and not math.isfinite(v):
-                    item[k] = None
-            result.append(item)
+            result.append(_sanitize_json_value(item))
 
         return {"status": "success", "data": result}
     except Exception as e:
