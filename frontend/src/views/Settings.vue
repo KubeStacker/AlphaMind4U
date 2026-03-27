@@ -360,7 +360,7 @@
             </div>
             <div class="space-y-2">
               <label class="block text-[10px] font-bold text-slate-500 uppercase ml-1 tracking-wider">模板内容</label>
-              <p class="text-[9px] text-slate-600 mb-2">可用变量：{stock_basic} {price_data} {money_flow} {holding} {market_sentiment} {mainline}</p>
+              <p class="text-[9px] text-slate-600 mb-2">可用变量：{stock_snapshot} {capital_flow_snapshot} {market_context} {holding_context} {commentary_snapshot} {analysis_snapshot}（兼容旧变量：{stock_basic} {price_data} {money_flow} {holding} {market_sentiment} {mainline}）</p>
               <textarea v-model="newTemplate.content" rows="10" required class="w-full bg-business-darker border border-business-light rounded-xl px-4 py-3 text-xs font-medium text-white focus:outline-none focus:border-purple-500 transition-all resize-none font-mono" placeholder="输入提示词模板..."></textarea>
             </div>
             <div class="flex items-center gap-2">
@@ -603,8 +603,8 @@ const aiConfig = reactive({
   api_key: '',
   base_url: '',
   system_prompt: '',
-  max_tokens: 4096,
-  temperature: 0.7
+  max_tokens: 1200,
+  temperature: 0.35
 });
 
 const modelProviders = [
@@ -617,34 +617,53 @@ const selectedTemplateId = ref(null);
 const showTemplateModal = ref(false);
 const newTemplate = reactive({ name: '', content: '', is_default: false });
 
-const defaultTemplateContent = `你是一个专业的A股交易分析师。请根据以下信息对股票进行分析并给出投资建议。
+const defaultTemplateContent = `你是A股交易分析助手，偏短中线执行，不写成研究报告。
 
-股票基本信息：{stock_basic}
+请只基于以下资料输出简洁 Markdown，总字数控制在 260-420 字。
 
-30日行情数据（最新在上）：
-{price_data}
+输出格式固定为：
+## 结论
+- 观点：偏多 / 中性 / 偏空
+- 建议：买入试错 / 持有 / 观望 / 减仓 / 回避
+- 时效：1-3日 或 1-2周
+- 置信度：高 / 中 / 低
 
-资金流向数据：
-{money_flow}
+## 核心依据
+- 最多 3 条，只写最关键证据
 
-持仓情况：
-{holding}
+## 关键价位与动作
+- 支撑位：
+- 压力位：
+- 触发条件：
+- 失效条件：
 
-市场情绪：
-{market_sentiment}
+## 持仓应对
+- 空仓：
+- 持仓：
 
-市场主线：
-{mainline}
+## 风险
+- 最多 2 条，直接写风险触发点
 
-请分析并给出：
-1. 股票技术面分析（结合30日K线形态、成交量、均线等）
-2. 资金面分析（主力资金流向、融资融券等）
-3. 结合市场情绪的判断
-4. 操作建议（买入/卖出/观望）
-5. 持仓盈亏分析（如有持仓，给出成本价附近的操作建议）
-6. 风险提示
+要求：
+1. 结论先行，不复述大段原始数据。
+2. 不做关联个股推荐，不写“可关注某某板块/同行”。
+3. 只有在数据支持时才给出价位和动作；不确定就写“等待确认”。
+4. 避免空话、套话和长免责声明。
 
-请用简洁专业的语言回答，重点突出结论和建议。`;
+标的概览：
+{stock_snapshot}
+
+资金与杠杆：
+{capital_flow_snapshot}
+
+市场环境：
+{market_context}
+
+持仓信息：
+{holding_context}
+
+量化点评：
+{commentary_snapshot}`;
 
 const fetchPromptTemplates = async () => {
   if (activeTab.value !== 'ai') return;

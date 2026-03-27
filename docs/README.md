@@ -88,8 +88,9 @@ Jarvis-Quant
 #### 层级二：主线板块分析
 
 - **目标**: 解决「买什么方向」的问题
-- **核心逻辑**: 通过概念共振算法，计算各板块的赚钱效应评分，解决「一票多概念」的归类偏向问题
-- **输出**: 核心领涨主线排名与龙头股列表
+- **核心逻辑**: 通过概念共振算法，先将过细概念归并为宽主题，再计算各方向的赚钱效应评分；同时引入行业锚点与重复概念衰减，解决「一票多概念」和相近题材堆叠导致的归类偏向问题
+- **细分示例**: 通信链会进一步拆成 `光通信` / `通信网络` / `算力基建`，避免把不同子方向压成同一主线
+- **输出**: 核心领涨主线排名、近 10 个交易日主线复盘摘要、当前最强/10日连续主线，以及主线下 Top 5 龙头股列表
 - **盘中预估**: 使用 realtime_quote 给出盘中主线强弱排序 (14:50 可用)
 
 #### 层级三：个股推荐引擎
@@ -157,14 +158,21 @@ Jarvis-Quant
 | `/admin/tasks/status` | GET | 任务队列状态 |
 | `/admin/market_sentiment` | GET | 市场情绪历史 |
 | `/admin/integrity` | GET | 数据完整性报告 |
+| `/admin/stock/analyze` | POST | 个股 AI 分析（摘要驱动、结论优先） |
+| `/admin/watchlist` | GET/POST | 自选列表管理 |
+| `/admin/watchlist/{ts_code}` | DELETE | 删除自选 |
+| `/admin/watchlist/realtime` | GET | 实时自选行情，支持 `analysis_depth=compact|full` |
+| `/admin/watchlist/{ts_code}/analysis` | GET | 单只自选股深度分析 |
 
 ### 策略接口
 
 | 接口 | 方法 | 说明 |
 |------|------|------|
 | `/admin/market/suggestion` | GET | 统一建议 (EOD/盘中) |
-| `/admin/mainline_history` | GET | 主线历史 |
+| `/admin/mainline_history` | GET | 主线历史（含近10日主线复盘、当前最强/连续主线与Top5个股摘要） |
+| `/admin/mainline/leaders` | GET | 主线及主线下龙头（支持前端按Top5展示，优先近10日持续性方向） |
 | `/admin/mainline/preview` | GET | 盘中主线预估 |
+| `/admin/stock/{ts_code}/mainline_analysis` | GET | 个股主线归属分析（返回 `mapped_sector` / `is_mainline` 等） |
 | `/admin/sentiment/preview` | GET | 盘中情绪预估 |
 
 ---
@@ -215,6 +223,21 @@ curl "http://localhost:8000/admin/market/suggestion?use_preview=false"
 curl "http://localhost:8000/admin/market/suggestion?use_preview=true"
 ```
 
+### 主线复盘与龙头
+
+```bash
+# 最近 10 个交易日主线复盘，返回宽主题归并后的 series + analysis.review_10d
+# 其中 review_10d.mainlines[i].leaders 默认可直接支撑前端 Top 5 展示
+curl "http://localhost:8000/admin/mainline_history?days=10"
+
+# 主线和主线下龙头，优先输出近 10 日持续性更强的方向
+# Dashboard 主线看板当前使用 limit=5 展示每条主线 Top 5 个股
+curl "http://localhost:8000/admin/mainline/leaders?limit=5&min_score=60"
+
+# 查看单只股票被映射到哪条主线，排查“新能源 vs 电力公用”这类相近题材误判
+curl "http://localhost:8000/admin/stock/603693.SH/mainline_analysis"
+```
+
 ### 数据质量检查
 
 ```bash
@@ -226,6 +249,32 @@ curl "http://localhost:8000/admin/tasks/status"
 
 # 最近情绪
 curl "http://localhost:8000/admin/market_sentiment?days=30"
+```
+
+### 自选盯盘
+
+```bash
+# 高频轮询建议走 compact，减少接口体积和后端内存抖动
+curl "http://localhost:8000/admin/watchlist/realtime?analysis_depth=compact&src=sina"
+
+# 某一只股票打开详情时，再按需取深度分析
+curl "http://localhost:8000/admin/watchlist/600519.SH/analysis"
+```
+
+### AI 分析
+
+```bash
+# 登录获取 token（默认开发账号：admin / admin）
+curl -X POST "http://localhost:8000/auth/token" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "username=admin&password=admin"
+
+# 个股 AI 分析：将上一步返回的 access_token 填入 Authorization
+# 后端会先把行情/资金/市场压缩成摘要，再要求模型输出结论、关键价位和动作
+curl -X POST "http://localhost:8000/admin/stock/analyze" \
+  -H "Authorization: Bearer <access_token>" \
+  -H "Content-Type: application/json" \
+  -d '{"ts_code":"600519.SH","force_refresh":true}'
 ```
 
 ---
@@ -283,8 +332,13 @@ curl "http://localhost:8000/admin/market_sentiment?days=30"
 ## 注意事项
 
 - DuckDB 使用单进程嵌入式模型，请通过 API (`/admin/db/query`) 查询，避免直接打开新连接
+- DuckDB 连接会读取 `duckdb_memory_limit` 和 `duckdb_threads` 配置，建议在 `.env` 中按容器资源显式设置
 - Tushare API 有限流，请使用 tenacity 实现重试逻辑
+- 概念数据同步已支持“`short token` 优先同花顺、失败回退 Tushare concept/concept_detail”；当前若 `stock_concepts.src` 只有 `ts`，说明库内概念尚未切到同花顺口径
+- 如果发现概念覆盖不完整，可先用 `/admin/db/query` 抽样核对个股概念；例如新易盛在仅有 `ts` 数据时可能只落一条概念，需切换 `TUSHARE_TOKEN_TYPE=short` 后重新同步概念库
 - 盘中预估依赖 `realtime_quote` 的可用性与权限
+- 高频自选刷新建议使用 `/admin/watchlist/realtime?analysis_depth=compact`，详情页再单独调用 `/admin/watchlist/{ts_code}/analysis`
+- `/admin/stock/analyze` 默认不再注入关联个股推荐段，自定义模板建议优先使用 `{stock_snapshot}`、`{capital_flow_snapshot}`、`{market_context}`、`{holding_context}`、`{commentary_snapshot}`、`{analysis_snapshot}`
 - 策略优化目标是「提高盈亏比 + 降低回撤」，无法承诺单日或单阶段绝对盈利
 
 ---

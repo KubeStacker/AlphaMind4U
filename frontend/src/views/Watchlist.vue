@@ -23,7 +23,7 @@
             {{ zenMode ? '退出专注' : '专注模式' }}
           </button>
           <button
-            @click="refreshNow(true)"
+            @click="refreshNow(true, true)"
             :disabled="loading"
             class="px-2 py-1 rounded border border-business-accent/40 bg-business-accent/10 text-business-accent hover:bg-business-accent hover:text-white transition disabled:opacity-50"
           >
@@ -176,7 +176,7 @@
                 </span>
                 <span class="text-[9px] text-slate-500 font-bold font-mono">10D HIST</span>
                 <button
-                  v-if="item.analyze?.detail"
+                  v-if="item.analyze"
                   @click.stop="openDetailModal(item)"
                   class="ml-auto lg:hidden text-[10px] text-sky-400 font-bold"
                 >
@@ -232,7 +232,7 @@
               <!-- 桌面端详情按钮 -->
               <div class="hidden lg:block">
                 <button
-                  v-if="item.analyze?.detail"
+                  v-if="item.analyze"
                   @click.stop="openDetailModal(item)"
                   class="text-[10px] text-sky-400 hover:text-sky-300 font-bold transition-colors flex items-center gap-1"
                 >
@@ -378,6 +378,95 @@
             </div>
           </div>
 
+          <div v-if="detailModal.loading" class="flex items-center justify-center py-12 text-xs text-slate-400">
+            深度分析加载中...
+          </div>
+
+          <div v-else-if="detailModal.error" class="rounded border border-red-700/40 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+            {{ detailModal.error }}
+          </div>
+
+          <template v-else-if="detailModal.detail">
+          <div class="rounded-xl border border-slate-700/60 bg-slate-900/40 p-3">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="text-[10px] font-bold uppercase text-slate-500">交易结论</span>
+              <span
+                class="px-2 py-0.5 rounded text-[10px] font-bold"
+                :class="suggestionColor(detailModal.detail?.decision?.action)"
+              >
+                {{ detailModal.detail?.decision?.action || '观望' }}
+              </span>
+              <span
+                class="px-2 py-0.5 rounded text-[10px] font-bold border"
+                :class="decisionScoreColor(detailModal.detail?.decision?.score)"
+              >
+                {{ Number.isFinite(Number(detailModal.detail?.decision?.score)) ? `${detailModal.detail.decision.score}分` : '评分-' }}
+              </span>
+              <span class="text-[10px] text-slate-400">
+                {{ detailModal.detail?.decision?.bias || '-' }} · {{ detailModal.detail?.decision?.style || '-' }} · 置信度 {{ detailModal.detail?.decision?.confidence || '-' }}
+              </span>
+            </div>
+            <p class="mt-2 text-sm leading-relaxed text-slate-200">
+              {{ detailModal.detail?.decision?.summary || detailModal.detail?.summary || '暂无结论' }}
+            </p>
+          </div>
+
+          <div v-if="detailModal.detail?.trade_plan?.entry" class="space-y-2">
+            <h4 class="text-emerald-400 font-semibold text-xs uppercase mb-2">执行计划</h4>
+            <div class="grid grid-cols-1 gap-2">
+              <div class="bg-slate-800/50 rounded-lg p-3">
+                <div class="text-[10px] font-bold text-slate-500 uppercase mb-1">开仓/跟踪</div>
+                <p class="text-slate-200 text-xs leading-relaxed">{{ detailModal.detail.trade_plan.entry }}</p>
+              </div>
+              <div class="bg-slate-800/50 rounded-lg p-3">
+                <div class="text-[10px] font-bold text-slate-500 uppercase mb-1">加仓条件</div>
+                <p class="text-slate-200 text-xs leading-relaxed">{{ detailModal.detail.trade_plan.add || '-' }}</p>
+              </div>
+              <div class="bg-slate-800/50 rounded-lg p-3">
+                <div class="text-[10px] font-bold text-slate-500 uppercase mb-1">减仓条件</div>
+                <p class="text-slate-200 text-xs leading-relaxed">{{ detailModal.detail.trade_plan.reduce || '-' }}</p>
+              </div>
+              <div class="bg-slate-800/50 rounded-lg p-3">
+                <div class="text-[10px] font-bold text-slate-500 uppercase mb-1">失效条件</div>
+                <p class="text-slate-200 text-xs leading-relaxed">{{ detailModal.detail.trade_plan.invalid || '-' }}</p>
+              </div>
+              <div class="bg-slate-800/50 rounded-lg p-3">
+                <div class="text-[10px] font-bold text-slate-500 uppercase mb-1">仓位建议</div>
+                <p class="text-slate-200 text-xs leading-relaxed">{{ detailModal.detail.trade_plan.position || '-' }}</p>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="detailModal.detail?.key_levels?.length">
+            <h4 class="text-cyan-400 font-semibold text-xs uppercase mb-2">关键价位</h4>
+            <div class="grid grid-cols-2 gap-2">
+              <div
+                v-for="(item, idx) in detailModal.detail.key_levels"
+                :key="`level-${idx}`"
+                class="rounded-lg border border-slate-700/60 bg-slate-900/50 px-3 py-2"
+              >
+                <div class="flex items-center justify-between gap-2">
+                  <span class="text-[10px] font-bold text-slate-400 uppercase">{{ item.label }}</span>
+                  <span class="text-sm font-mono text-white">{{ fmt(item.price, 2) }}</span>
+                </div>
+                <div class="mt-1 text-[10px] leading-relaxed text-slate-500">{{ item.note || '-' }}</div>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="detailModal.detail?.observation_points?.length">
+            <h4 class="text-slate-400 font-semibold text-xs uppercase mb-2">观察要点</h4>
+            <div class="space-y-2">
+              <div
+                v-for="(point, idx) in detailModal.detail.observation_points"
+                :key="`point-${idx}`"
+                class="rounded-lg border border-slate-700/50 bg-slate-900/30 px-3 py-2 text-xs leading-relaxed text-slate-300"
+              >
+                {{ point }}
+              </div>
+            </div>
+          </div>
+
           <!-- 机构视角 -->
           <div v-if="detailModal.detail?.institution?.length">
             <h4 class="text-blue-400 font-semibold text-xs uppercase mb-2 flex items-center gap-1">
@@ -506,6 +595,7 @@
               </div>
             </div>
           </div>
+          </template>
         </div>
       </div>
     </div>
@@ -547,7 +637,7 @@
             </div>
           </div>
           <div class="flex gap-3 mt-6">
-            <button v-if="holdings[holdingStock?.ts_code]?.shares > 0" @click="handleRemove(holdingStock.ts_code); showHoldingModal = false; delete holdings[holdingStock.ts_code]" class="flex-1 py-2.5 rounded-lg text-[11px] font-bold text-red-400 border border-red-500/30 hover:bg-red-500/10">删除持仓</button>
+            <button v-if="holdings[holdingStock?.ts_code]?.shares > 0" @click="removeHoldingOnly" class="flex-1 py-2.5 rounded-lg text-[11px] font-bold text-red-400 border border-red-500/30 hover:bg-red-500/10">删除持仓</button>
             <button @click="saveHolding" class="flex-1 py-2.5 rounded-lg text-[11px] font-bold bg-purple-600 text-white hover:bg-purple-500">保存</button>
           </div>
         </div>
@@ -595,7 +685,7 @@
 
 <script setup>
 import { onBeforeUnmount, onMounted, ref, reactive, computed } from 'vue';
-import { getWatchlistRealtime, addToWatchlist, removeFromWatchlist, getStockKline, getUserHoldings, updateUserHolding, deleteUserHolding, analyzeStockWithAI, getSelectedTemplate } from '@/services/api';
+import { getWatchlistRealtime, getWatchlistAnalysis, addToWatchlist, removeFromWatchlist, getStockKline, getUserHoldings, updateUserHolding, deleteUserHolding, analyzeStockWithAI } from '@/services/api';
 import { marked } from 'marked';
 import { useStockSearch } from '@/composables/useStockSearch';
 import { use } from 'echarts/core';
@@ -713,19 +803,38 @@ const hideSearchResults = () => {
 const detailModal = reactive({
   visible: false,
   stock: null,
-  detail: null
+  detail: null,
+  loading: false,
+  error: ''
 });
 
-const openDetailModal = (stock) => {
+const openDetailModal = async (stock) => {
   detailModal.stock = stock || null;
-  detailModal.detail = stock?.analyze?.detail || null;
   detailModal.visible = true;
+  detailModal.detail = stock?.analyze?.detail || null;
+  detailModal.loading = !detailModal.detail;
+  detailModal.error = '';
+
+  if (detailModal.detail || !stock?.ts_code) {
+    return;
+  }
+
+  try {
+    const res = await getWatchlistAnalysis(stock.ts_code);
+    detailModal.detail = res.data?.data?.detail || null;
+  } catch (e) {
+    detailModal.error = e?.response?.data?.detail || e?.message || '加载深度分析失败';
+  } finally {
+    detailModal.loading = false;
+  }
 };
 
 const closeDetailModal = () => {
   detailModal.visible = false;
   detailModal.stock = null;
   detailModal.detail = null;
+  detailModal.loading = false;
+  detailModal.error = '';
 };
 
 // 悬浮窗状态
@@ -885,10 +994,22 @@ const parseCommentary = (summary) => {
 };
 
 const tagColor = (tag) => {
+  if (tag === '结论') return 'bg-red-500/20 text-red-400 border border-red-500/30';
+  if (tag === '计划') return 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30';
+  if (tag === '风险') return 'bg-rose-500/20 text-rose-300 border border-rose-500/30';
   if (tag === '机构') return 'bg-blue-500/20 text-blue-400 border border-blue-500/30';
   if (tag === '游资') return 'bg-orange-500/20 text-orange-400 border border-orange-500/30';
   if (tag === '形态') return 'bg-purple-500/20 text-purple-400 border border-purple-500/30';
   return 'bg-slate-700 text-slate-300';
+};
+
+const decisionScoreColor = (score) => {
+  const value = Number(score);
+  if (!Number.isFinite(value)) return 'border-slate-600 bg-slate-700/70 text-slate-300';
+  if (value >= 75) return 'border-red-500/40 bg-red-500/15 text-red-300';
+  if (value >= 60) return 'border-amber-500/40 bg-amber-500/15 text-amber-300';
+  if (value >= 45) return 'border-slate-600 bg-slate-700/70 text-slate-300';
+  return 'border-emerald-500/40 bg-emerald-500/15 text-emerald-300';
 };
 
 const getLevelBg = (level) => {
@@ -902,7 +1023,7 @@ const getLevelBg = (level) => {
 const suggestionColor = (s) => {
   if (!s || s === '观望') return 'bg-slate-700 text-slate-300';
   if (s.includes('关注') || s.includes('试错')) return 'bg-red-500/20 text-red-400 border border-red-500/30';
-  if (s.includes('减仓') || s.includes('持币')) return 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30';
+  if (s.includes('减仓') || s.includes('持币') || s.includes('回避')) return 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30';
   return 'bg-slate-700 text-slate-300';
 };
 
@@ -910,7 +1031,7 @@ const dotColor = (s, tone) => {
   const sStr = String(s || '');
   const toneStr = String(tone || '');
   if (toneStr.includes('爆发') || sStr.includes('试错') || sStr.includes('关注')) return 'bg-red-500';
-  if (toneStr.includes('杀跌') || sStr.includes('减仓') || sStr.includes('持币')) return 'bg-emerald-500';
+  if (toneStr.includes('杀跌') || sStr.includes('减仓') || sStr.includes('持币') || sStr.includes('回避')) return 'bg-emerald-500';
   if (toneStr.includes('看多')) return 'bg-red-900/60';
   if (toneStr.includes('看空')) return 'bg-emerald-900/60';
   return 'bg-slate-700';
@@ -936,18 +1057,20 @@ const startAutoRefresh = () => {
   }, interval);
 };
 
-const refreshNow = async (showLoading = true) => {
+const refreshNow = async (showLoading = true, syncHoldings = false) => {
   // 如果当前已经在加载中，且不是强制显示 loading 的请求，则跳过
   if (loading.value && !showLoading) return;
   
   if (showLoading) loading.value = true;
   try {
-    const res = await getWatchlistRealtime(null, 'sina');
+    const res = await getWatchlistRealtime(null, 'sina', 'compact');
     const body = res.data || {};
     rows.value = body.data || [];
     isTradingTime.value = !!body.is_trading_time;
     message.value = body.message || '';
-    await fetchHoldings();
+    if (syncHoldings) {
+      await fetchHoldings();
+    }
   } catch (e) {
     message.value = e?.response?.data?.detail || e?.message || '刷新失败';
   } finally {
@@ -964,7 +1087,7 @@ const handleAdd = async () => {
     await addToWatchlist({ ts_code: newCode.value });
     newCode.value = '';
     message.value = '添加成功';
-    await refreshNow(true);
+    await refreshNow(true, true);
   } catch (e) {
     message.value = '添加失败: ' + (e.response?.data?.detail || e.message);
   }
@@ -974,7 +1097,7 @@ const handleRemove = async (tsCode) => {
   if (!confirm(`确定要从自选删除 ${tsCode} 吗？`)) return;
   try {
     await removeFromWatchlist(tsCode);
-    await refreshNow(true);
+    await refreshNow(true, true);
   } catch (e) {
     alert('删除失败: ' + e.message);
   }
@@ -984,8 +1107,9 @@ const handleRemove = async (tsCode) => {
 const fetchHoldings = async () => {
   try {
     const res = await getUserHoldings();
+    const holdingsList = Array.isArray(res.data) ? res.data : (res.data?.holdings || []);
     const h = {};
-    (res.data || []).forEach(item => {
+    holdingsList.forEach(item => {
       h[item.ts_code] = { shares: item.shares, avg_cost: item.avg_cost };
     });
     holdings.value = h;
@@ -1007,13 +1131,26 @@ const saveHolding = async () => {
   try {
     if (holdingForm.shares <= 0) {
       await deleteUserHolding(holdingStock.value.ts_code);
+      delete holdings.value[holdingStock.value.ts_code];
     } else {
       await updateUserHolding(holdingStock.value.ts_code, holdingForm);
+      holdings.value[holdingStock.value.ts_code] = { ...holdingForm };
     }
-    holdings.value[holdingStock.value.ts_code] = { ...holdingForm };
     showHoldingModal.value = false;
   } catch (e) {
     alert('保存失败: ' + (e.response?.data?.detail || e.message));
+  }
+};
+
+const removeHoldingOnly = async () => {
+  if (!holdingStock.value) return;
+  if (!confirm(`确定要删除 ${holdingStock.value.ts_code} 的持仓记录吗？`)) return;
+  try {
+    await deleteUserHolding(holdingStock.value.ts_code);
+    delete holdings.value[holdingStock.value.ts_code];
+    showHoldingModal.value = false;
+  } catch (e) {
+    alert('删除持仓失败: ' + (e.response?.data?.detail || e.message));
   }
 };
 
@@ -1090,7 +1227,7 @@ const analyzeWithAI = async (item, forceRefresh = false) => {
 onMounted(async () => {
   window.addEventListener('keydown', handleKeydown);
   document.addEventListener('click', handleDocumentClick, true);
-  await refreshNow(true);
+  await refreshNow(true, true);
 });
 
 onBeforeUnmount(() => {

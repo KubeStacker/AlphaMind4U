@@ -1,12 +1,16 @@
 # /backend/api/routes/stocks.py
 
-import logging
 import json
+import logging
 import math
+import threading
+import time
+from collections import OrderedDict
+from typing import Any, Dict, Optional
+
 import pandas as pd
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
-from typing import Optional, Dict, Any
 from db.connection import get_db_connection, fetch_df
 from etl.calendar import trading_calendar
 from etl.sync import sync_engine
@@ -14,6 +18,11 @@ from .users import get_current_user_id
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Stocks"])
+
+_ANALYSIS_CACHE_LOCK = threading.Lock()
+_ANALYSIS_CACHE: OrderedDict[str, tuple[float, dict[str, Any]]] = OrderedDict()
+_ANALYSIS_CACHE_TTL_SECONDS = 900
+_ANALYSIS_CACHE_MAX_ENTRIES = 128
 
 # --- 通用工具函数 ---
 
@@ -45,83 +54,156 @@ def _safe_float(v, default=None):
     except:
         return default
 
-def _build_watch_analyse(ts_code: str):
-    """为自选股生成详细的技术面分析（包含10D历史）"""
+def _compact_watch_analysis(payload: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "summary": payload.get("summary", ""),
+        "history": payload.get("history", []),
+        "suggestion": payload.get("suggestion", "观望"),
+    }
+
+def _empty_watch_analysis(include_detail: bool = False) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "summary": "数据不足",
+        "history": [],
+        "suggestion": "观望",
+    }
+    if include_detail:
+        payload["detail"] = {}
+    return payload
+
+def _prepare_watch_df(df: pd.DataFrame) -> pd.DataFrame:
+    work = df.copy()
+    if "volume" not in work.columns and "vol" in work.columns:
+        work = work.rename(columns={"vol": "volume"})
+
+    for ma in (5, 10, 20, 60):
+        col = f"ma{ma}"
+        if col not in work.columns:
+            work[col] = work["close"].rolling(ma, min_periods=1).mean()
+
+    if "volume" in work.columns:
+        work["volume_ma5"] = work["volume"].rolling(5, min_periods=1).mean()
+    else:
+        work["volume_ma5"] = 0.0
+    return work
+
+def _derive_watch_suggestion(row: pd.Series) -> str:
+    pct_today = _safe_float(row.get("pct_chg"), 0.0) or 0.0
+    close = _safe_float(row.get("close"), 0.0) or 0.0
+    ma5 = _safe_float(row.get("ma5"), close) or close
+    ma20 = _safe_float(row.get("ma20"), close) or close
+    volume = _safe_float(row.get("volume"), 0.0) or 0.0
+    volume_ma5 = _safe_float(row.get("volume_ma5"), 0.0) or 0.0
+    vol_ratio_5 = (volume / volume_ma5) if volume_ma5 > 0 else 1.0
+
+    if pct_today >= 5 or (close > ma5 > ma20 and vol_ratio_5 >= 1.2):
+        return "关注"
+    if pct_today > 0 or close >= ma5 >= ma20 * 0.98:
+        return "试错"
+    if pct_today <= -5 or close < ma5 < ma20:
+        return "减仓"
+    return "观望"
+
+def _derive_watch_tone(row: pd.Series) -> str:
+    pct_today = _safe_float(row.get("pct_chg"), 0.0) or 0.0
+    close = _safe_float(row.get("close"), 0.0) or 0.0
+    ma5 = _safe_float(row.get("ma5"), close) or close
+    ma20 = _safe_float(row.get("ma20"), close) or close
+
+    if pct_today >= 7:
+        return "爆发"
+    if pct_today <= -7:
+        return "杀跌"
+    if close > ma5 > ma20:
+        return "看多(强)"
+    if close > ma20:
+        return "看多"
+    if close < ma5 < ma20:
+        return "看空"
+    return "中性"
+
+def _build_watch_history(df: pd.DataFrame, lookback: int = 10) -> list[dict[str, Any]]:
+    if df.empty:
+        return []
+
+    history = []
+    for _, row in df.tail(lookback).iterrows():
+        history.append({
+            "date": str(row.get("trade_date", ""))[:10],
+            "suggestion": _derive_watch_suggestion(row),
+            "tone": _derive_watch_tone(row),
+            "patterns": [],
+        })
+    return history
+
+def _build_watch_analysis(ts_code: str) -> Dict[str, Any]:
+    """为自选股生成结构化分析结果。"""
     try:
-        # 获取最近70天数据，确保计算MA60后还有足够的历史展示10D
         df = fetch_df(
-            f"SELECT trade_date, open, high, low, close, vol as volume, amount, pct_chg "
-            f"FROM daily_price WHERE ts_code = '{ts_code}' ORDER BY trade_date DESC LIMIT 75"
+            """
+            SELECT trade_date, open, high, low, close, vol, amount, pct_chg
+            FROM daily_price
+            WHERE ts_code = ?
+            ORDER BY trade_date DESC
+            LIMIT 75
+            """,
+            (ts_code,),
         )
         if df.empty or len(df) < 20:
-            return {"summary": "数据不足", "history": [], "suggestion": "观望", "detail": {}}
-        
-        df = df.iloc[::-1].reset_index(drop=True)  # 转为正序
-        
-        from etl.utils.kline_patterns import PatternRecognizer, get_professional_commentary_detailed
-        
-        history = []
-        # 计算最近10个交易日的简易信号
-        for i in range(len(df) - 10, len(df)):
-            sub_df = df.iloc[:i+1]
-            if len(sub_df) < 5:
-                continue
-            
-            recognizer = PatternRecognizer(sub_df)
-            patterns = recognizer.recognize()
-            detail = get_professional_commentary_detailed(sub_df, patterns)
-            
-            # 简单的信号推导逻辑
-            suggestion = "观望"
-            tone = "中性"
-            
-            # 1. 根据形态和涨跌幅推导suggestion
-            pct_today = sub_df.iloc[-1].get('pct_chg', 0)
-            if any(p in ['老鸭头', '放量突破', '红三兵', '出水芙蓉'] for p in patterns) or pct_today > 5:
-                suggestion = "关注"
-            elif any(p in ['仙人指路', '多方炮', '探底回升'] for p in patterns):
-                suggestion = "试错"
-            elif any(p in ['三只乌鸦', '乌云盖顶', '高位放量'] for p in patterns) or pct_today < -5:
-                suggestion = "减仓"
-            
-            # 2. 根据趋势推导tone
-            inst_view = detail.get("institution", [])
-            for v in inst_view:
-                if v.get("type") == "trend":
-                    if v.get("level") == "strong":
-                        tone = "看多(强)"
-                    elif v.get("level") == "medium":
-                        tone = "看多"
-                    elif v.get("level") == "bearish":
-                        tone = "看空"
-            
-            if pct_today > 7:
-                tone = "爆发"
-            elif pct_today < -7:
-                tone = "杀跌"
-            
-            history.append({
-                "date": str(sub_df.iloc[-1]['trade_date'])[:10],
-                "suggestion": suggestion,
-                "tone": tone,
-                "patterns": patterns
-            })
+            return _empty_watch_analysis(include_detail=True)
 
-        # 最新一天的完整分析
+        df = _prepare_watch_df(df.iloc[::-1].reset_index(drop=True))
+
+        from etl.utils.kline_patterns import PatternRecognizer, get_professional_commentary_detailed
+
         latest_recognizer = PatternRecognizer(df)
         latest_patterns = latest_recognizer.recognize()
         latest_detail = get_professional_commentary_detailed(df, latest_patterns)
-        
+
+        history = _build_watch_history(df)
+        latest_row = df.iloc[-1]
+        decision = latest_detail.get("decision") or {}
+        suggestion = decision.get("action") or (
+            history[-1]["suggestion"] if history else _derive_watch_suggestion(latest_row)
+        )
+
         return {
             "summary": latest_detail.get("summary", ""),
             "history": history,
-            "suggestion": history[-1]["suggestion"] if history else "观望",
+            "suggestion": suggestion,
             "detail": latest_detail,
-            "patterns": latest_patterns
         }
     except Exception as e:
         logger.warning(f"分析股票 {ts_code} 失败: {e}", exc_info=True)
-        return {"summary": "分析失败", "history": [], "suggestion": "观望", "detail": {}}
+        return {
+            "summary": "分析失败",
+            "history": [],
+            "suggestion": "观望",
+            "detail": {},
+        }
+
+def _get_watch_analysis(ts_code: str, force_refresh: bool = False) -> Dict[str, Any]:
+    now = time.time()
+
+    with _ANALYSIS_CACHE_LOCK:
+        cached = _ANALYSIS_CACHE.get(ts_code)
+        if (
+            cached
+            and not force_refresh
+            and now - cached[0] < _ANALYSIS_CACHE_TTL_SECONDS
+        ):
+            _ANALYSIS_CACHE.move_to_end(ts_code)
+            return cached[1]
+
+    analysis = _build_watch_analysis(ts_code)
+
+    with _ANALYSIS_CACHE_LOCK:
+        _ANALYSIS_CACHE[ts_code] = (now, analysis)
+        _ANALYSIS_CACHE.move_to_end(ts_code)
+        while len(_ANALYSIS_CACHE) > _ANALYSIS_CACHE_MAX_ENTRIES:
+            _ANALYSIS_CACHE.popitem(last=False)
+
+    return analysis
 
 # --- 数据模型 ---
 
@@ -182,14 +264,24 @@ def remove_from_watchlist(ts_code: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/watchlist/realtime")
-def get_watchlist_realtime(codes: Optional[str] = None, src: str = "sina", include_analysis: bool = True):
+def get_watchlist_realtime(
+    codes: Optional[str] = None,
+    src: str = "sina",
+    include_analysis: bool = True,
+    analysis_depth: str = "full",
+):
     """
     获取自选股实时行情（盘中刷新）。
     - 盘中：获取实时行情
     - 盘后：获取最近交易日收盘数据
     - 如果未指定codes，则从数据库加载
-    - include_analysis: 是否包含技术分析（默认开启以提供完整数据）
+    - include_analysis: 是否包含技术分析
+    - analysis_depth: full 返回完整分析，compact 返回列表所需摘要
     """
+    analysis_depth = str(analysis_depth or "full").lower()
+    if analysis_depth not in {"full", "compact"}:
+        raise HTTPException(status_code=400, detail="analysis_depth 仅支持 full 或 compact")
+
     if codes:
         raw_codes = [c.strip() for c in codes.split(",") if c.strip()]
         norm_codes = [_normalize_ts_code(c) for c in raw_codes]
@@ -225,15 +317,22 @@ def get_watchlist_realtime(codes: Optional[str] = None, src: str = "sina", inclu
                 ts_code = _normalize_ts_code(str(row.get(col_map.get("ts_code", ""), "")))
                 if not ts_code:
                     continue
-                
+
                 price = _safe_float(row.get(price_col)) if price_col else None
                 pre_close = _safe_float(row.get(pre_close_col)) if pre_close_col else None
                 pct = _safe_float(row.get(pct_col)) if pct_col else None
-                if price and pre_close and pct is None:
+                if price is not None and pre_close not in (None, 0) and pct is None:
                     pct = (price - pre_close) / pre_close * 100.0
 
-                analyze_result = _build_watch_analyse(ts_code) if include_analysis else {}
-                
+                analyze_result = {}
+                if include_analysis:
+                    full_analysis = _get_watch_analysis(ts_code)
+                    analyze_result = (
+                        full_analysis
+                        if analysis_depth == "full"
+                        else _compact_watch_analysis(full_analysis)
+                    )
+
                 rows.append({
                     "ts_code": ts_code,
                     "name": str(row.get(name_col, "")) if name_col else "",
@@ -247,23 +346,36 @@ def get_watchlist_realtime(codes: Optional[str] = None, src: str = "sina", inclu
     
     processed_codes = {r['ts_code'] for r in rows}
     remaining_codes = [c for c in norm_codes if c not in processed_codes]
-    
+
     if remaining_codes:
-        placeholders = ','.join([f"'{c}'" for c in remaining_codes])
+        placeholders = ",".join(["?"] * len(remaining_codes))
         static_df = fetch_df(f"""
             SELECT ts_code, close as price, pre_close, pct_chg as pct, vol, amount, trade_date
             FROM daily_price
             WHERE (ts_code, trade_date) IN (
-                SELECT ts_code, MAX(trade_date) FROM daily_price WHERE ts_code IN ({placeholders}) GROUP BY ts_code
+                SELECT ts_code, MAX(trade_date)
+                FROM daily_price
+                WHERE ts_code IN ({placeholders})
+                GROUP BY ts_code
             )
-        """)
-        
-        names_df = fetch_df(f"SELECT ts_code, name FROM stock_basic WHERE ts_code IN ({placeholders})")
+        """, tuple(remaining_codes))
+
+        names_df = fetch_df(
+            f"SELECT ts_code, name FROM stock_basic WHERE ts_code IN ({placeholders})",
+            tuple(remaining_codes),
+        )
         name_map = dict(zip(names_df['ts_code'], names_df['name']))
 
         for _, row in static_df.iterrows():
             tc = row['ts_code']
-            analyze_result = _build_watch_analyse(tc) if include_analysis else {}
+            analyze_result = {}
+            if include_analysis:
+                full_analysis = _get_watch_analysis(tc)
+                analyze_result = (
+                    full_analysis
+                    if analysis_depth == "full"
+                    else _compact_watch_analysis(full_analysis)
+                )
             rows.append({
                 "ts_code": tc,
                 "name": name_map.get(tc, tc),
@@ -285,6 +397,23 @@ def get_watchlist_realtime(codes: Optional[str] = None, src: str = "sina", inclu
         "message": "实时刷新中" if is_trading else "非交易时段，已展示最近收盘数据",
         "data": rows,
     }
+
+@router.get("/watchlist/{ts_code}/analysis")
+def get_watchlist_analysis(ts_code: str, force_refresh: bool = False):
+    """获取单只自选股的深度分析，供详情弹窗按需加载。"""
+    try:
+        norm_code = _normalize_ts_code(ts_code)
+        if not norm_code:
+            raise HTTPException(status_code=400, detail="无效股票代码")
+        return {
+            "status": "success",
+            "ts_code": norm_code,
+            "data": _get_watch_analysis(norm_code, force_refresh=force_refresh),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 # ========== 股票搜索 ==========
 
@@ -729,23 +858,41 @@ def get_mainline_leaders(
         trade_date_str = trade_date.strftime('%Y-%m-%d') if hasattr(trade_date, 'strftime') else str(trade_date)
         
         # 获取主线板块分析 (使用get_history获取实时数据)
-        mainline_history = mainline_analyst.get_history(days=5)
+        mainline_history = mainline_analyst.get_history(days=10)
         
         if not mainline_history or not mainline_history.get('series'):
             return {"status": "success", "message": "无主线板块", "mainlines": []}
         
-        # 解析主线数据
+        review_10d = ((mainline_history.get('analysis') or {}).get('review_10d') or {})
+
+        # 优先使用最近10日复盘后的持续主线，避免单日噪声题材进入龙头推荐
         mainline_result = []
-        for series in mainline_history.get('series', []):
-            if series.get('data'):
-                latest = series['data'][-1] if series['data'] else {}
-                mainline_result.append({
-                    'name': series.get('name', ''),
-                    'score': latest.get('value', 0),
-                    'limit_ups': latest.get('limit_ups', 0),
-                    'breadth': latest.get('breadth', 0),
-                    'top_stocks': latest.get('top_stocks', []),
-                })
+        for item in review_10d.get('mainlines', []) or []:
+            mainline_result.append({
+                'name': item.get('name', ''),
+                'score': item.get('latest_score', 0),
+                'limit_ups': item.get('max_limit_ups', 0),
+                'breadth': item.get('latest_breadth', 0),
+                'stock_count': item.get('stock_count', 0),
+                'top_stocks': item.get('leaders', []),
+                'active_days': item.get('active_days', 0),
+                'consecutive_days': item.get('consecutive_days', 0),
+            })
+
+        if not mainline_result:
+            for series in mainline_history.get('series', []):
+                if series.get('data'):
+                    latest = series['data'][-1] if series['data'] else {}
+                    mainline_result.append({
+                        'name': series.get('name', ''),
+                        'score': latest.get('value', 0),
+                        'limit_ups': latest.get('limit_ups', 0),
+                        'breadth': latest.get('breadth', 0),
+                        'stock_count': latest.get('stock_count', 0),
+                        'top_stocks': latest.get('top_stocks', []),
+                        'active_days': 0,
+                        'consecutive_days': 0,
+                    })
         
         # 按分数排序，取前5
         mainline_result.sort(key=lambda x: x.get('score', 0), reverse=True)
@@ -817,15 +964,24 @@ def get_mainline_leaders(
             # 按评分排序
             leaders.sort(key=lambda x: x['score'], reverse=True)
             leaders = leaders[:limit]
-            
+
+            if not leaders:
+                leaders = build_recent_leader_fallback(
+                    sector_stocks=sector_stocks,
+                    review_leaders=mainline.get('top_stocks', []),
+                    limit=limit,
+                )
+
             # 计算板块共振度
             resonance = calc_sector_resonance_simple(sector_stocks)
-            
+
             mainlines_data.append({
                 'sector': sector_name,
                 'strength': mainline.get('score', 0),
                 'limit_ups': mainline.get('limit_ups', 0),
                 'stock_count': mainline.get('stock_count', 0),
+                'active_days': mainline.get('active_days', 0),
+                'consecutive_days': mainline.get('consecutive_days', 0),
                 'resonance': resonance,
                 'leaders': leaders,
             })
@@ -915,21 +1071,23 @@ def get_stock_mainline_analysis(ts_code: str):
         
         # 获取主线板块
         mainline_result = mainline_analyst.analyze(days=3, limit=10, trade_date=trade_date_str)
-        
+        stock_map_df = mainline_analyst.get_stock_mainline_map(ts_codes=[norm_code])
+        mapped_sector = (
+            stock_map_df.iloc[0]['mapped_name']
+            if stock_map_df is not None and not stock_map_df.empty
+            else ''
+        )
+
         # 判断是否属于主线板块
         mainline_sectors = [m.get('name', '') for m in mainline_result] if mainline_result else []
-        is_mainline = any(any(ml in s or s in ml for ml in mainline_sectors) for s in sectors)
-        
+        is_mainline = bool(mapped_sector) and mapped_sector in mainline_sectors
+
         # 找到所属主线板块
-        belong_sector = None
-        for s in sectors:
-            for ml in mainline_result or []:
-                if ml.get('name', '') in s or s in ml.get('name', ''):
-                    belong_sector = ml
-                    break
-            if belong_sector:
-                break
-        
+        belong_sector = next(
+            (ml for ml in (mainline_result or []) if ml.get('name', '') == mapped_sector),
+            None
+        )
+
         # 获取板块内其他股票
         sector_stocks = []
         if belong_sector:
@@ -964,6 +1122,7 @@ def get_stock_mainline_analysis(ts_code: str):
             'factors': factors,
             'is_mainline': is_mainline,
             'sectors': sectors,
+            'mapped_sector': mapped_sector,
             'flow_continuous_days': flow_continuous_days,
             'flow_total_inflow': float(flow_df['net_mf_amount'].sum()) if not flow_df.empty else 0,
             'big_order_ratio': 0.3,  # 需要从详细资金数据计算
@@ -1017,9 +1176,11 @@ def get_stock_mainline_analysis(ts_code: str):
             "status": "success",
             "ts_code": norm_code,
             "name": stock_data['name'],
+            "industry": stock_row.get('industry', ''),
             "trade_date": trade_date_str,
             "is_mainline": is_mainline,
             "sector": belong_sector.get('name', '') if belong_sector else '',
+            "mapped_sector": mapped_sector,
             "sectors": sectors,
             "sector_rank": sector_rank,
             "sector_total": sector_total,
@@ -1114,15 +1275,35 @@ def get_sector_stocks(sector_name: str, trade_date: str) -> list:
     获取板块内股票数据
     """
     try:
-        stocks_df = fetch_df(f"""
-            SELECT d.ts_code, b.name, d.close, d.pct_chg, d.vol, d.amount, d.factors
+        from strategy.mainline.analyst import mainline_analyst
+
+        stock_map = mainline_analyst.get_stock_mainline_map()
+        if stock_map.empty:
+            return []
+
+        sector_codes = (
+            stock_map[stock_map['mapped_name'] == sector_name]['ts_code']
+            .dropna()
+            .drop_duplicates()
+            .tolist()
+        )
+        if not sector_codes:
+            return []
+
+        placeholders = ",".join(["?"] * len(sector_codes))
+        stocks_df = fetch_df(
+            f"""
+            SELECT d.ts_code, b.name, d.close, d.pct_chg, d.vol, d.amount, d.factors,
+                   COALESCE(m.net_mf_amount, 0) AS net_mf_amount
             FROM daily_price d
-            JOIN stock_concept_details c ON d.ts_code = c.ts_code
             LEFT JOIN stock_basic b ON d.ts_code = b.ts_code
-            WHERE c.concept_name LIKE '%{sector_name}%' 
-              AND d.trade_date = '{trade_date}'
+            LEFT JOIN stock_moneyflow m ON d.ts_code = m.ts_code AND d.trade_date = m.trade_date
+            WHERE d.trade_date = ?
               AND d.vol > 0
-        """)
+              AND d.ts_code IN ({placeholders})
+            """,
+            params=[trade_date, *sector_codes],
+        )
         
         if stocks_df.empty:
             return []
@@ -1135,6 +1316,11 @@ def get_sector_stocks(sector_name: str, trade_date: str) -> list:
                     factors = json.loads(row['factors']) if isinstance(row['factors'], str) else row['factors']
             except:
                 pass
+
+            volume_ratio = 1.0
+            vol_ma5 = _safe_float(factors.get('vol_ma5'))
+            if vol_ma5 and vol_ma5 > 0:
+                volume_ratio = round(float(row.get('vol', 0)) / vol_ma5, 2)
             
             result.append({
                 'ts_code': row['ts_code'],
@@ -1144,13 +1330,62 @@ def get_sector_stocks(sector_name: str, trade_date: str) -> list:
                 'vol': float(row.get('vol', 0)),
                 'amount': float(row.get('amount', 0)),
                 'factors': factors,
-                'net_mf_amount': 0,  # 需要从资金流向表获取
+                'net_mf_amount': float(row.get('net_mf_amount', 0)),
+                'volume_ratio': volume_ratio,
+                'turnover_rate': _safe_float(factors.get('turnover_rate'), 0) or 0,
+                'flow_continuous_days': 1 if _safe_float(row.get('net_mf_amount'), 0) > 0 else 0,
+                'flow_total_inflow': float(row.get('net_mf_amount', 0)),
+                'big_order_ratio': _safe_float(factors.get('big_order_ratio'), 0.0) or 0.0,
+                'is_mainline': True,
+                'sector': sector_name,
             })
         
         return result
     except Exception as e:
         logger.warning(f"获取板块股票失败: {e}")
         return []
+
+
+def build_recent_leader_fallback(sector_stocks: list, review_leaders: list, limit: int = 3) -> list:
+    """
+    当最新交易日因市场环境过弱导致推荐分数不足时，回退到最近10日主线龙头池。
+    """
+    if not sector_stocks or not review_leaders:
+        return []
+
+    stock_map = {item.get('ts_code'): item for item in sector_stocks if item.get('ts_code')}
+    fallback = []
+    for leader in review_leaders:
+        ts_code = leader.get('ts_code')
+        stock = stock_map.get(ts_code)
+        if not stock:
+            continue
+        fallback.append({
+            'ts_code': ts_code,
+            'name': stock.get('name', leader.get('name', '')),
+            'score': round(float(leader.get('leader_score', 0)), 1),
+            'reason': (
+                f"近10日活跃{leader.get('active_days', 0)}天，"
+                f"最近3日走强{leader.get('recent_active_days', 0)}天，"
+                f"最高涨幅{leader.get('max_pct', 0)}%"
+            ),
+            'sector_rank': 0,
+            'sector_total': len(sector_stocks),
+            'close': stock.get('close', 0),
+            'pct_chg': stock.get('pct_chg', leader.get('latest_pct', 0)),
+            'volume_ratio': stock.get('volume_ratio', 1.0),
+            'turnover_rate': stock.get('turnover_rate', 0),
+            'net_mf_amount': stock.get('net_mf_amount', 0),
+            'entry_zone': None,
+            'stop_loss': None,
+            'target': None,
+            'risk_reward': None,
+            'max_loss_pct': None,
+            'target_gain_pct': None,
+            'signal': '观察',
+        })
+
+    return fallback[:max(1, int(limit))]
 
 
 def calc_sector_resonance_simple(sector_stocks: list) -> float:

@@ -149,15 +149,17 @@ curl -X POST "http://localhost:8000/admin/etl/sentiment?days=365&sync_index=fals
 | `/etl/sync` | POST | 数据同步ETL（支持start_date/end_date） |
 | `/etl/train_kline_patterns` | POST | 训练K线形态 |
 | `/integrity` | GET | 数据完整性检查（含summaries汇总） |
-| `/mainline_history` | GET | 主线历史记录 |
+| `/mainline_history` | GET | 主线历史记录（聚焦近10日主线演变、当前最强/连续主线及Top5个股摘要） |
+| `/mainline/leaders` | GET | 主线及主线下龙头（支持前端按Top5展示，优先近10日持续性方向） |
 | `/market/suggestion` | GET | 市场建议 |
 | `/market_sentiment` | GET | 市场情绪 |
 | `/sentiment/preview` | GET | 情绪预览 |
-| `/stock/analyze` | POST | 个股分析 |
+| `/stock/analyze` | POST | 个股AI分析（摘要驱动、结论优先、返回更短） |
 | `/stock/search` | GET | 股票搜索（支持拼音首字母） |
 | `/stock/{ts_code}/kline` | GET | 股票K线数据 |
+| `/stock/{ts_code}/mainline_analysis` | GET | 个股主线归属分析（返回 `mapped_sector` / `is_mainline` 等） |
 | `/tasks/status` | GET | 任务状态 |
-| `/token` | POST | 获取令牌 |
+| `/auth/token` | POST | 获取令牌 |
 | `/users` | GET | 用户列表 |
 | `/users` | POST | 创建用户 |
 | `/users/me/ai-config` | GET | 获取AI配置 |
@@ -175,7 +177,8 @@ curl -X POST "http://localhost:8000/admin/etl/sentiment?days=365&sync_index=fals
 | `/users/{user_id}` | DELETE | 删除用户 |
 | `/watchlist` | GET | 关注列表 |
 | `/watchlist` | POST | 添加关注 |
-| `/watchlist/realtime` | GET | 实时关注数据（默认包含分析） |
+| `/watchlist/realtime` | GET | 实时关注数据（支持 `analysis_depth=compact|full`，高频轮询推荐 `compact`） |
+| `/watchlist/{ts_code}/analysis` | GET | 单只自选股深度分析（详情弹窗按需加载） |
 | `/watchlist/{ts_code}` | DELETE | 删除关注 |
 
 ## 代码风格指南
@@ -204,6 +207,7 @@ curl -X POST "http://localhost:8000/admin/etl/sentiment?days=365&sync_index=fals
 
 - **日志**：使用Python的`logging`模块，包含时间戳（上海时区）
 - **配置**：使用`.env`文件，通过`os.getenv()`或pydantic-settings访问
+- **DuckDB资源**：通过 `duckdb_memory_limit` / `duckdb_threads` 控制连接资源占用，避免默认配置吃满内存
 - **日期**：使用`arrow`库处理日期，在DuckDB中存储为DATE类型
 
 ## 项目结构
@@ -297,6 +301,13 @@ curl -X POST "http://localhost:8000/admin/etl/sentiment?days=365&sync_index=fals
 ## 注意事项
 
 - DuckDB有并发限制——建议基于API读取（`curl /admin/db/query`），避免进程外直接数据库访问
+- 主线分析会对过细概念做宽主题归并，并过滤预增、次新、地域国改等事件噪声，避免把短期标签误判为主线
+- 主线映射当前会把 `stock_basic.industry` 作为全行业锚点，并对同方向的重复概念做衰减，减少“相关概念堆叠”造成的误判
+- 通信链当前已拆分为 `光通信` / `通信网络` / `算力基建`，避免把 `中际旭创`、`烽火通信` 这类不同子方向压成同一主线
+- Dashboard 主线看板当前聚焦“近10日主线演变 + 当前最强主线 + 10日连续主线 + 每条主线Top5个股”，不再展示概念热力饼图
+- 当前 `concepts_task` 已支持“`short token` 优先同花顺、失败回退 Tushare concept/concept_detail”；若库内 `stock_concepts.src` 只有 `ts`，说明目前并未拿到同花顺概念成分
+- 高频盯盘列表请优先调用 `/admin/watchlist/realtime?analysis_depth=compact`，详情再单独请求 `/admin/watchlist/{ts_code}/analysis`
+- `/admin/stock/analyze` 默认使用压缩后的行情/资金/市场摘要构造提示词，不再注入关联个股推荐段；自定义模板优先使用 `{stock_snapshot}`、`{capital_flow_snapshot}`、`{market_context}`、`{holding_context}`、`{commentary_snapshot}`、`{analysis_snapshot}`
 - 使用任务队列（`/admin/tasks/status`）处理长时间运行的操作
 - Tushare API有限流——使用tenacity实现重试逻辑
 - 市场数据在交易时间后（上海时间16:00+）更新
@@ -316,6 +327,7 @@ curl -X POST "http://localhost:8000/admin/etl/sentiment?days=365&sync_index=fals
 - `get_latest_signals(df)`：提取最新信号及置信度分数
 - `PatternRecognizer`：兼容旧版接口的形态识别类
 - `get_professional_commentary(df, patterns)`：生成分析评论
+- `get_professional_commentary_detailed(df, patterns)`：生成结构化专业点评，返回 `decision` / `trade_plan` / `key_levels` / `observation_points`
 
 ### 支持的形态
 

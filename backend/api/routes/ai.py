@@ -1,19 +1,84 @@
 # /backend/api/routes/ai.py
 
 import logging
-import json
 import math
+from typing import Optional
+
 import httpx
-import numpy as np
 import pandas as pd
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, Field
-from typing import Optional
+from pydantic import BaseModel
+
 from db.connection import get_db_connection, fetch_df
 from .users import get_current_user_id
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["AI"])
+
+BASE_ANALYSIS_SYSTEM_PROMPT = (
+    "你是A股交易分析助手，偏短中线执行，不写成研究报告。"
+    "回答必须结论先行、短、准、可执行，优先给方向、关键价位、触发条件、失效条件和仓位建议。"
+    "禁止做横向推荐、题材联想或泛泛而谈。"
+)
+
+DEFAULT_ANALYSIS_USER_PROMPT = """请只基于以下资料输出简洁 Markdown，总字数控制在 260-420 字。
+
+输出格式固定为：
+## 结论
+- 观点：偏多 / 中性 / 偏空
+- 建议：买入试错 / 持有 / 观望 / 减仓 / 回避
+- 时效：1-3日 或 1-2周
+- 置信度：高 / 中 / 低
+
+## 核心依据
+- 最多 3 条，只写最关键证据
+
+## 关键价位与动作
+- 支撑位：
+- 压力位：
+- 触发条件：
+- 失效条件：
+
+## 持仓应对
+- 空仓：
+- 持仓：
+
+## 风险
+- 最多 2 条，直接写风险触发点
+
+要求：
+1. 结论先行，不复述大段原始数据。
+2. 不做横向推荐或题材联想。
+3. 只有在数据支持时才给出价位和动作；不确定就写“等待确认”。
+4. 避免空话、套话和长免责声明。
+
+### 标的概览
+{stock_snapshot}
+
+### 资金与杠杆
+{capital_flow_snapshot}
+
+### 市场环境
+{market_context}
+
+### 持仓信息
+{holding_context}
+
+### 量化点评
+{commentary_snapshot}
+"""
+
+TEMPLATE_CUTOFF_MARKERS = ("请分析并给出：", "请给出详细分析：")
+TEMPLATE_REMOVAL_KEYWORDS = ("关联个股", "同行业", "技术壁垒", "业绩预期向上")
+TEMPLATE_EXECUTION_SUFFIX = """
+
+---
+请将上面资料压缩为短线交易结论，并严格遵守：
+1. 只输出 `结论`、`核心依据`、`关键价位与动作`、`持仓应对`、`风险` 五部分；
+2. 结论先行，总字数控制在 260-420 字；
+3. 不做横向推荐或题材联想，不展开成长篇研报；
+4. 关键价位、触发条件、失效条件要尽量明确；数据不足时明确写“等待确认”。
+"""
 
 class UserAIConfig(BaseModel):
     model_provider: str = "openai"
@@ -21,8 +86,8 @@ class UserAIConfig(BaseModel):
     api_key: Optional[str] = None
     base_url: Optional[str] = None
     system_prompt: Optional[str] = None
-    max_tokens: int = 4096
-    temperature: float = 0.7
+    max_tokens: int = 1200
+    temperature: float = 0.35
 
 class UserAIConfigUpdate(BaseModel):
     model_provider: Optional[str] = None
@@ -51,6 +116,252 @@ class AIAnalyzeRequest(BaseModel):
 class SelectTemplateRequest(BaseModel):
     template_id: Optional[int] = None
 
+
+def _safe_float(value, default: Optional[float] = 0.0) -> Optional[float]:
+    try:
+        if value is None:
+            return default
+        number = float(value)
+        if math.isnan(number) or math.isinf(number):
+            return default
+        return number
+    except (TypeError, ValueError):
+        return default
+
+
+def _fmt_price(value: Optional[float]) -> str:
+    number = _safe_float(value, None)
+    return "暂无" if number is None else f"{number:.2f}"
+
+
+def _fmt_pct(value: Optional[float]) -> str:
+    number = _safe_float(value, None)
+    return "暂无" if number is None else f"{number:+.2f}%"
+
+
+def _fmt_wan(value: Optional[float]) -> str:
+    number = _safe_float(value, None)
+    return "暂无" if number is None else f"{number / 10000:.2f}万"
+
+
+def _fmt_yi(value: Optional[float]) -> str:
+    number = _safe_float(value, None)
+    return "暂无" if number is None else f"{number / 100000000:.2f}亿"
+
+
+def _prepare_analysis_df(df: pd.DataFrame) -> pd.DataFrame:
+    work = df.copy().sort_values("trade_date").reset_index(drop=True)
+    if "volume" not in work.columns and "vol" in work.columns:
+        work = work.rename(columns={"vol": "volume"})
+    for ma in (5, 10, 20, 60):
+        col = f"ma{ma}"
+        if col not in work.columns:
+            work[col] = work["close"].rolling(ma, min_periods=1).mean()
+    return work
+
+
+def _describe_trend(last_row: pd.Series) -> str:
+    close = _safe_float(last_row.get("close"), 0.0) or 0.0
+    ma5 = _safe_float(last_row.get("ma5"), close) or close
+    ma10 = _safe_float(last_row.get("ma10"), close) or close
+    ma20 = _safe_float(last_row.get("ma20"), close) or close
+    ma60 = _safe_float(last_row.get("ma60"), close) or close
+
+    if close > ma5 > ma10 > ma20 > ma60:
+        return "多头趋势，短中期共振向上"
+    if close > ma5 > ma10 > ma20:
+        return "短中期偏强，仍在上行通道"
+    if close > ma20 > ma60:
+        return "中期转强，但仍需量能确认"
+    if close < ma5 < ma10 < ma20 < ma60:
+        return "空头趋势，弱势未扭转"
+    if close < ma20 < ma60:
+        return "中期偏弱，反弹更多看确认"
+    return "区间震荡，方向尚未明确"
+
+
+def _nearest_level(candidates: list[Optional[float]], close: float, direction: str) -> Optional[float]:
+    values = []
+    for candidate in candidates:
+        number = _safe_float(candidate, None)
+        if number is None:
+            continue
+        if direction == "below" and number <= close:
+            values.append(number)
+        if direction == "above" and number >= close:
+            values.append(number)
+    if not values:
+        return None
+    return max(values) if direction == "below" else min(values)
+
+
+def _build_price_snapshot(df: pd.DataFrame) -> tuple[str, dict]:
+    if df.empty:
+        return "暂无行情摘要", {}
+
+    last = df.iloc[-1]
+    last_5 = df.tail(5)
+    last_10 = df.tail(10)
+    last_20 = df.tail(20)
+
+    close = _safe_float(last.get("close"), 0.0) or 0.0
+    pct_today = _safe_float(last.get("pct_chg"), 0.0) or 0.0
+    volume = _safe_float(last.get("volume"), 0.0) or 0.0
+    amount = _safe_float(last.get("amount"), 0.0) or 0.0
+    ma5 = _safe_float(last.get("ma5"), close)
+    ma10 = _safe_float(last.get("ma10"), close)
+    ma20 = _safe_float(last.get("ma20"), close)
+    ma60 = _safe_float(last.get("ma60"), close)
+    vol_ma5 = _safe_float(last_5["volume"].mean(), 0.0) or 0.0
+    vol_ma20 = _safe_float(last_20["volume"].mean(), 0.0) or 0.0
+    vol_ratio_5 = (volume / vol_ma5) if vol_ma5 > 0 else 1.0
+    vol_ratio_20 = (volume / vol_ma20) if vol_ma20 > 0 else 1.0
+
+    ret_5 = ((close / df.iloc[-5]["close"]) - 1) * 100 if len(df) >= 5 and df.iloc[-5]["close"] else None
+    ret_10 = ((close / df.iloc[-10]["close"]) - 1) * 100 if len(df) >= 10 and df.iloc[-10]["close"] else None
+    ret_20 = ((close / df.iloc[-20]["close"]) - 1) * 100 if len(df) >= 20 and df.iloc[-20]["close"] else None
+
+    high_5 = _safe_float(last_5["high"].max() if "high" in last_5.columns else None, None)
+    high_10 = _safe_float(last_10["high"].max() if "high" in last_10.columns else None, None)
+    high_20 = _safe_float(last_20["high"].max() if "high" in last_20.columns else None, None)
+    low_5 = _safe_float(last_5["low"].min() if "low" in last_5.columns else None, None)
+    low_10 = _safe_float(last_10["low"].min() if "low" in last_10.columns else None, None)
+    low_20 = _safe_float(last_20["low"].min() if "low" in last_20.columns else None, None)
+
+    support = _nearest_level([ma5, ma10, ma20, low_5, low_10, low_20], close, "below")
+    resistance = _nearest_level([high_5, high_10, high_20, ma60], close, "above")
+
+    lines = [
+        f"- 最新收盘 {_fmt_price(close)}，当日 {_fmt_pct(pct_today)}，趋势：{_describe_trend(last)}。",
+        f"- 近 5/10/20 日区间收益：{_fmt_pct(ret_5)} / {_fmt_pct(ret_10)} / {_fmt_pct(ret_20)}。",
+        f"- 当日成交额 {_fmt_yi(amount)}，量能为 5 日均量 {vol_ratio_5:.2f} 倍、20 日均量 {vol_ratio_20:.2f} 倍。",
+        f"- 参考位：支撑 {_fmt_price(support)}，压力 {_fmt_price(resistance)}，MA5/10/20/60 为 {_fmt_price(ma5)} / {_fmt_price(ma10)} / {_fmt_price(ma20)} / {_fmt_price(ma60)}。",
+    ]
+    return "\n".join(lines), {
+        "close": close,
+        "support": support,
+        "resistance": resistance,
+    }
+
+
+def _build_money_flow_snapshot(df: pd.DataFrame) -> str:
+    if df.empty:
+        return "- 主力资金：暂无。"
+
+    work = df.sort_values("trade_date").reset_index(drop=True)
+    last = work.iloc[-1]
+    tail_3 = work.tail(3)
+    tail_5 = work.tail(5)
+    net_1 = _safe_float(last.get("net_mf_amount"), 0.0) or 0.0
+    net_3 = _safe_float(tail_3["net_mf_amount"].sum(), 0.0) or 0.0
+    net_5 = _safe_float(tail_5["net_mf_amount"].sum(), 0.0) or 0.0
+    ratio = _safe_float(last.get("net_mf_ratio"), None)
+    positive_days = int((tail_5["net_mf_amount"] > 0).sum())
+    return (
+        f"- 主力净流入：1 日 {_fmt_wan(net_1)}，3 日 {_fmt_wan(net_3)}，5 日 {_fmt_wan(net_5)}。"
+        f" 最近 5 日净流入天数 {positive_days}/5，最新净占比 {(_fmt_pct(ratio) if ratio is not None else '暂无')}。"
+    )
+
+
+def _build_margin_snapshot(df: pd.DataFrame) -> str:
+    if df.empty or "rzye" not in df.columns:
+        return "- 融资杠杆：暂无。"
+
+    work = df.sort_values("trade_date").reset_index(drop=True)
+    latest = _safe_float(work.iloc[-1].get("rzye"), None)
+    change_5 = None
+    change_10 = None
+    if len(work) >= 5:
+        base_5 = _safe_float(work.iloc[-5].get("rzye"), None)
+        if base_5 and base_5 > 0 and latest is not None:
+            change_5 = (latest / base_5 - 1) * 100
+    if len(work) >= 10:
+        base_10 = _safe_float(work.iloc[-10].get("rzye"), None)
+        if base_10 and base_10 > 0 and latest is not None:
+            change_10 = (latest / base_10 - 1) * 100
+    return (
+        f"- 融资余额最新 {_fmt_yi(latest)}，5 日变化 {_fmt_pct(change_5)}，10 日变化 {_fmt_pct(change_10)}。"
+    )
+
+
+def _build_holding_snapshot(holding_row, last_close: Optional[float]) -> str:
+    if not holding_row:
+        return "空仓，优先等确认信号再决策。"
+
+    shares = int(_safe_float(holding_row[0], 0.0) or 0.0)
+    avg_cost = _safe_float(holding_row[1], None)
+    pnl_pct = None
+    if avg_cost and avg_cost > 0 and last_close:
+        pnl_pct = (last_close / avg_cost - 1) * 100
+    return (
+        f"持仓 {shares} 股，成本 {_fmt_price(avg_cost)}，按最新价估算浮盈亏 {_fmt_pct(pnl_pct)}。"
+    )
+
+
+def _build_market_snapshot(sentiment_row, mainline_rows) -> tuple[str, str, str]:
+    market_sentiment_snapshot = "- 市场情绪：暂无。"
+    if sentiment_row:
+        market_sentiment_snapshot = (
+            f"- 市场情绪：{sentiment_row[2] or '未知'}，分数 {_safe_float(sentiment_row[1], 0.0):.1f}，日期 {str(sentiment_row[0])[:10]}。"
+        )
+
+    top_mainlines = []
+    for row in mainline_rows or []:
+        top_mainlines.append(f"{row[1]}({_safe_float(row[2], 0.0):.1f})")
+    mainline_snapshot = f"- 主线热点：{'、'.join(top_mainlines) if top_mainlines else '暂无'}。"
+
+    return market_sentiment_snapshot, mainline_snapshot, "\n".join([market_sentiment_snapshot, mainline_snapshot])
+
+
+def _build_commentary_snapshot(detail: dict) -> str:
+    if not detail:
+        return "暂无量化点评。"
+
+    decision = detail.get("decision") or {}
+    trade_plan = detail.get("trade_plan") or {}
+    levels = detail.get("key_levels") or []
+    level_text = "、".join(
+        f"{item.get('label')} {_fmt_price(item.get('price'))}" for item in levels[:3] if item.get("price") is not None
+    )
+    parts = []
+    if decision.get("summary"):
+        parts.append(f"- 结论：{decision['summary']}")
+    if trade_plan.get("entry"):
+        parts.append(f"- 执行：{trade_plan['entry']}")
+    if trade_plan.get("invalid"):
+        parts.append(f"- 失效：{trade_plan['invalid']}")
+    if level_text:
+        parts.append(f"- 关键位：{level_text}")
+    return "\n".join(parts) if parts else (detail.get("summary") or "暂无量化点评。")
+
+
+def _sanitize_template_content(content: Optional[str]) -> Optional[str]:
+    if not content:
+        return content
+
+    sanitized = str(content)
+    sanitized = sanitized.replace(
+        "你是A股量化分析师，请对以下股票进行全面深入的分析。",
+        "请基于以下资料做交易判断。"
+    )
+    sanitized = sanitized.replace(
+        "你是一个专业的A股交易分析师。请根据以下信息对股票进行分析并给出投资建议。",
+        "请基于以下资料做交易判断。"
+    )
+    for marker in TEMPLATE_CUTOFF_MARKERS:
+        if marker in sanitized:
+            sanitized = sanitized.split(marker, 1)[0].rstrip()
+            break
+
+    lines = []
+    for line in sanitized.splitlines():
+        if any(keyword in line for keyword in TEMPLATE_REMOVAL_KEYWORDS):
+            continue
+        lines.append(line)
+
+    sanitized = "\n".join(lines).strip()
+    return f"{sanitized}{TEMPLATE_EXECUTION_SUFFIX}" if sanitized else DEFAULT_ANALYSIS_USER_PROMPT
+
 @router.get("/users/me/ai-config")
 async def get_my_ai_config(request: Request):
     """获取当前用户的AI配置"""
@@ -77,8 +388,8 @@ async def get_my_ai_config(request: Request):
             "api_key": None,
             "base_url": None,
             "system_prompt": None,
-            "max_tokens": 4096,
-            "temperature": 0.7
+            "max_tokens": 1200,
+            "temperature": 0.35
         }
     except Exception as e:
         logger.error(f"获取AI配置失败: {e}")
@@ -256,17 +567,21 @@ async def analyze_stock_with_ai(request: Request, body: AIAnalyzeRequest):
     """使用AI分析股票"""
     user_id = await get_current_user_id(request)
     try:
-        # 获取最新交易日
-        with get_db_connection() as con:
-            latest_trade = con.execute(
-                "SELECT MAX(trade_date) FROM daily_price WHERE ts_code = ?",
-                (body.ts_code,)
-            ).fetchone()
-        
-        if not latest_trade or not latest_trade[0]:
+        prices_df = fetch_df(
+            """
+            SELECT trade_date, open, high, low, close, vol, amount, pct_chg
+            FROM daily_price
+            WHERE ts_code = ?
+            ORDER BY trade_date DESC
+            LIMIT 60
+            """,
+            (body.ts_code,),
+        )
+        if prices_df.empty:
             raise HTTPException(status_code=400, detail=f"未找到股票 {body.ts_code} 的行情数据")
-        
-        latest_trade_date = str(latest_trade[0])
+
+        latest_trade_date = str(prices_df.iloc[0]["trade_date"])
+        analysis_df = _prepare_analysis_df(prices_df)
         
         # 检查缓存（如果不是强制刷新）
         if not body.force_refresh:
@@ -323,70 +638,38 @@ async def analyze_stock_with_ai(request: Request, body: AIAnalyzeRequest):
             ).fetchone()
             if basic:
                 stock_basic = {"ts_code": basic[0], "name": basic[1], "industry": basic[2], "market": basic[3]}
-        
-        # 获取30日行情数据 - 简化格式
-        with get_db_connection() as con:
-            prices = con.execute("""
-                SELECT trade_date, close, vol, pct_chg 
-                FROM daily_price WHERE ts_code = ? ORDER BY trade_date DESC LIMIT 30
-            """, (body.ts_code,)).fetchall()
-        
-        # 格式化为紧凑的表格形式: 日期,收盘价,成交量(万手),涨跌幅
-        price_lines = []
-        for p in reversed(prices):
-            date_str = str(p[0])[:10]  # 只取日期部分
-            close = round(float(p[1]), 2) if p[1] else 0
-            vol_wan = round(float(p[2]) / 10000, 2) if p[2] else 0  # 转换为万手
-            pct_chg = round(float(p[3]), 2) if p[3] else 0
-            price_lines.append(f"{date_str},{close},{vol_wan},{pct_chg}")
-        price_data = "\n".join(price_lines)
-        
-        logger.debug(f"price_data rows: {len(price_lines)}")
-        
-        # 获取资金流向 - 简化为只保留主力净流入(万元)
-        money_flow = None
-        with get_db_connection() as con:
-            mf = con.execute("""
-                SELECT trade_date, net_mf_amount, net_mf_ratio
-                FROM stock_moneyflow WHERE ts_code = ? ORDER BY trade_date DESC LIMIT 10
-            """, (body.ts_code,)).fetchall()
-        
-        if mf:
-            mf_lines = []
-            for m in reversed(mf):
-                date_str = str(m[0])[:10]
-                net_amt = round(float(m[1]) / 10000, 2) if m[1] else 0  # 转换为万元
-                net_ratio = round(float(m[2]), 2) if m[2] else 0
-                mf_lines.append(f"{date_str},{net_amt},{net_ratio}")
-            money_flow = "\n".join(mf_lines)
-        
-        # 获取融资融券数据 - 简化为只保留融资余额(亿)
-        margin_data = None
-        with get_db_connection() as con:
-            mg = con.execute("""
-                SELECT trade_date, rzye
-                FROM stock_margin WHERE ts_code = ? ORDER BY trade_date DESC LIMIT 10
-            """, (body.ts_code,)).fetchall()
-        
-        if mg:
-            mg_lines = []
-            for m in reversed(mg):
-                date_str = str(m[0])[:10]
-                rzye_yi = round(float(m[1]) / 100000000, 2) if m[1] else 0  # 转换为亿
-                mg_lines.append(f"{date_str},{rzye_yi}")
-            margin_data = "\n".join(mg_lines)
+
+        money_flow_df = fetch_df(
+            """
+            SELECT trade_date, net_mf_amount, net_mf_ratio
+            FROM stock_moneyflow
+            WHERE ts_code = ?
+            ORDER BY trade_date DESC
+            LIMIT 10
+            """,
+            (body.ts_code,),
+        )
+
+        margin_df = fetch_df(
+            """
+            SELECT trade_date, rzye
+            FROM stock_margin
+            WHERE ts_code = ?
+            ORDER BY trade_date DESC
+            LIMIT 10
+            """,
+            (body.ts_code,),
+        )
         
         # 获取持仓信息
-        holding = None
+        holding_row = None
         with get_db_connection() as con:
             h = con.execute(
                 "SELECT shares, avg_cost FROM user_holdings WHERE user_id = ? AND ts_code = ?",
                 (user_id, body.ts_code)
             ).fetchone()
             if h:
-                shares = int(float(h[0]))
-                avg_cost = round(float(h[1]), 2) if h[1] else 0
-                holding = f"持仓{shares}股，成本价{avg_cost}元"
+                holding_row = h
         # 判断是否在开盘时间段
         from etl.calendar import trading_calendar
         is_trading_time = trading_calendar.is_trading_time()
@@ -403,98 +686,126 @@ async def analyze_stock_with_ai(request: Request, body: AIAnalyzeRequest):
                     current_vol = rt.get('vol', 0)
                     current_amount = rt.get('amount', 0)
                     current_pct_chg = rt.get('pct_chg', 0)
-                    realtime_data = f"最新价:{current_price} | 成交量:{round(float(current_vol)/10000,2)}万手 | 成交额:{round(float(current_amount)/10000,2)}万 | 涨跌幅:{current_pct_chg}%"
+                    realtime_data = (
+                        f"- 盘中实时：最新价 {_fmt_price(current_price)}，涨跌 {_fmt_pct(current_pct_chg)}，"
+                        f"成交量 {_fmt_wan(current_vol)}，成交额 {_fmt_wan(current_amount)}。"
+                    )
                     logger.info(f"获取实时行情成功: {body.ts_code} price={current_price}")
             except Exception as e:
                 logger.warning(f"获取实时行情失败: {e}")
-        
-        # 获取关联个股（同行业上市公司）
-        related_stocks = []
-        if stock_basic and stock_basic.get("industry"):
-            with get_db_connection() as con:
-                related = con.execute("""
-                    SELECT ts_code, name FROM stock_basic 
-                    WHERE industry = ? AND ts_code != ? AND list_status = 'L'
-                    ORDER BY list_date DESC LIMIT 5
-                """, (stock_basic["industry"], body.ts_code)).fetchall()
-                if related:
-                    related_stocks = [{"ts_code": r[0], "name": r[1]} for r in related]
-        
+
+        market_sentiment_row = None
+        with get_db_connection() as con:
+            market_sentiment_row = con.execute(
+                """
+                SELECT trade_date, score, label, details
+                FROM market_sentiment
+                ORDER BY trade_date DESC
+                LIMIT 1
+                """
+            ).fetchone()
+
+        with get_db_connection() as con:
+            latest_mainline_date = con.execute(
+                "SELECT MAX(trade_date) FROM mainline_scores"
+            ).fetchone()
+            if latest_mainline_date and latest_mainline_date[0]:
+                mainline_rows = con.execute(
+                    """
+                    SELECT trade_date, mapped_name, score
+                    FROM mainline_scores
+                    WHERE trade_date = ?
+                    ORDER BY score DESC
+                    LIMIT 3
+                    """,
+                    (latest_mainline_date[0],),
+                ).fetchall()
+            else:
+                mainline_rows = []
+
+        from etl.utils.kline_patterns import PatternRecognizer, get_professional_commentary_detailed
+
+        latest_patterns = PatternRecognizer(analysis_df).recognize()
+        commentary_detail = get_professional_commentary_detailed(analysis_df, latest_patterns)
+        price_snapshot, price_metrics = _build_price_snapshot(analysis_df)
+        money_flow_snapshot = _build_money_flow_snapshot(money_flow_df)
+        margin_snapshot = _build_margin_snapshot(margin_df)
+        holding_snapshot = _build_holding_snapshot(holding_row, price_metrics.get("close"))
+        market_sentiment_snapshot, mainline_snapshot, market_context = _build_market_snapshot(
+            market_sentiment_row, mainline_rows
+        )
+        commentary_snapshot = _build_commentary_snapshot(commentary_detail)
+
         # 格式化数据（用于日志）
         stock_name = stock_basic.get("name", "") if stock_basic else ""
         ts_code = stock_basic.get("ts_code", body.ts_code) if stock_basic else body.ts_code
         industry = stock_basic.get("industry", "") if stock_basic else ""
         market = stock_basic.get("market", "") if stock_basic else ""
-        
-        # 构建实时行情和关联个股区块
-        realtime_section = ""
-        if is_trading_time and realtime_data:
-            realtime_section = f"""
-## ⏰ 盘中实时数据(标记：当前为开盘时间段)
-{realtime_data}
-"""
-        
-        related_section = ""
-        if related_stocks:
-            related_list = "、".join([f"{s['name']}({s['ts_code']})" for s in related_stocks])
-            related_section = f"""
-## 关联个股(同行业)
-{related_list}
 
-请在分析中重点关注上述关联个股的表现和联动性，特别关注有技术壁垒且业绩预期向上的标的。"""
-        
+        stock_basic_text = (
+            f"{stock_name}({ts_code}) | 行业:{industry or '暂无'} | 市场:{market or '暂无'}"
+        )
+        stock_snapshot_parts = [f"- 标的：{stock_basic_text}。", price_snapshot]
+        if realtime_data:
+            stock_snapshot_parts.append(realtime_data)
+        stock_snapshot = "\n".join(part for part in stock_snapshot_parts if part)
+        capital_flow_snapshot = "\n".join([money_flow_snapshot, margin_snapshot])
+        analysis_snapshot = "\n".join(
+            [
+                stock_snapshot,
+                capital_flow_snapshot,
+                market_context,
+                f"- 持仓：{holding_snapshot}",
+                commentary_snapshot,
+            ]
+        )
+
         # 构建提示词
+        replacements = {
+            "stock_name": stock_name or body.ts_code,
+            "ts_code": ts_code,
+            "industry": industry or "暂无",
+            "market": market or "暂无",
+            "stock_basic": stock_basic_text,
+            "realtime_section": realtime_data or "",
+            "price_data": price_snapshot,
+            "money_flow": money_flow_snapshot,
+            "margin_data": margin_snapshot,
+            "holding": holding_snapshot,
+            "market_sentiment": market_sentiment_snapshot,
+            "mainline": mainline_snapshot,
+            "stock_snapshot": stock_snapshot,
+            "capital_flow_snapshot": capital_flow_snapshot,
+            "market_context": market_context,
+            "holding_context": holding_snapshot,
+            "commentary_snapshot": commentary_snapshot,
+            "analysis_snapshot": analysis_snapshot,
+            "related_section": "",
+        }
         if template_content:
-            # 使用用户模板，替换占位符
-            prompt = template_content
-            prompt = prompt.replace("{stock_name}", stock_name)
-            prompt = prompt.replace("{ts_code}", ts_code)
-            prompt = prompt.replace("{industry}", industry)
-            prompt = prompt.replace("{market}", market)
-            prompt = prompt.replace("{realtime_section}", realtime_section)
-            prompt = prompt.replace("{price_data}", price_data or "暂无")
-            prompt = prompt.replace("{money_flow}", money_flow or "暂无")
-            prompt = prompt.replace("{margin_data}", margin_data or "暂无")
-            prompt = prompt.replace("{holding}", holding or "暂无持仓")
-            prompt = prompt.replace("{related_section}", related_section)
+            prompt = _sanitize_template_content(template_content)
+            for key, value in replacements.items():
+                replacement = value or "暂无"
+                if key in {"realtime_section", "related_section"} and not value:
+                    replacement = ""
+                prompt = prompt.replace(f"{{{key}}}", replacement)
         else:
-            prompt = f"""你是A股量化分析师，请对以下股票进行全面深入的分析。
-
-## {stock_name}({ts_code})
-行业：{industry} | 市场：{market}
-{realtime_section}
-## 近30日行情(日期,收盘价,成交量万手,涨跌幅%)
-{price_data}
-
-## 主力净流入近10日(日期,净额万元,占比%)
-{money_flow}
-
-## 融资余额近10日(日期,余额亿元)
-{margin_data}
-
-## 持仓
-{holding}
-{related_section}
----
-请给出详细分析：
-1. **技术面分析**：趋势方向、K线形态、关键支撑压力位、量价配合、均线系统
-2. **资金面分析**：主力资金动向、融资余额变化趋势、筹码分布
-3. **关联个股分析**：同行业其他标的的表现对比，有技术壁垒且业绩预期向上的公司
-4. **操作建议**：明确买/卖/观望，给出具体价位和仓位建议
-5. **持仓建议**：如有持仓，给出止盈止损位和加减仓策略
-6. **风险提示**：主要风险因素
-
-要求：结论先行，分析全面深入。"""
+            prompt = DEFAULT_ANALYSIS_USER_PROMPT
+            for key, value in replacements.items():
+                replacement = value or "暂无"
+                if key in {"realtime_section", "related_section"} and not value:
+                    replacement = ""
+                prompt = prompt.replace(f"{{{key}}}", replacement)
         
         # 记录数据状态以便调试
         logger.info(f"AI分析数据准备: stock_basic={'有' if stock_basic else '无'}, "
-                    f"price_data行数={len(price_data.split(chr(10))) if price_data else 0}, "
-                    f"money_flow行数={len(money_flow.split(chr(10))) if money_flow else 0}, "
-                    f"margin_data行数={len(margin_data.split(chr(10))) if margin_data else 0}, "
-                    f"holding={'有' if holding else '无'}, "
+                    f"price_rows={len(analysis_df)}, "
+                    f"money_flow_rows={len(money_flow_df)}, "
+                    f"margin_rows={len(margin_df)}, "
+                    f"holding={'有' if holding_row else '无'}, "
                     f"is_trading_time={is_trading_time}, "
                     f"realtime_data={'有' if realtime_data else '无'}, "
-                    f"related_stocks数={len(related_stocks)}")
+                    f"patterns={len(latest_patterns)}")
         
         # 记录提示词长度和部分内容
         logger.info(f"AI分析提示词长度: {len(prompt)}")
@@ -506,6 +817,11 @@ async def analyze_stock_with_ai(request: Request, body: AIAnalyzeRequest):
         
         # 调用AI
         model = model_name or "deepseek-chat"
+        response_max_tokens = max(300, min(int(max_tokens or 1200), 1200))
+        effective_temperature = float(temperature) if temperature is not None else 0.35
+        effective_system_prompt = BASE_ANALYSIS_SYSTEM_PROMPT
+        if system_prompt:
+            effective_system_prompt = f"{effective_system_prompt}\n\n用户补充要求：\n{system_prompt}"
         logger.info(f"AI provider: {model_provider}, model: {model}")
         if model_provider == "deepseek":
             if not base_url:
@@ -516,11 +832,11 @@ async def analyze_stock_with_ai(request: Request, body: AIAnalyzeRequest):
             payload = {
                 "model": model,
                 "messages": [
-                    {"role": "system", "content": system_prompt or "你是一个专业的A股交易分析师。"},
+                    {"role": "system", "content": effective_system_prompt},
                     {"role": "user", "content": prompt}
                 ],
-                "max_tokens": max_tokens or 4096,
-                "temperature": temperature or 0.7
+                "max_tokens": response_max_tokens,
+                "temperature": effective_temperature
             }
         else:  # openai
             if not base_url:
@@ -531,11 +847,11 @@ async def analyze_stock_with_ai(request: Request, body: AIAnalyzeRequest):
             payload = {
                 "model": model or "gpt-4",
                 "messages": [
-                    {"role": "system", "content": system_prompt or "你是一个专业的A股交易分析师。"},
+                    {"role": "system", "content": effective_system_prompt},
                     {"role": "user", "content": prompt}
                 ],
-                "max_tokens": max_tokens or 4096,
-                "temperature": temperature or 0.7
+                "max_tokens": response_max_tokens,
+                "temperature": effective_temperature
             }
         
         logger.info(f"AI分析请求: {body.ts_code}, 模型: {model}, 交易日: {latest_trade_date}")

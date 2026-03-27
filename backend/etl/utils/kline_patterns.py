@@ -1544,6 +1544,57 @@ class PatternRecognizer:
             return []
 
 
+def _safe_number(value: Any, default: float | None = None) -> float | None:
+    try:
+        if value is None:
+            return default
+        number = float(value)
+        if np.isnan(number) or np.isinf(number):
+            return default
+        return number
+    except (TypeError, ValueError):
+        return default
+
+
+def _nearest_price_level(candidates: Iterable[Any], close: float, direction: str) -> float | None:
+    values: list[float] = []
+    for candidate in candidates:
+        number = _safe_number(candidate)
+        if number is None:
+            continue
+        if direction == "below" and number <= close:
+            values.append(number)
+        elif direction == "above" and number >= close:
+            values.append(number)
+    if not values:
+        return None
+    return max(values) if direction == "below" else min(values)
+
+
+def _decision_bucket(score: int) -> tuple[str, str, str, str]:
+    if score >= 78:
+        return "强势偏多", "关注", "高", "趋势跟随"
+    if score >= 64:
+        return "偏多", "试错", "中高", "回踩低吸"
+    if score >= 45:
+        return "中性", "观望", "中", "等待确认"
+    if score >= 30:
+        return "偏空", "减仓", "中", "防守减仓"
+    return "弱势", "回避", "高", "风险回避"
+
+
+def _position_text(action: str, confidence: str) -> str:
+    if action == "关注":
+        return "可按 50%-70% 的跟踪仓位执行，优先分批处理。"
+    if action == "试错":
+        return "建议 20%-35% 轻仓试错，确认后再加仓。"
+    if action == "观望":
+        return "以观察为主，不追价，等待放量突破或回踩企稳。"
+    if action == "减仓":
+        return "以降低仓位为主，保留少量跟踪仓等待修复。"
+    return "空仓或极轻仓处理，优先控制回撤。"
+
+
 def get_professional_commentary(df: pd.DataFrame, patterns: list) -> str:
     """
     根据形态和最近行情，给出专业的点评分析（机构/游资视角）。
@@ -1561,11 +1612,24 @@ def get_professional_commentary_detailed(df: pd.DataFrame, patterns: list) -> di
     if df is None or df.empty:
         return {
             "summary": "暂无数据分析",
+            "decision": {},
+            "trade_plan": {},
+            "key_levels": [],
+            "observation_points": [],
             "institution": [],
             "hotmoney": [],
             "patterns": [],
-            "risk_alert": []
+            "risk_alert": [],
+            "technical": {},
         }
+
+    df = df.copy()
+    if "volume" not in df.columns and "vol" in df.columns:
+        df = df.rename(columns={"vol": "volume"})
+    for ma in (5, 10, 20, 60):
+        col = f"ma{ma}"
+        if col not in df.columns:
+            df[col] = df["close"].rolling(ma, min_periods=1).mean()
 
     last = df.iloc[-1]
     last_5 = df.tail(5)
@@ -2103,37 +2167,184 @@ def get_professional_commentary_detailed(df: pd.DataFrame, patterns: list) -> di
                 "desc": "放量滞涨信号，注意风险"
             })
 
-    # === 组装最终汇总 ===
-    summary_parts = []
-    
-    # 机构视角取最重要的1-2条
-    if institution_view:
-        top_institution = sorted(institution_view, key=lambda x: {'strong': 0, 'medium': 1, 'light': 2, 'neutral': 3, 'weak': 4, 'warning': 5, 'bearish': 6}.get(x.get('level', 'neutral'), 3))
-        summary_parts.append(f"【机构】{top_institution[0]['title']}")
-        if len(top_institution) > 1 and top_institution[1].get('level') in ['strong', 'medium', 'warning']:
-            summary_parts.append(f"机构关注：{top_institution[1]['title']}")
-    
-    # 游资视角取最重要的1-2条
-    if hotmoney_view:
-        level_order = {'extreme': 0, 'strong': 1, 'medium': 2, 'light': 3, 'neutral': 4, 'weak': 5, 'warning': 6, 'danger': 7}
-        top_hotmoney = sorted(hotmoney_view, key=lambda x: level_order.get(x.get('level', 'neutral'), 4))
-        summary_parts.append(f"【游资】{top_hotmoney[0]['title']}")
-        if len(top_hotmoney) > 1 and top_hotmoney[1].get('level') in ['extreme', 'strong', 'medium', 'warning', 'danger']:
-            summary_parts.append(f"游资动向：{top_hotmoney[1]['title']}")
-    
-    # 形态信号取1条
-    if pattern_view:
-        top_pattern = pattern_view[0]
-        summary_parts.append(f"【形态】{top_pattern['pattern']}: {top_pattern['desc'][:10]}")
+    # === 4. 决策层：给出更清晰的交易执行建议 ===
+    trend_score = 0
+    if ma20 is not None and ma60 is not None and not (pd.isna(ma20) or pd.isna(ma60)):
+        if close > ma20 > ma60:
+            trend_score += 18
+        elif close < ma20 < ma60:
+            trend_score -= 18
+        elif close > ma20:
+            trend_score += 8
+        else:
+            trend_score -= 8
+    if ma5 is not None and ma10 is not None and not (pd.isna(ma5) or pd.isna(ma10)):
+        if close > ma5 > ma10:
+            trend_score += 10
+        elif close < ma5 < ma10:
+            trend_score -= 10
 
-    if not summary_parts:
-        summary_parts.append("暂无明显信号，观望为主")
+    momentum_score = 0
+    if pct_today >= 7:
+        momentum_score += 14
+    elif pct_today >= 3:
+        momentum_score += 8
+    elif pct_today <= -7:
+        momentum_score -= 14
+    elif pct_today <= -3:
+        momentum_score -= 8
+
+    if pct_10_sum >= 18:
+        momentum_score += 10
+    elif pct_10_sum >= 8:
+        momentum_score += 5
+    elif pct_10_sum <= -18:
+        momentum_score -= 10
+    elif pct_10_sum <= -8:
+        momentum_score -= 5
+
+    volume_score = 0
+    if vol_ratio_20 > 1.0 and pct_today >= 0:
+        volume_score += 10
+    elif vol_ratio_20 > 0.3:
+        volume_score += 5
+    elif vol_ratio_20 < -0.4:
+        volume_score -= 6
+
+    if vol_ratio_5 > 1.5 and pct_today > 2:
+        volume_score += 6
+    elif vol_ratio_5 > 1.0 and pct_today < -3:
+        volume_score -= 8
+
+    pattern_score = 0
+    for item in pattern_view:
+        p_type = str(item.get("type", ""))
+        level = str(item.get("level", "neutral"))
+        if p_type in {"bullish", "reversal_bull"}:
+            pattern_score += 8 if level in {"strong", "medium"} else 4
+        elif p_type in {"reversal_bear", "warning"}:
+            pattern_score -= 8 if level in {"warning", "strong"} else 4
+        elif p_type == "special":
+            pattern_score += 1
+
+    risk_penalty = 0
+    for item in risk_alert:
+        risk_penalty += {"high": 12, "medium": 8, "low": 4}.get(str(item.get("level", "low")), 4)
+    if amplitude_today > 5 and amplitude_today > amplitude_5_avg * 1.5:
+        risk_penalty += 4
+
+    score = int(np.clip(50 + trend_score + momentum_score + volume_score + pattern_score - risk_penalty, 0, 100))
+    bias, action, confidence, style = _decision_bucket(score)
+
+    high_5 = _safe_number(last_5["high"].max() if "high" in last_5.columns else None)
+    high_10 = _safe_number(last_10["high"].max() if "high" in last_10.columns else None)
+    high_20 = _safe_number(last_20["high"].max() if "high" in last_20.columns else None)
+    low_5 = _safe_number(last_5["low"].min() if "low" in last_5.columns else None)
+    low_10 = _safe_number(last_10["low"].min() if "low" in last_10.columns else None)
+    low_20 = _safe_number(last_20["low"].min() if "low" in last_20.columns else None)
+
+    below_levels = sorted(
+        {
+            round(v, 2)
+            for v in [ma5, ma10, ma20, ma60, low_5, low_10, low_20]
+            if _safe_number(v) is not None and _safe_number(v) <= close
+        },
+        reverse=True,
+    )
+    above_levels = sorted(
+        {
+            round(v, 2)
+            for v in [high_5, high_10, high_20, ma60]
+            if _safe_number(v) is not None and _safe_number(v) >= close
+        }
+    )
+
+    support_1 = below_levels[0] if below_levels else None
+    support_2 = below_levels[1] if len(below_levels) > 1 else None
+    resistance_1 = above_levels[0] if above_levels else None
+    resistance_2 = above_levels[1] if len(above_levels) > 1 else None
+    stop_level = support_2 or support_1 or low_20
+
+    fmt_level = lambda value: f"{value:.2f}" if value is not None else "待确认"
+
+    if action in {"关注", "试错"}:
+        entry_text = (
+            f"优先看回踩 {fmt_level(support_1)} 一带能否企稳；若放量突破 {fmt_level(resistance_1)}，可顺势跟进。"
+        )
+        add_text = f"只有站稳 {fmt_level(resistance_1)} 且量能继续放大，才考虑加仓。"
+        reduce_text = f"若跌破 {fmt_level(support_1)} 或出现量价背离，先减仓锁定主动权。"
+        invalid_text = f"若收盘有效跌破 {fmt_level(stop_level)}，本轮转强逻辑失效。"
+    elif action == "观望":
+        entry_text = f"等待放量站稳 {fmt_level(resistance_1)}，或回踩 {fmt_level(support_1)} 后再确认。"
+        add_text = "确认前不主动加仓，避免在震荡区间内追价。"
+        reduce_text = f"若再度失守 {fmt_level(stop_level)}，偏弱结构会进一步强化。"
+        invalid_text = f"未收复 {fmt_level(resistance_1)} 前，不把反弹视为趋势反转。"
+    else:
+        entry_text = "不主动开新仓，反弹优先处理风险和仓位。"
+        add_text = "暂不考虑加仓，先看弱势结构是否修复。"
+        reduce_text = f"接近 {fmt_level(resistance_1)} 但量能跟不上，可继续减仓。"
+        invalid_text = f"只有重新站稳 {fmt_level(resistance_1)} 并放量，弱势判断才可能修复。"
+
+    risk_brief = risk_alert[0]["title"] if risk_alert else ("量能不足" if vol_ratio_20 < 0.8 else "等待确认")
+    decision_summary = f"{bias}，当前以{style}为主，建议 {action}。"
+
+    key_levels = []
+    if support_1 is not None:
+        key_levels.append({"label": "支撑1", "price": support_1, "note": "近端防守位"})
+    if support_2 is not None:
+        key_levels.append({"label": "支撑2", "price": support_2, "note": "失守后结构明显转弱"})
+    if resistance_1 is not None:
+        key_levels.append({"label": "压力1", "price": resistance_1, "note": "放量突破才算确认"})
+    if resistance_2 is not None:
+        key_levels.append({"label": "压力2", "price": resistance_2, "note": "强势延伸目标位"})
+
+    observation_points = []
+    if institution_view:
+        observation_points.append(institution_view[0]["desc"])
+    if hotmoney_view:
+        observation_points.append(hotmoney_view[0]["desc"])
+    if pattern_view:
+        observation_points.append(f"{pattern_view[0]['pattern']}：{pattern_view[0]['desc']}")
+    if risk_alert:
+        observation_points.append(f"风险：{risk_alert[0]['desc']}")
+    observation_points = observation_points[:4]
+
+    summary_parts = [
+        f"【结论】{decision_summary}",
+        f"【计划】{entry_text}",
+        f"【风险】{risk_brief}，跌破 {fmt_level(stop_level)} 需收缩仓位。",
+    ]
+
+    institution_order = {"strong": 0, "medium": 1, "light": 2, "neutral": 3, "weak": 4, "warning": 5, "bearish": 6}
+    hotmoney_order = {"extreme": 0, "strong": 1, "medium": 2, "light": 3, "neutral": 4, "weak": 5, "warning": 6, "danger": 7}
+    pattern_order = {"bullish": 0, "reversal_bull": 1, "special": 2, "warning": 3, "reversal_bear": 4}
+
+    institution_sorted = sorted(institution_view, key=lambda x: institution_order.get(x.get("level", "neutral"), 3))
+    hotmoney_sorted = sorted(hotmoney_view, key=lambda x: hotmoney_order.get(x.get("level", "neutral"), 4))
+    pattern_sorted = sorted(pattern_view, key=lambda x: pattern_order.get(x.get("type", "special"), 2))
 
     return {
         "summary": " | ".join(summary_parts),
-        "institution": institution_view,
-        "hotmoney": hotmoney_view,
-        "patterns": pattern_view,
+        "decision": {
+            "score": score,
+            "bias": bias,
+            "action": action,
+            "confidence": confidence,
+            "style": style,
+            "summary": decision_summary,
+        },
+        "trade_plan": {
+            "entry": entry_text,
+            "add": add_text,
+            "reduce": reduce_text,
+            "invalid": invalid_text,
+            "position": _position_text(action, confidence),
+        },
+        "key_levels": key_levels,
+        "observation_points": observation_points,
+        "institution": institution_sorted,
+        "hotmoney": hotmoney_sorted,
+        "patterns": pattern_sorted,
         "risk_alert": risk_alert,
         "technical": {
             "close": close,
@@ -2147,5 +2358,8 @@ def get_professional_commentary_detailed(df: pd.DataFrame, patterns: list) -> di
             "ma10": ma10,
             "ma20": ma20,
             "ma60": ma60,
+            "score": score,
+            "support_1": support_1,
+            "resistance_1": resistance_1,
         }
     }

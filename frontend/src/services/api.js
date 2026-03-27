@@ -101,7 +101,10 @@ export const getBacktestResult = (optimize = true) => apiClient.get('/admin/back
 export const getBacktestGrid = () => apiClient.get('/admin/backtest_grid');
 export const getBacktestWalkforward = (trainDays = 120, testDays = 40) => apiClient.get('/admin/backtest_walkforward', { params: { train_days: trainDays, test_days: testDays } });
 export const getMainlineHistory = (days = 30) => apiClient.get('/admin/mainline_history', { params: { days } });
-export const getWatchlistRealtime = (codes, src = 'sina') => apiClient.get('/admin/watchlist/realtime', { params: { codes, src } });
+export const getWatchlistRealtime = (codes, src = 'sina', analysisDepth = 'compact') =>
+  apiClient.get('/admin/watchlist/realtime', { params: { codes, src, analysis_depth: analysisDepth } });
+export const getWatchlistAnalysis = (tsCode, forceRefresh = false) =>
+  apiClient.get(`/admin/watchlist/${tsCode}/analysis`, { params: { force_refresh: forceRefresh } });
 
 // 盯盘管理 (DB)
 export const listWatchlist = () => apiClient.get('/admin/watchlist');

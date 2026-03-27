@@ -7,6 +7,8 @@ import logging
 import os
 import time
 
+from core.config import settings
+
 logger = logging.getLogger(__name__)
 
 # 数据库文件路径: 确保指向项目根目录下的 data 目录
@@ -51,6 +53,16 @@ def _open_shared_connection():
     global _SHARED_CONN
     if _SHARED_CONN is None:
         _SHARED_CONN = duckdb.connect(database=DATABASE_PATH, read_only=False)
+        memory_limit = str(settings.duckdb_memory_limit or "").strip()
+        if memory_limit:
+            _SHARED_CONN.execute(f"SET memory_limit='{memory_limit}'")
+
+        try:
+            threads = max(1, int(settings.duckdb_threads))
+            _SHARED_CONN.execute(f"SET threads={threads}")
+        except (TypeError, ValueError):
+            logger.warning(f"无效 DuckDB threads 配置: {settings.duckdb_threads}")
+
         logger.info(f"DuckDB 共享连接已建立: {DATABASE_PATH}")
     return _SHARED_CONN
 

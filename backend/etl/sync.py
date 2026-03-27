@@ -91,7 +91,10 @@ class SyncEngine:
         # 3. 验证数据完整性
         self._validate_daily_update()
         
-        # 4. 情绪计算
+        # 4. 刷新主线结果
+        self.refresh_mainline_scores(days=5)
+        
+        # 5. 情绪计算
         self.calculate_market_sentiment(days=30)
         
         logger.info("每日收盘数据更新完成")
@@ -151,6 +154,17 @@ class SyncEngine:
     def sync_concept_classification(self):
         """同步概念分类数据"""
         self.concepts_task.sync()
+
+        # 概念库刷新后，顺带回补近期主线落库结果，避免 mainline_scores 长时间停留在旧日期
+        self.refresh_mainline_scores(days=30)
+
+    def refresh_mainline_scores(self, days: int = 5):
+        """重算最近若干交易日主线并落库。"""
+        from strategy.mainline import mainline_analyst
+
+        mainline_analyst.invalidate_cache()
+        refreshed = mainline_analyst.refresh_recent_scores(days=days)
+        logger.info(f"最近 {refreshed} 个交易日的主线评分已刷新")
 
     def calculate_technical_factors(self, trade_date: str):
         """计算指定日期的技术因子
