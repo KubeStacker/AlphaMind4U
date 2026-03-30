@@ -5,8 +5,10 @@
 ### 1. 容器化开发
 
 **代码在Docker容器中运行**，修改文件后：
+- ✅ **应该做**：Codex 直接在主机环境执行命令和编辑文件，不要额外在沙箱里再跑一套开发流程
 - ✅ **应该做**：代码自动同步到容器，uvicorn `--reload` 会自动重载
-- ❌ **不要做**：不需要重启容器、不需要重新编译前端
+- ❌ **不要做**：不需要重启容器、不需要手工 copy 文件到容器
+- ❌ **不要做**：不需要在主机额外重新编译前端，不要为了日常改动执行 `npm run build`
 - ✅ **应该做**：修改后通过 `curl` 调用API验证功能
 - ✅ **应该做**：进入容器验证Python代码可行性（如需要）
 
@@ -108,7 +110,9 @@ curl http://localhost:8000/system/status
 
 - 后端使用**进程级共享DuckDB连接**（单例模式），采用序列化访问
 - **不要**从其他进程直接打开临时DuckDB会话进行常规读取
-- 开发期间进行诊断/查询时，建议使用**HTTP API + curl**（`/admin/db/query`），而不是直接执行数据库命令
+- **不要**用 Python 脚本直接 `duckdb.connect()` 打开 `jarvis.duckdb` 做诊断查询
+- 开发期间所有数据库诊断/查询，统一走**后端 HTTP API + curl**（优先 `/admin/db/query`）
+- 如果需要验证某段 Python 逻辑，应进入后端容器复用应用环境，而不是在宿主机直接打开 DuckDB 文件
 
 ### 通过API查询数据库
 
@@ -148,13 +152,15 @@ curl -X POST "http://localhost:8000/admin/etl/sentiment?days=365&sync_index=fals
 | `/etl/sentiment` | POST | 情绪分析ETL |
 | `/etl/sync` | POST | 数据同步ETL（支持start_date/end_date） |
 | `/etl/train_kline_patterns` | POST | 训练K线形态 |
+| `/factor/diagnostics` | GET | 因子诊断（IC/RankIC/分层收益，支持行业中性开关） |
 | `/integrity` | GET | 数据完整性检查（含summaries汇总） |
-| `/mainline_history` | GET | 主线历史记录（聚焦近10日主线演变、当前最强/连续主线及Top5个股摘要） |
-| `/mainline/leaders` | GET | 主线及主线下龙头（支持前端按Top5展示，优先近10日持续性方向） |
+| `/mainline_history` | GET | 主线历史记录（聚焦近10日主线演变、当前最强/连续主线及Top5个股摘要，并返回 `display_name` / `focus_tags` / `driver_summary` 等细分驱动字段） |
+| `/mainline/leaders` | GET | 主线及主线下龙头（支持前端按Top5展示，优先近10日持续性方向，剔除北交所，并按趋势先行/资金追踪/热度/题材命中综合评分，返回 `display_sector` / `focus_tags` / `driver_summary`） |
 | `/market/suggestion` | GET | 市场建议 |
 | `/market_sentiment` | GET | 市场情绪 |
+| `/portfolio/recommendation` | GET | 组合建议（regime + theme + stock rank + position sizing） |
 | `/sentiment/preview` | GET | 情绪预览 |
-| `/stock/analyze` | POST | 个股AI分析（摘要驱动、结论优先、返回更短） |
+| `/stock/analyze` | POST | 个股AI分析（摘要驱动、结论优先、返回更短，并带入定位与关键点位定义） |
 | `/stock/search` | GET | 股票搜索（支持拼音首字母） |
 | `/stock/{ts_code}/kline` | GET | 股票K线数据（交易日且日线未落库时会补当日临时 bar） |
 | `/stock/{ts_code}/mainline_analysis` | GET | 个股主线归属分析（返回 `mapped_sector` / `is_mainline` 等） |
@@ -178,7 +184,7 @@ curl -X POST "http://localhost:8000/admin/etl/sentiment?days=365&sync_index=fals
 | `/watchlist` | GET | 当前登录用户的关注列表 |
 | `/watchlist` | POST | 为当前登录用户添加关注 |
 | `/watchlist/realtime` | GET | 当前登录用户的实时关注数据（支持 `analysis_depth=compact|full`，交易日优先展示当日快照，高频轮询推荐 `compact`） |
-| `/watchlist/{ts_code}/analysis` | GET | 当前登录用户自选内单只股票的深度分析（详情弹窗按需加载） |
+| `/watchlist/{ts_code}/analysis` | GET | 当前登录用户自选内单只股票的深度分析（详情弹窗按需加载，返回 `classification` / `level_methodology` / `key_levels[*].note`） |
 | `/watchlist/{ts_code}` | DELETE | 删除当前登录用户的关注 |
 
 ## 代码风格指南
@@ -264,6 +270,7 @@ curl -X POST "http://localhost:8000/admin/etl/sentiment?days=365&sync_index=fals
 - `calendar_task`
 - `concepts_task`
 - `daily_price_task`
+- `factor_data_task`
 - `financials_task`
 - `fx_task`
 - `margin_task`
@@ -284,6 +291,10 @@ curl -X POST "http://localhost:8000/admin/etl/sentiment?days=365&sync_index=fals
 - `users`
 - `stock_basic`（包含pinyin和pinyin_abbr字段支持拼音搜索）
 - `daily_price`
+- `stock_daily_basic`
+- `stock_index_member_all`
+- `stock_express`
+- `stock_factor_daily`
 - `stock_concepts`
 - `stock_concept_details`
 - `stock_moneyflow`
@@ -302,16 +313,23 @@ curl -X POST "http://localhost:8000/admin/etl/sentiment?days=365&sync_index=fals
 
 - DuckDB有并发限制——建议基于API读取（`curl /admin/db/query`），避免进程外直接数据库访问
 - 主线分析会对过细概念做宽主题归并，并过滤预增、次新、地域国改等事件噪声，避免把短期标签误判为主线
-- 主线映射当前会把 `stock_basic.industry` 作为全行业锚点，并对同方向的重复概念做衰减，减少“相关概念堆叠”造成的误判
+- 主线映射当前会把 `stock_basic.industry` 作为全行业锚点，并对同方向的重复概念做衰减；但当基础行业只是 `化工材料` / `电子硬件` 这类上游宽口径、而概念强证据明显指向更高权重下游方向时，会允许概念主导重分类，减少把 `鼎龙股份` 这类“传统行业口径 + 半导体材料转型”误压回原行业
+- 主线龙头评分当前会剔除北交所标的，不再按单日涨幅直接排队；更强调近10日趋势先行、持续资金跟踪、成交热度和细分题材命中度
 - 通信链当前已拆分为 `光通信` / `通信网络` / `算力基建`，避免把 `中际旭创`、`烽火通信` 这类不同子方向压成同一主线
-- Dashboard 首页当前拆成“情绪驾驶舱 + 主线作战板”，并与 Watchlist 保持同一套克制风格：情绪区顶部收成摘要条和条目式结论，再下钻到更短的情绪趋势图；主线最多展示 3 条，并以紧凑行列表呈现，板块内 Top5 龙头默认折叠，避免首页信息过载
+- Dashboard 首页当前拆成“情绪驾驶舱 + 主线作战板”，并与 Watchlist 保持同一套克制风格：情绪区头部直接输出结论，不再拆单独标题，也不重复展示日期/分区标签，只负责节奏、仓位、进攻方式和风控；“预测情绪”改为按钮触发弹窗参考，不在首页固定占位；主线区只负责方向优先级和龙头观察，主体最多展示 3 条主线，顶部只保留轮动正文，Top5 龙头改为在左侧方向卡片内按点击懒加载展开，避免右侧信息堆叠和首屏重复计算
+- Dashboard 内按钮触发的新内容需要使用固定宽度、固定分栏和占位容器，避免回测弹窗、诊断结果或异步内容加载时出现挤压、拉伸或表格畸形
 - Dashboard 配色当前采用低饱和冷暖分区：情绪区偏暖色、主线区偏冷色，只做轻微层次变化，不使用高饱和装饰色块
 - Watchlist 当前拆成“持仓跟踪 + 观察列表”两段：非持仓自选自动归入观察列表，列表默认只展示结论不展示 10D 历史，顶部不再单独放汇总卡；出现“试错 / 主动进攻”时需标红浮出，专注模式只展示持仓股
 - 当前 `concepts_task` 已支持“`short token` 优先同花顺、失败回退 Tushare concept/concept_detail”；若库内 `stock_concepts.src` 只有 `ts`，说明目前并未拿到同花顺概念成分
+- 概念同步当前采用 staging + 原子发布：先写入 `stock_concepts__staging` / `stock_concept_details__staging`，校验通过后再一次性覆盖正式表，避免刷新过程中主线/龙头接口读到半成品
+- 因子层当前新增 `stock_daily_basic` / `stock_index_member_all` / `stock_express` / `stock_factor_daily`：`/admin/etl/sync` 支持 `daily_basic` / `index_members` / `express` / `factors`，并把换手率、量比、估值、资金和综合分回写到 `daily_price.factors`
 - 高频盯盘列表请优先调用 `/admin/watchlist/realtime?analysis_depth=compact`，详情再单独请求 `/admin/watchlist/{ts_code}/analysis`；若今日日线尚未 ETL 入库，接口仍会优先返回当日实时/收盘后快照，`/admin/stock/{ts_code}/kline` 也会补一根当日临时 bar
 - 自选盯盘接口现按当前登录用户隔离，调用 `/admin/watchlist*` 时需携带 `Authorization: Bearer <token>`
 - 新增自选仅允许 `stock_basic` 中存在的代码；遗留无效代码会以空占位返回，便于前端清理，不再阻塞其他股票刷新
-- `/admin/stock/analyze` 默认使用压缩后的行情/资金/市场摘要构造提示词，不再注入关联个股推荐段；自定义模板优先使用 `{stock_snapshot}`、`{capital_flow_snapshot}`、`{market_context}`、`{holding_context}`、`{commentary_snapshot}`、`{analysis_snapshot}`
+- `/admin/stock/analyze` 默认使用压缩后的行情/资金/市场摘要构造提示词，不再注入关联个股推荐段；`{commentary_snapshot}` 会带入个股定位、支撑/压力定义与关键位，自定义模板优先使用 `{stock_snapshot}`、`{capital_flow_snapshot}`、`{market_context}`、`{holding_context}`、`{commentary_snapshot}`、`{analysis_snapshot}`
+- `/admin/etl/sentiment?sync_index=true` 当前复用 `sync_core_market_indices`，`/admin/system/trigger_daily_sync` 复用 `perform_daily_data_update`，不要再调用旧的 `sync_core_indices` / `sync_daily_update`
+- `stock_income` / `stock_fina_indicator` 已纳入 `db/schema.py` 初始化；`/admin/data/day_status` 与 `/admin/integrity` 对 `daily_price` / `stock_moneyflow` / `stock_margin` 统一使用 4000 条阈值判定交易日数据完整性
+- `/admin/factor/diagnostics` 提供 `factor_score` / `trend_score` / `quality_score` 等因子的 IC、RankIC 和分层收益；`/admin/portfolio/recommendation` 则把情绪仓位、主线方向、横截面因子和相关性约束收口成组合建议
 - 使用任务队列（`/admin/tasks/status`）处理长时间运行的操作
 - Tushare API有限流——使用tenacity实现重试逻辑
 - 市场数据在交易时间后（上海时间16:00+）更新
@@ -330,8 +348,8 @@ curl -X POST "http://localhost:8000/admin/etl/sentiment?days=365&sync_index=fals
 - `detect_all_patterns(df)`：在DataFrame上运行所有形态识别
 - `get_latest_signals(df)`：提取最新信号及置信度分数
 - `PatternRecognizer`：兼容旧版接口的形态识别类
-- `get_professional_commentary(df, patterns)`：生成分析评论
-- `get_professional_commentary_detailed(df, patterns)`：生成结构化专业点评，返回 `decision` / `trade_plan` / `key_levels` / `observation_points`
+- `get_professional_commentary(df, patterns, context=None)`：生成分析评论
+- `get_professional_commentary_detailed(df, patterns, context=None)`：生成结构化专业点评，返回 `decision` / `trade_plan` / `key_levels` / `level_methodology` / `classification` / `observation_points`
 
 ### 支持的形态
 

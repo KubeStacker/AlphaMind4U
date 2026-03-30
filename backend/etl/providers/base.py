@@ -46,6 +46,17 @@ class DataProvider(ABC):
         pass
 
     @abstractmethod
+    def daily_basic(
+        self,
+        trade_date: str = None,
+        ts_code: str = None,
+        start_date: str = None,
+        end_date: str = None,
+    ) -> pd.DataFrame:
+        """获取股票日频基础指标。"""
+        pass
+
+    @abstractmethod
     def index_daily(self, ts_code: str, start_date: str, end_date: str) -> pd.DataFrame:
         """ 获取指数日线 """
         pass
@@ -73,4 +84,19 @@ class DataProvider(ABC):
     @abstractmethod
     def fina_indicator(self, ts_code: str) -> pd.DataFrame:
         """ 获取财务指标 """
+        pass
+
+    @abstractmethod
+    def index_member_all(self, is_new: str = "Y") -> pd.DataFrame:
+        """获取申万行业成分与层级归属。"""
+        pass
+
+    @abstractmethod
+    def express(
+        self,
+        ts_code: str = None,
+        start_date: str = None,
+        end_date: str = None,
+    ) -> pd.DataFrame:
+        """获取业绩快报数据。"""
         pass

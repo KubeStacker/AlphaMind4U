@@ -3,6 +3,7 @@
 import json
 import logging
 import math
+import re
 import threading
 import time
 from collections import OrderedDict
@@ -44,6 +45,10 @@ def _normalize_ts_code(code: str) -> str:
         return f"{code}.BJ"
     return code
 
+
+def _is_beijing_stock(code: Any) -> bool:
+    return str(code or "").upper().endswith(".BJ")
+
 def _safe_float(v, default=None):
     """安全转换为浮点数"""
     try:
@@ -55,6 +60,194 @@ def _safe_float(v, default=None):
         return f
     except:
         return default
+
+
+def _clean_theme_token(value: Any) -> str:
+    cleaned = str(value or "").strip()
+    if not cleaned:
+        return ""
+    cleaned = cleaned.replace("_THS", "")
+    cleaned = cleaned.replace("（", "(").replace("）", ")")
+    for token in ("概念股", "概念", "题材", "板块", "指数", "产业链", "同花顺"):
+        cleaned = cleaned.replace(token, "")
+    cleaned = re.sub(r"[\s/,_\\-]+", "", cleaned)
+    return cleaned.strip().upper()
+
+
+def _count_true_streak(flags: list[bool]) -> int:
+    streak = 0
+    for flag in reversed(flags):
+        if flag:
+            streak += 1
+        else:
+            break
+    return streak
+
+
+def _fetch_recent_trade_dates(trade_date: str, limit: int = 10) -> list[str]:
+    date_df = fetch_df(
+        """
+        SELECT trade_date
+        FROM daily_price
+        WHERE trade_date <= ?
+        GROUP BY trade_date
+        HAVING COUNT(*) > 1000
+        ORDER BY trade_date DESC
+        LIMIT ?
+        """,
+        params=[trade_date, max(1, int(limit))],
+    )
+    if date_df.empty:
+        return []
+    return [
+        pd.to_datetime(item).strftime("%Y-%m-%d")
+        for item in sorted(pd.to_datetime(date_df["trade_date"]).tolist())
+    ]
+
+
+def _load_sector_recent_metrics(sector_codes: list[str], trade_date: str, lookback: int = 10) -> dict[str, dict[str, Any]]:
+    codes = [code for code in sector_codes if code and not _is_beijing_stock(code)]
+    if not codes:
+        return {}
+
+    recent_dates = _fetch_recent_trade_dates(trade_date, limit=lookback)
+    if not recent_dates:
+        return {}
+
+    date_placeholders = ",".join(["?"] * len(recent_dates))
+    code_placeholders = ",".join(["?"] * len(codes))
+    history_df = fetch_df(
+        f"""
+        SELECT d.trade_date, d.ts_code, d.pct_chg, d.amount,
+               COALESCE(m.net_mf_amount, 0) AS net_mf_amount
+        FROM daily_price d
+        LEFT JOIN stock_moneyflow m
+          ON d.ts_code = m.ts_code AND d.trade_date = m.trade_date
+        WHERE d.trade_date IN ({date_placeholders})
+          AND d.ts_code IN ({code_placeholders})
+        ORDER BY d.ts_code, d.trade_date
+        """,
+        params=[*recent_dates, *codes],
+    )
+    if history_df.empty:
+        return {}
+
+    metrics: dict[str, dict[str, Any]] = {}
+    review_days = max(1, len(recent_dates))
+    recent_window = min(3, review_days)
+    for ts_code, rows in history_df.groupby("ts_code"):
+        rows = rows.sort_values("trade_date").reset_index(drop=True)
+        pct_list = [_safe_float(item, 0.0) or 0.0 for item in rows["pct_chg"].tolist()]
+        amount_list = [_safe_float(item, 0.0) or 0.0 for item in rows["amount"].tolist()]
+        flow_list = [_safe_float(item, 0.0) or 0.0 for item in rows["net_mf_amount"].tolist()]
+
+        strong_flags = [pct >= 3.0 for pct in pct_list]
+        positive_flow_flags = [flow > 0 for flow in flow_list]
+        active_days = int(sum(strong_flags))
+        recent_active_days = int(sum(strong_flags[-recent_window:])) if strong_flags else 0
+        strong_streak = _count_true_streak(strong_flags)
+        positive_flow_days = int(sum(positive_flow_flags))
+        positive_flow_streak = _count_true_streak(positive_flow_flags)
+        total_amount = float(sum(amount_list))
+        total_positive_inflow = float(sum(max(flow, 0.0) for flow in flow_list))
+        total_net_inflow = float(sum(flow_list))
+        first_strong_idx = next((idx for idx, flag in enumerate(strong_flags) if flag), None)
+        trend_pioneer_score = 0.0
+        if first_strong_idx is not None:
+            trend_pioneer_score = round((review_days - first_strong_idx) / review_days * 100, 2)
+
+        metrics[str(ts_code)] = {
+            "active_days": active_days,
+            "recent_active_days": recent_active_days,
+            "strong_streak": strong_streak,
+            "limit_ups_10d": int(sum(1 for pct in pct_list if pct >= 9.5)),
+            "positive_flow_days": positive_flow_days,
+            "flow_positive_streak": positive_flow_streak,
+            "flow_total_inflow": total_positive_inflow,
+            "flow_net_total": total_net_inflow,
+            "flow_inflow_ratio": round(total_net_inflow / total_amount, 4) if total_amount > 0 else 0.0,
+            "latest_net_mf_amount": float(flow_list[-1]) if flow_list else 0.0,
+            "total_amount_10d": total_amount,
+            "latest_amount": float(amount_list[-1]) if amount_list else 0.0,
+            "trend_pioneer_score": trend_pioneer_score,
+            "avg_pct": round(sum(pct_list) / max(len(pct_list), 1), 2),
+            "max_pct": round(max(pct_list), 2) if pct_list else 0.0,
+        }
+
+    return metrics
+
+
+def _load_sector_theme_hits(
+    sector_codes: list[str],
+    sector_name: str,
+    focus_tags: Optional[list[str]] = None,
+) -> dict[str, dict[str, Any]]:
+    codes = [code for code in sector_codes if code and not _is_beijing_stock(code)]
+    if not codes:
+        return {}
+
+    theme_terms = [sector_name, *(focus_tags or [])]
+    keyword_map: dict[str, str] = {}
+    for item in theme_terms:
+        cleaned = _clean_theme_token(item)
+        if cleaned and cleaned not in keyword_map:
+            keyword_map[cleaned] = str(item)
+    if not keyword_map:
+        return {}
+
+    placeholders = ",".join(["?"] * len(codes))
+    concept_df = fetch_df(
+        f"""
+        SELECT ts_code, concept_name
+        FROM stock_concept_details
+        WHERE ts_code IN ({placeholders})
+          AND concept_name IS NOT NULL
+        """,
+        params=codes,
+    )
+    industry_df = fetch_df(
+        f"""
+        SELECT ts_code, industry
+        FROM stock_basic
+        WHERE ts_code IN ({placeholders})
+        """,
+        params=codes,
+    )
+
+    candidate_map: dict[str, list[str]] = {code: [] for code in codes}
+    if not concept_df.empty:
+        for _, row in concept_df.iterrows():
+            code = str(row.get("ts_code") or "").strip()
+            concept_name = str(row.get("concept_name") or "").strip()
+            if code and concept_name:
+                candidate_map.setdefault(code, []).append(concept_name)
+    if not industry_df.empty:
+        for _, row in industry_df.iterrows():
+            code = str(row.get("ts_code") or "").strip()
+            industry_name = str(row.get("industry") or "").strip()
+            if code and industry_name:
+                candidate_map.setdefault(code, []).append(industry_name)
+
+    result: dict[str, dict[str, Any]] = {}
+    for code, raw_terms in candidate_map.items():
+        hits: list[str] = []
+        seen_hits: set[str] = set()
+        for raw_term in raw_terms:
+            cleaned_term = _clean_theme_token(raw_term)
+            if not cleaned_term:
+                continue
+            for keyword, display_name in keyword_map.items():
+                if keyword in cleaned_term or cleaned_term in keyword:
+                    if display_name not in seen_hits:
+                        hits.append(display_name)
+                        seen_hits.add(display_name)
+                    break
+        result[code] = {
+            "theme_hit_count": len(hits),
+            "theme_hit_names": hits[:3],
+        }
+
+    return result
 
 
 def _sanitize_json_value(val: Any) -> Any:
@@ -387,7 +580,11 @@ def _build_watch_analysis(
 
         latest_recognizer = PatternRecognizer(df)
         latest_patterns = latest_recognizer.recognize()
-        latest_detail = get_professional_commentary_detailed(df, latest_patterns)
+        latest_detail = get_professional_commentary_detailed(
+            df,
+            latest_patterns,
+            context={"ts_code": ts_code},
+        )
 
         history = _build_watch_history(df)
         latest_row = df.iloc[-1]
@@ -466,10 +663,10 @@ class HoldingUpdate(BaseModel):
 def _fetch_user_watchlist_df(user_id: int) -> pd.DataFrame:
     return fetch_df(
         """
-        SELECT ts_code, name, remark, created_at
+        SELECT ts_code, name, remark, sort_order, created_at
         FROM watchlist
         WHERE user_id = ?
-        ORDER BY created_at DESC
+        ORDER BY sort_order, created_at DESC
         """,
         (user_id,),
     )
@@ -481,7 +678,7 @@ def _fetch_user_watchlist_codes(user_id: int) -> list[str]:
         SELECT ts_code
         FROM watchlist
         WHERE user_id = ?
-        ORDER BY created_at DESC
+        ORDER BY sort_order, created_at DESC
         """,
         (user_id,),
     )
@@ -529,10 +726,10 @@ async def add_to_watchlist(stock: WatchlistStock, request: Request):
         with get_db_connection() as con:
             con.execute(
                 """
-                INSERT OR REPLACE INTO watchlist (user_id, ts_code, name, remark)
-                VALUES (?, ?, ?, ?)
+                INSERT OR REPLACE INTO watchlist (user_id, ts_code, name, remark, sort_order)
+                VALUES (?, ?, ?, ?, COALESCE((SELECT MAX(sort_order) FROM watchlist WHERE user_id = ?), 0) + 1)
                 """,
-                (user_id, ts_code, stock.name, stock.remark)
+                (user_id, ts_code, stock.name, stock.remark, user_id)
             )
         return {"status": "success", "message": f"已添加 {ts_code}"}
     except HTTPException:
@@ -552,6 +749,25 @@ async def remove_from_watchlist(ts_code: str, request: Request):
                 (user_id, norm_code),
             )
         return {"status": "success", "message": f"已从自选删除 {norm_code}"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+class WatchlistReorder(BaseModel):
+    codes: list[str]
+
+@router.put("/watchlist/reorder")
+async def reorder_watchlist(body: WatchlistReorder, request: Request):
+    """调整自选股排序"""
+    user_id = await get_current_user_id(request)
+    try:
+        with get_db_connection() as con:
+            for idx, code in enumerate(body.codes):
+                norm = _normalize_ts_code(code)
+                con.execute(
+                    "UPDATE watchlist SET sort_order = ? WHERE user_id = ? AND ts_code = ?",
+                    (idx + 1, user_id, norm),
+                )
+        return {"status": "success", "message": "排序已更新"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -795,7 +1011,7 @@ def search_stocks(q: str = "", limit: int = 10):
             limit = int(limit)
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="limit 必须为整数")
-        limit = max(1, min(limit, 5000))
+        limit = max(1, min(limit, 10000))
 
         # 空查询：返回所有股票（用于前端缓存）
         if not q:
@@ -1211,7 +1427,9 @@ def get_mainline_leaders(
         from etl.utils.scoring import (
             calc_mainline_leader_score,
             calc_entry_stop_target,
-            get_signal_level
+            get_signal_level,
+            calc_sector_position_value,
+            generate_detailed_reason,
         )
         import json
         
@@ -1241,6 +1459,7 @@ def get_mainline_leaders(
         for item in review_10d.get('mainlines', []) or []:
             mainline_result.append({
                 'name': item.get('name', ''),
+                'display_name': item.get('display_name') or item.get('name', ''),
                 'score': item.get('latest_score', 0),
                 'limit_ups': item.get('max_limit_ups', 0),
                 'breadth': item.get('latest_breadth', 0),
@@ -1248,6 +1467,9 @@ def get_mainline_leaders(
                 'top_stocks': item.get('leaders', []),
                 'active_days': item.get('active_days', 0),
                 'consecutive_days': item.get('consecutive_days', 0),
+                'focus_tags': item.get('focus_tags', []),
+                'driver_summary': item.get('driver_summary', ''),
+                'driver_details': item.get('driver_details', []),
             })
 
         if not mainline_result:
@@ -1256,6 +1478,7 @@ def get_mainline_leaders(
                     latest = series['data'][-1] if series['data'] else {}
                     mainline_result.append({
                         'name': series.get('name', ''),
+                        'display_name': series.get('name', ''),
                         'score': latest.get('value', 0),
                         'limit_ups': latest.get('limit_ups', 0),
                         'breadth': latest.get('breadth', 0),
@@ -1263,6 +1486,9 @@ def get_mainline_leaders(
                         'top_stocks': latest.get('top_stocks', []),
                         'active_days': 0,
                         'consecutive_days': 0,
+                        'focus_tags': [],
+                        'driver_summary': '',
+                        'driver_details': [],
                     })
         
         # 按分数排序，取前5
@@ -1271,10 +1497,11 @@ def get_mainline_leaders(
         
         if not mainline_result:
             return {"status": "success", "message": "无主线板块", "mainlines": []}
-        
+
         # 获取市场环境
         market_env = get_market_environment(trade_date_str)
-        
+        stock_map_df = mainline_analyst.get_stock_mainline_map()
+
         # 构建主线板块数据
         mainlines_data = []
         
@@ -1286,17 +1513,37 @@ def get_mainline_leaders(
                 continue
             
             # 获取板块内股票
-            sector_stocks = get_sector_stocks(sector_name, trade_date_str)
+            sector_stocks = get_sector_stocks(
+                sector_name,
+                trade_date_str,
+                stock_map_df=stock_map_df,
+                focus_tags=mainline.get('focus_tags', []),
+            )
             
             if len(sector_stocks) < 5:
                 continue
+
+            ranked_sector_stocks = sorted(
+                sector_stocks,
+                key=lambda item: (
+                    calc_sector_position_value(item),
+                    _safe_float(item.get('pct_chg'), 0) or 0,
+                    _safe_float(item.get('amount'), 0) or 0,
+                ),
+                reverse=True,
+            )
+            sector_rank_map = {
+                item.get('ts_code'): idx + 1
+                for idx, item in enumerate(ranked_sector_stocks)
+                if item.get('ts_code')
+            }
             
             # 计算每只股票的龙头评分
             leaders = []
             
             for stock in sector_stocks:
                 # 计算综合评分
-                score, reason = calc_mainline_leader_score(stock, market_env, sector_stocks)
+                score, reason, factor_scores = calc_mainline_leader_score(stock, market_env, sector_stocks)
                 
                 if score < min_score:
                     continue
@@ -1308,8 +1555,10 @@ def get_mainline_leaders(
                 signal = get_signal_level(score)
                 
                 # 获取板块内排名
-                sorted_by_pct = sorted(sector_stocks, key=lambda x: x.get('pct_chg', 0), reverse=True)
-                sector_rank = next((i + 1 for i, s in enumerate(sorted_by_pct) if s.get('ts_code') == stock['ts_code']), len(sorted_by_pct))
+                sector_rank = sector_rank_map.get(stock['ts_code'], len(sector_stocks))
+                
+                # 生成详细的入选原因
+                detailed = generate_detailed_reason(stock, factor_scores, score, sector_rank)
                 
                 leaders.append({
                     'ts_code': stock.get('ts_code'),
@@ -1329,7 +1578,13 @@ def get_mainline_leaders(
                     'risk_reward': entry_stop_target.get('risk_reward'),
                     'max_loss_pct': entry_stop_target.get('max_loss_pct'),
                     'target_gain_pct': entry_stop_target.get('target_gain_pct'),
-                    'signal': signal,
+                    # 梯队信息
+                    'tier': detailed.get('tier', ''),
+                    'tier_label': detailed.get('tier_label', ''),
+                    'strategy': detailed.get('strategy', ''),
+                    'detailed_reason': detailed.get('summary', ''),
+                    'reason_details': detailed.get('details', []),
+                    'advantages': detailed.get('advantages', []),
                 })
             
             # 按评分排序
@@ -1348,12 +1603,16 @@ def get_mainline_leaders(
 
             mainlines_data.append({
                 'sector': sector_name,
+                'display_sector': mainline.get('display_name') or sector_name,
                 'strength': mainline.get('score', 0),
                 'limit_ups': mainline.get('limit_ups', 0),
                 'stock_count': mainline.get('stock_count', 0),
                 'active_days': mainline.get('active_days', 0),
                 'consecutive_days': mainline.get('consecutive_days', 0),
                 'resonance': resonance,
+                'focus_tags': mainline.get('focus_tags', []),
+                'driver_summary': mainline.get('driver_summary', ''),
+                'driver_details': mainline.get('driver_details', []),
                 'leaders': leaders,
             })
         
@@ -1391,7 +1650,10 @@ def get_stock_mainline_analysis(ts_code: str):
             calc_risk_reward,
             calc_entry_stop_target,
             get_signal_level,
-            calc_mainline_leader_score
+            calc_mainline_leader_score,
+            calc_sector_position_value,
+            calc_trend_leadership_score,
+            calc_theme_fit_score,
         )
         import json
         
@@ -1442,6 +1704,9 @@ def get_stock_mainline_analysis(ts_code: str):
         
         # 获取主线板块
         mainline_result = mainline_analyst.analyze(days=3, limit=10, trade_date=trade_date_str)
+        history_payload = mainline_analyst.get_history(days=10) or {}
+        review_mainlines = (((history_payload.get('analysis') or {}).get('review_10d') or {}).get('mainlines') or [])
+        review_map = {item.get('name', ''): item for item in review_mainlines if item.get('name')}
         stock_map_df = mainline_analyst.get_stock_mainline_map(ts_codes=[norm_code])
         mapped_sector = (
             stock_map_df.iloc[0]['mapped_name']
@@ -1458,11 +1723,27 @@ def get_stock_mainline_analysis(ts_code: str):
             (ml for ml in (mainline_result or []) if ml.get('name', '') == mapped_sector),
             None
         )
+        if mapped_sector and review_map.get(mapped_sector):
+            belong_sector = review_map.get(mapped_sector)
 
         # 获取板块内其他股票
         sector_stocks = []
+        focus_tags = []
         if belong_sector:
-            sector_stocks = get_sector_stocks(belong_sector.get('name', ''), trade_date_str)
+            focus_tags = belong_sector.get('focus_tags', []) or []
+        elif mapped_sector and review_map.get(mapped_sector):
+            focus_tags = review_map.get(mapped_sector, {}).get('focus_tags', []) or []
+
+        if mapped_sector:
+            sector_stocks = get_sector_stocks(
+                mapped_sector,
+                trade_date_str,
+                focus_tags=focus_tags,
+            )
+        sector_snapshot = next(
+            (item for item in sector_stocks if item.get('ts_code') == norm_code),
+            {},
+        )
         
         # 获取资金流向数据
         flow_df = fetch_df(f"""
@@ -1501,34 +1782,45 @@ def get_stock_mainline_analysis(ts_code: str):
             'turnover_rate': 0,  # 需要计算
             'total_mv': factors.get('total_mv', 0),
         }
+        for field in (
+            'industry',
+            'latest_net_mf_amount',
+            'flow_positive_streak',
+            'positive_flow_days',
+            'flow_inflow_ratio',
+            'active_days',
+            'recent_active_days',
+            'strong_streak',
+            'limit_ups_10d',
+            'trend_pioneer_score',
+            'total_amount_10d',
+            'theme_hit_count',
+            'theme_hit_names',
+            'amount_rank_pct',
+            'total_amount_rank_pct',
+            'volume_ratio',
+            'turnover_rate',
+            'big_order_ratio',
+        ):
+            if field in sector_snapshot and sector_snapshot.get(field) not in (None, ""):
+                stock_data[field] = sector_snapshot.get(field)
+        if sector_snapshot.get('flow_total_inflow') not in (None, ""):
+            stock_data['flow_total_inflow'] = float(sector_snapshot.get('flow_total_inflow', 0) or 0)
         
-        # 计算量比
-        vol_ma5 = factors.get('vol_ma5', stock_data['vol'])
-        if vol_ma5 > 0:
-            stock_data['volume_ratio'] = round(stock_data['vol'] / vol_ma5, 2)
+        # 优先使用因子层写回的真实 volume_ratio，缺失时再回退到 vol/vol_ma5
+        factor_volume_ratio = _safe_float(factors.get('volume_ratio'))
+        if factor_volume_ratio and factor_volume_ratio > 0:
+            stock_data['volume_ratio'] = round(factor_volume_ratio, 2)
+        else:
+            vol_ma5 = _safe_float(factors.get('vol_ma5'), stock_data['vol']) or 0
+            if vol_ma5 > 0:
+                stock_data['volume_ratio'] = round(stock_data['vol'] / vol_ma5, 2)
         
         # 获取市场环境
         market_env = get_market_environment(trade_date_str)
         
         # 计算综合评分
-        score, reason = calc_mainline_leader_score(stock_data, market_env, sector_stocks)
-        
-        # 计算各因子评分
-        from etl.utils.scoring import (
-            calc_sector_resonance as calc_resonance,
-            calc_breakout_score,
-            calc_flow_score as calc_flow,
-            calc_sector_rank_score,
-            calc_volume_match_score
-        )
-        
-        factor_scores = {
-            'sector_resonance': calc_resonance(stock_data, sector_stocks),
-            'breakout': calc_breakout_score(stock_data),
-            'capital_flow': calc_flow(stock_data),
-            'sector_rank': calc_sector_rank_score(stock_data, sector_stocks),
-            'volume_match': calc_volume_match_score(stock_data),
-        }
+        score, reason, factor_scores = calc_mainline_leader_score(stock_data, market_env, sector_stocks)
         
         # 计算买入区间、止损、目标价
         entry_stop_target = calc_entry_stop_target(stock_data)
@@ -1540,8 +1832,19 @@ def get_stock_mainline_analysis(ts_code: str):
         sector_rank = None
         sector_total = len(sector_stocks)
         if sector_stocks:
-            sorted_by_pct = sorted(sector_stocks, key=lambda x: x.get('pct_chg', 0), reverse=True)
-            sector_rank = next((i + 1 for i, s in enumerate(sorted_by_pct) if s.get('ts_code') == norm_code), sector_total)
+            sorted_by_position = sorted(
+                sector_stocks,
+                key=lambda item: (
+                    calc_sector_position_value(item),
+                    _safe_float(item.get('pct_chg'), 0) or 0,
+                    _safe_float(item.get('amount'), 0) or 0,
+                ),
+                reverse=True,
+            )
+            sector_rank = next(
+                (i + 1 for i, s in enumerate(sorted_by_position) if s.get('ts_code') == norm_code),
+                sector_total,
+            )
         
         return {
             "status": "success",
@@ -1577,7 +1880,6 @@ def get_stock_mainline_analysis(ts_code: str):
             "signal": {
                 "score": score,
                 "reason": reason,
-                **signal
             }
         }
         
@@ -1641,14 +1943,19 @@ def get_market_environment(trade_date: str) -> Dict[str, Any]:
         return {'trend': 'neutral', 'sentiment': 50, 'suggestion': '数据异常'}
 
 
-def get_sector_stocks(sector_name: str, trade_date: str) -> list:
+def get_sector_stocks(
+    sector_name: str,
+    trade_date: str,
+    stock_map_df: pd.DataFrame | None = None,
+    focus_tags: Optional[list[str]] = None,
+) -> list:
     """
     获取板块内股票数据
     """
     try:
         from strategy.mainline.analyst import mainline_analyst
 
-        stock_map = mainline_analyst.get_stock_mainline_map()
+        stock_map = stock_map_df.copy() if stock_map_df is not None else mainline_analyst.get_stock_mainline_map()
         if stock_map.empty:
             return []
 
@@ -1658,13 +1965,17 @@ def get_sector_stocks(sector_name: str, trade_date: str) -> list:
             .drop_duplicates()
             .tolist()
         )
+        sector_codes = [code for code in sector_codes if not _is_beijing_stock(code)]
         if not sector_codes:
             return []
+
+        recent_metrics = _load_sector_recent_metrics(sector_codes, trade_date, lookback=10)
+        theme_hits = _load_sector_theme_hits(sector_codes, sector_name, focus_tags=focus_tags)
 
         placeholders = ",".join(["?"] * len(sector_codes))
         stocks_df = fetch_df(
             f"""
-            SELECT d.ts_code, b.name, d.close, d.pct_chg, d.vol, d.amount, d.factors,
+            SELECT d.ts_code, b.name, b.industry, d.close, d.pct_chg, d.vol, d.amount, d.factors,
                    COALESCE(m.net_mf_amount, 0) AS net_mf_amount
             FROM daily_price d
             LEFT JOIN stock_basic b ON d.ts_code = b.ts_code
@@ -1681,6 +1992,9 @@ def get_sector_stocks(sector_name: str, trade_date: str) -> list:
         
         result = []
         for _, row in stocks_df.iterrows():
+            ts_code = str(row.get('ts_code') or '').strip()
+            if _is_beijing_stock(ts_code):
+                continue
             factors = {}
             try:
                 if row.get('factors'):
@@ -1688,28 +2002,65 @@ def get_sector_stocks(sector_name: str, trade_date: str) -> list:
             except:
                 pass
 
-            volume_ratio = 1.0
+            volume_ratio = _safe_float(factors.get('volume_ratio'), 1.0) or 1.0
             vol_ma5 = _safe_float(factors.get('vol_ma5'))
-            if vol_ma5 and vol_ma5 > 0:
+            if (not volume_ratio or volume_ratio <= 0) and vol_ma5 and vol_ma5 > 0:
                 volume_ratio = round(float(row.get('vol', 0)) / vol_ma5, 2)
+
+            recent = recent_metrics.get(ts_code, {})
+            theme_meta = theme_hits.get(ts_code, {})
             
             result.append({
-                'ts_code': row['ts_code'],
+                'ts_code': ts_code,
                 'name': row.get('name', ''),
+                'industry': row.get('industry', ''),
                 'close': float(row.get('close', 0)),
                 'pct_chg': float(row.get('pct_chg', 0)),
                 'vol': float(row.get('vol', 0)),
                 'amount': float(row.get('amount', 0)),
                 'factors': factors,
                 'net_mf_amount': float(row.get('net_mf_amount', 0)),
+                'latest_net_mf_amount': _safe_float(recent.get('latest_net_mf_amount'), float(row.get('net_mf_amount', 0)) or 0.0) or 0.0,
                 'volume_ratio': volume_ratio,
                 'turnover_rate': _safe_float(factors.get('turnover_rate'), 0) or 0,
-                'flow_continuous_days': 1 if _safe_float(row.get('net_mf_amount'), 0) > 0 else 0,
-                'flow_total_inflow': float(row.get('net_mf_amount', 0)),
+                'flow_continuous_days': int(recent.get('flow_positive_streak', 1 if _safe_float(row.get('net_mf_amount'), 0) > 0 else 0)),
+                'flow_positive_streak': int(recent.get('flow_positive_streak', 0)),
+                'positive_flow_days': int(recent.get('positive_flow_days', 0)),
+                'flow_total_inflow': float(recent.get('flow_total_inflow', row.get('net_mf_amount', 0) or 0)),
+                'flow_inflow_ratio': float(recent.get('flow_inflow_ratio', 0.0)),
                 'big_order_ratio': _safe_float(factors.get('big_order_ratio'), 0.0) or 0.0,
+                'active_days': int(recent.get('active_days', 0)),
+                'recent_active_days': int(recent.get('recent_active_days', 0)),
+                'strong_streak': int(recent.get('strong_streak', 0)),
+                'limit_ups_10d': int(recent.get('limit_ups_10d', 0)),
+                'trend_pioneer_score': float(recent.get('trend_pioneer_score', 0.0)),
+                'avg_pct': float(recent.get('avg_pct', 0.0)),
+                'max_pct': float(recent.get('max_pct', 0.0)),
+                'total_amount_10d': float(recent.get('total_amount_10d', row.get('amount', 0) or 0)),
+                'theme_hit_count': int(theme_meta.get('theme_hit_count', 0)),
+                'theme_hit_names': theme_meta.get('theme_hit_names', []),
                 'is_mainline': True,
                 'sector': sector_name,
+                'mapped_sector': sector_name,
             })
+
+        if not result:
+            return []
+
+        latest_amounts = [max(_safe_float(item.get('amount'), 0) or 0, 0.0) for item in result]
+        total_amounts = [max(_safe_float(item.get('total_amount_10d'), 0) or 0, 0.0) for item in result]
+        latest_sorted = sorted(latest_amounts)
+        total_sorted = sorted(total_amounts)
+        latest_total = max(1, len(latest_sorted))
+        total_total = max(1, len(total_sorted))
+
+        for item in result:
+            latest_amount = max(_safe_float(item.get('amount'), 0) or 0, 0.0)
+            total_amount = max(_safe_float(item.get('total_amount_10d'), 0) or 0, 0.0)
+            latest_rank = sum(1 for value in latest_sorted if value <= latest_amount)
+            total_rank = sum(1 for value in total_sorted if value <= total_amount)
+            item['amount_rank_pct'] = round(latest_rank / latest_total, 4)
+            item['total_amount_rank_pct'] = round(total_rank / total_total, 4)
         
         return result
     except Exception as e:
@@ -1724,22 +2075,39 @@ def build_recent_leader_fallback(sector_stocks: list, review_leaders: list, limi
     if not sector_stocks or not review_leaders:
         return []
 
-    stock_map = {item.get('ts_code'): item for item in sector_stocks if item.get('ts_code')}
+    stock_map = {
+        item.get('ts_code'): item
+        for item in sector_stocks
+        if item.get('ts_code') and not _is_beijing_stock(item.get('ts_code'))
+    }
     fallback = []
     for leader in review_leaders:
         ts_code = leader.get('ts_code')
+        if _is_beijing_stock(ts_code):
+            continue
         stock = stock_map.get(ts_code)
         if not stock:
             continue
+        leader_reason = str(leader.get('leader_reason') or '').strip()
+        if not leader_reason:
+            reason_parts = []
+            if leader.get('active_days'):
+                reason_parts.append(f"近10日强势{leader.get('active_days', 0)}天")
+            if leader.get('recent_active_days'):
+                reason_parts.append(f"最近3日走强{leader.get('recent_active_days', 0)}天")
+            if leader.get('positive_flow_days'):
+                reason_parts.append(f"资金净流入{leader.get('positive_flow_days', 0)}天")
+            theme_hit_names = leader.get('theme_hit_names') or []
+            if theme_hit_names:
+                reason_parts.append(f"题材命中{' / '.join(theme_hit_names[:2])}")
+            if not reason_parts:
+                reason_parts.append(f"最高涨幅{leader.get('max_pct', 0)}%")
+            leader_reason = "，".join(reason_parts)
         fallback.append({
             'ts_code': ts_code,
             'name': stock.get('name', leader.get('name', '')),
             'score': round(float(leader.get('leader_score', 0)), 1),
-            'reason': (
-                f"近10日活跃{leader.get('active_days', 0)}天，"
-                f"最近3日走强{leader.get('recent_active_days', 0)}天，"
-                f"最高涨幅{leader.get('max_pct', 0)}%"
-            ),
+            'reason': leader_reason,
             'sector_rank': 0,
             'sector_total': len(sector_stocks),
             'close': stock.get('close', 0),

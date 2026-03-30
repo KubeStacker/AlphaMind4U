@@ -110,6 +110,7 @@ export const getWatchlistAnalysis = (tsCode, forceRefresh = false) =>
 export const listWatchlist = () => apiClient.get('/admin/watchlist');
 export const addToWatchlist = (stock) => apiClient.post('/admin/watchlist', stock);
 export const removeFromWatchlist = (ts_code) => apiClient.delete(`/admin/watchlist/${ts_code}`);
+export const reorderWatchlist = (codes) => apiClient.put('/admin/watchlist/reorder', { codes });
 
 // 股票日K (含两融)
 export const getStockKline = (ts_code, limit = 200) => apiClient.get(`/admin/stock/${ts_code}/kline`, { params: { limit } });

@@ -71,10 +71,21 @@ Jarvis-Quant
 从 Tushare 采集行情、财务数据：
 
 - **日线/分钟线**: `daily`, `daily_hsgt`
+- **日频基础指标**: `daily_basic`
+- **行业归属**: `index_member_all`
+- **业绩快报**: `express`
 - **财务指标**: `stock_fina_indicator` (推荐), `stock_income`
 - **资金流向**: `stock_moneyflow`
 - **概念板块**: `concept`, `concept_detail`
 - **融资融券**: `margin`, `margin_detail`
+
+### 数据可靠性约束
+
+- 概念同步采用 staging + 原子发布：先写入 `stock_concepts__staging` / `stock_concept_details__staging`，校验通过后再一次性覆盖正式表，避免主线/龙头接口读取半成品
+- `/admin/etl/sentiment?sync_index=true` 统一复用 `sync_core_market_indices`，`/admin/system/trigger_daily_sync` 统一复用 `perform_daily_data_update`
+- `stock_income` / `stock_fina_indicator` 已纳入数据库初始化 schema，新环境不再依赖手工补建
+- `/admin/data/day_status` 与 `/admin/integrity` 对 `daily_price` / `stock_daily_basic` / `stock_moneyflow` / `stock_margin` 使用一致的 4000 条阈值判定交易日完整性
+- 新增 `stock_daily_basic` / `stock_index_member_all` / `stock_express` / `stock_factor_daily` 四张因子层数据表；`daily_price.factors` 会回写换手率、量比、估值、资金和综合因子分，供主线龙头评分直接复用
 
 ### 2. 策略引擎 (三层递进架构)
 
@@ -95,10 +106,11 @@ Jarvis-Quant
 
 ### Dashboard 首页
 
-- **情绪驾驶舱**: 首页顶部先输出“今天怎么做”，把情绪区间、建议仓位、进攻方向、风控底线、盘中预测与统一市场建议压缩成摘要条和条目式结论，再给出更短的情绪趋势图作为证据层
-- **主线作战板**: 首页底部先输出“先盯哪条主线”，按“持续性 + 强度 + 共振”筛出最多 3 条主线，并以紧凑行列表展示主盯/次盯/备选顺序，再按需展开板块内 Top 5 龙头，最后补充近 10 日主线演变图和量化推演结论
+- **情绪驾驶舱**: 首页顶部只负责回答“今天能不能打、打多大”，头部直接输出结论，不再额外拆标题，也不重复展示日期/分区标签；头部样式与主线区保持同一套紧凑规格，下方把市场节奏、建议仓位、进攻方式、风控底线收进固定四格；“预测情绪”改为按钮触发弹窗参考，不再在首页常驻单独结果区
+- **主线作战板**: 首页底部只负责回答“先看什么方向”，按“持续性 + 强度 + 共振”筛出最多 3 条主线；顶部只保留轮动正文，不再额外挂标题和提示文案，龙头样本改为在左侧方向卡片内按点击懒加载展开，减少右侧拥挤和首屏等待
+- **加载稳定性**: Dashboard 内按钮触发的新内容应避免挤压首页主布局；情绪预测改为弹窗参考，主线趋势图和回测诊断保持固定容器，避免异步结果把卡片撑乱
 - **视觉风格**: 保持与 Watchlist 一致的克制商务底色，并用低饱和暖色区分情绪、低饱和冷色区分主线，避免单调但不做花哨装饰
-- **阅读顺序**: 设计目标是让用户打开 Dashboard 后一眼先看完情绪与主线结论，再决定是否下钻图表和龙头细节，不再需要在多个分散卡片之间自行拼接判断
+- **阅读顺序**: 设计目标是先用情绪板定节奏和风险敞口，再用主线板定方向优先级并按需展开龙头样本，减少跨区重复阅读
 
 #### 层级三：个股推荐引擎
 
@@ -165,20 +177,22 @@ Jarvis-Quant
 | `/admin/tasks/status` | GET | 任务队列状态 |
 | `/admin/market_sentiment` | GET | 市场情绪历史 |
 | `/admin/integrity` | GET | 数据完整性报告 |
-| `/admin/stock/analyze` | POST | 个股 AI 分析（摘要驱动、结论优先） |
+| `/admin/stock/analyze` | POST | 个股 AI 分析（摘要驱动、结论优先，并带入定位与关键点位定义） |
 | `/admin/watchlist` | GET/POST | 当前登录用户的自选列表管理 |
 | `/admin/watchlist/{ts_code}` | DELETE | 删除当前登录用户自选 |
 | `/admin/watchlist/realtime` | GET | 当前登录用户的实时自选行情，支持 `analysis_depth=compact|full`，交易日优先展示当日快照 |
-| `/admin/watchlist/{ts_code}/analysis` | GET | 当前登录用户自选内单只股票深度分析 |
+| `/admin/watchlist/{ts_code}/analysis` | GET | 当前登录用户自选内单只股票深度分析（返回 `classification` / `level_methodology` / `key_levels[*].note`） |
 
 ### 策略接口
 
 | 接口 | 方法 | 说明 |
 |------|------|------|
 | `/admin/market/suggestion` | GET | 统一建议 (EOD/盘中) |
-| `/admin/mainline_history` | GET | 主线历史（含近10日主线复盘、当前最强/连续主线与Top5个股摘要） |
-| `/admin/mainline/leaders` | GET | 主线及主线下龙头（支持前端按Top5展示，优先近10日持续性方向） |
+| `/admin/factor/diagnostics` | GET | 因子诊断（IC/RankIC/分层收益，支持行业中性开关） |
+| `/admin/mainline_history` | GET | 主线历史（含近10日主线复盘、当前最强/连续主线与Top5个股摘要，并返回 `display_name` / `focus_tags` / `driver_summary` 等细分驱动字段） |
+| `/admin/mainline/leaders` | GET | 主线及主线下龙头（支持前端按Top5展示，优先近10日持续性方向，剔除北交所，并按趋势先行/资金追踪/热度/题材命中综合评分，返回 `display_sector` / `focus_tags` / `driver_summary`） |
 | `/admin/mainline/preview` | GET | 盘中主线预估 |
+| `/admin/portfolio/recommendation` | GET | 组合建议（regime + theme + stock rank + position sizing） |
 | `/admin/stock/{ts_code}/mainline_analysis` | GET | 个股主线归属分析（返回 `mapped_sector` / `is_mainline` 等） |
 | `/admin/sentiment/preview` | GET | 盘中情绪预估 |
 
@@ -216,8 +230,22 @@ curl -X POST "http://localhost:8000/admin/etl/sync" \
 # 仅重算情绪 (快)
 curl -X POST "http://localhost:8000/admin/etl/sentiment?days=365&sync_index=false"
 
-# 先同步指数再重算 (慢)
+# 先同步核心指数再重算 (慢)
 curl -X POST "http://localhost:8000/admin/etl/sentiment?days=365&sync_index=true"
+
+# 补日频基础指标 / 申万行业归属 / 业绩快报 / 因子宽表
+curl -X POST "http://localhost:8000/admin/etl/sync" \
+  -H "Content-Type: application/json" \
+  -d '{"task":"daily_basic","days":3}'
+curl -X POST "http://localhost:8000/admin/etl/sync" \
+  -H "Content-Type: application/json" \
+  -d '{"task":"index_members"}'
+curl -X POST "http://localhost:8000/admin/etl/sync" \
+  -H "Content-Type: application/json" \
+  -d '{"task":"express","days":120}'
+curl -X POST "http://localhost:8000/admin/etl/sync" \
+  -H "Content-Type: application/json" \
+  -d '{"task":"factors","start_date":"2026-03-20","end_date":"2026-03-27"}'
 ```
 
 ### 获取建议
@@ -228,17 +256,25 @@ curl "http://localhost:8000/admin/market/suggestion?use_preview=false"
 
 # 盘中预估建议 (建议 14:50)
 curl "http://localhost:8000/admin/market/suggestion?use_preview=true"
+
+# 横截面因子诊断
+curl "http://localhost:8000/admin/factor/diagnostics?factor=factor_score&horizon=5&days=60"
+
+# 组合建议
+curl "http://localhost:8000/admin/portfolio/recommendation?top_n=8&leaders_per_mainline=5"
 ```
 
 ### 主线复盘与龙头
 
 ```bash
 # 最近 10 个交易日主线复盘，返回宽主题归并后的 series + analysis.review_10d
+# 同时会补充细分驱动字段（display_name / focus_tags / driver_summary）
 # 其中 review_10d.mainlines[i].leaders 默认可直接支撑前端 Top 5 展示
 curl "http://localhost:8000/admin/mainline_history?days=10"
 
 # 主线和主线下龙头，优先输出近 10 日持续性更强的方向
 # Dashboard 当前使用 limit=5 拉取主线龙头，页面优先突出每条主线最值得先看的几只核心龙头
+# 返回结果会保留宽主题 sector，并额外提供 display_sector / focus_tags / driver_summary
 curl "http://localhost:8000/admin/mainline/leaders?limit=5&min_score=60"
 
 # 查看单只股票被映射到哪条主线，排查“新能源 vs 电力公用”这类相近题材误判
@@ -250,6 +286,9 @@ curl "http://localhost:8000/admin/stock/603693.SH/mainline_analysis"
 ```bash
 # 完整性报告
 curl "http://localhost:8000/admin/integrity?start_date=2025-01-01&end_date=2026-12-31"
+
+# 指定交易日状态（与完整性报告使用一致阈值）
+curl "http://localhost:8000/admin/data/day_status?date=2026-03-27"
 
 # 任务状态
 curl "http://localhost:8000/admin/tasks/status"
@@ -277,6 +316,11 @@ curl "http://localhost:8000/admin/watchlist/realtime?analysis_depth=compact&src=
 # 某一只股票打开详情时，再按需取深度分析
 curl "http://localhost:8000/admin/watchlist/600519.SH/analysis" \
   -H "Authorization: Bearer ${TOKEN}"
+
+# detail 内会补充：
+# - classification：当前更按哪条产业方向理解，以及为什么这样归类
+# - level_methodology：支撑/压力位的筛选定义
+# - key_levels[*].note：单个点位来自哪条均线/区间高低点、距离现价多远、失效怎么看
 ```
 
 ### AI 分析
@@ -289,6 +333,7 @@ curl -X POST "http://localhost:8000/auth/token" \
 
 # 个股 AI 分析：将上一步返回的 access_token 填入 Authorization
 # 后端会先把行情/资金/市场压缩成摘要，再要求模型输出结论、关键价位和动作
+# commentary_snapshot 会额外带入个股定位以及支撑/压力位的定义，减少模型把旧行业标签直接当主判断
 curl -X POST "http://localhost:8000/admin/stock/analyze" \
   -H "Authorization: Bearer <access_token>" \
   -H "Content-Type: application/json" \
@@ -350,10 +395,14 @@ curl -X POST "http://localhost:8000/admin/stock/analyze" \
 ## 注意事项
 
 - DuckDB 使用单进程嵌入式模型，请通过 API (`/admin/db/query`) 查询，避免直接打开新连接
+- 不要用 Python 脚本直接 `duckdb.connect()` 打开 `jarvis.duckdb` 做排查；诊断查询统一走后端接口
+- 日常开发直接在主机编辑代码即可，前后端代码会热加载到容器，不需要手工 copy，也不需要为日常改动在主机额外执行 `npm run build`
 - DuckDB 连接会读取 `duckdb_memory_limit` 和 `duckdb_threads` 配置，建议在 `.env` 中按容器资源显式设置
 - Tushare API 有限流，请使用 tenacity 实现重试逻辑
 - 概念数据同步已支持“`short token` 优先同花顺、失败回退 Tushare concept/concept_detail”；当前若 `stock_concepts.src` 只有 `ts`，说明库内概念尚未切到同花顺口径
 - 如果发现概念覆盖不完整，可先用 `/admin/db/query` 抽样核对个股概念；例如新易盛在仅有 `ts` 数据时可能只落一条概念，需切换 `TUSHARE_TOKEN_TYPE=short` 后重新同步概念库
+- 主线识别采用“宽主题稳定跟踪 + 强势股细分驱动拆解”的双层输出：`mapped_name` 负责稳定归并，`focus_tags` / `driver_summary` 负责解释最近真正上涨的细分原因；当 `stock_basic.industry` 仍停留在上游宽口径、但概念强证据更明显指向下游高权重赛道时，会允许概念主导重分类，避免把半导体材料/设备转型公司压回传统材料或泛电子
+- `/admin/mainline/leaders` 的龙头评分会剔除北交所标的，并以近10日趋势先行、持续资金跟踪、成交热度和题材命中为主，不再退化成单日涨幅榜
 - 盘中预估依赖 `realtime_quote` 的可用性与权限
 - 高频自选刷新建议使用 `/admin/watchlist/realtime?analysis_depth=compact`，详情页再单独调用 `/admin/watchlist/{ts_code}/analysis`；若今日日线尚未 ETL 入库，接口仍会优先返回当日实时/收盘后快照，`/admin/stock/{ts_code}/kline` 也会补一根当日临时 bar
 - 自选盯盘接口按当前登录用户隔离，`watchlist` 表使用 `user_id + ts_code` 复合主键；旧版全局自选会在启动时迁移到现有用户名下

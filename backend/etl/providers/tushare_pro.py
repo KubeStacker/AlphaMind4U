@@ -111,6 +111,24 @@ class TushareProvider(DataProvider):
             return self._rate_limited_call(self.pro.moneyflow, trade_date=d)
         return pd.DataFrame()
 
+    def daily_basic(
+        self,
+        trade_date: str = None,
+        ts_code: str = None,
+        start_date: str = None,
+        end_date: str = None,
+    ) -> pd.DataFrame:
+        params = {}
+        if trade_date:
+            params["trade_date"] = trade_date.replace("-", "")
+        if ts_code:
+            params["ts_code"] = ts_code
+        if start_date:
+            params["start_date"] = start_date.replace("-", "")
+        if end_date:
+            params["end_date"] = end_date.replace("-", "")
+        return self._rate_limited_call(self.pro.daily_basic, **params)
+
     def index_daily(self, ts_code: str, start_date: str, end_date: str) -> pd.DataFrame:
         return self._rate_limited_call(self.pro.index_daily, ts_code=ts_code, start_date=start_date, end_date=end_date)
 
@@ -211,6 +229,12 @@ class TushareProvider(DataProvider):
 
     def fina_indicator(self, ts_code: str) -> pd.DataFrame:
         return self._rate_limited_call(self.pro.fina_indicator, ts_code=ts_code)
+
+    def index_member_all(self, is_new: str = "Y") -> pd.DataFrame:
+        params = {}
+        if is_new:
+            params["is_new"] = is_new
+        return self._rate_limited_call(self.pro.index_member_all, **params)
 
     # === 以下接口可能需要更高权限 (2000积分可能无权限) ===
     # income, balancesheet, cashflow, express, fina_mainbz 需要pro权限

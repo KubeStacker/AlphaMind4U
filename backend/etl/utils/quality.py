@@ -120,6 +120,10 @@ class DataQualityChecker:
         # 资金流，预期 4000+ 条
         return self.get_integrity_report("stock_moneyflow", "trade_date", start_date, end_date, expected_min_count=4000)
 
+    def get_daily_basic_integrity_report(self, start_date: str, end_date: str) -> list[dict]:
+        # 日频基础指标，预期 4000+ 条
+        return self.get_integrity_report("stock_daily_basic", "trade_date", start_date, end_date, expected_min_count=4000)
+
     def get_index_integrity_report(self, start_date: str, end_date: str) -> list[dict]:
         # 指数数据，一个交易日至少有 1 条 (上证指数)
         return self.get_integrity_report("market_index", "trade_date", start_date, end_date, expected_min_count=1)
@@ -135,10 +139,11 @@ class DataQualityChecker:
         """
         # 使用并行查询
         results = {}
-        with ThreadPoolExecutor(max_workers=4) as executor:
+        with ThreadPoolExecutor(max_workers=5) as executor:
             future_to_key = {
                 executor.submit(self.get_daily_price_integrity_report, start_date, end_date): "daily_price",
                 executor.submit(self.get_moneyflow_integrity_report, start_date, end_date): "stock_moneyflow",
+                executor.submit(self.get_daily_basic_integrity_report, start_date, end_date): "stock_daily_basic",
                 executor.submit(self.get_index_integrity_report, start_date, end_date): "market_index",
                 executor.submit(self.get_margin_integrity_report, start_date, end_date): "stock_margin"
             }

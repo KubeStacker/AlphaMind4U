@@ -49,22 +49,24 @@ SENTIMENT_CONFIG = {
     # --- 卖出信号参数 ---
     "sell": {
         "euphoria_threshold": 85,          # 人声鼎沸
-        "profit_take": 8.0,               # 止盈线(仅作安全上限, 实际由trailing stop管理)
-        "stop_loss": -3.0,               # 固定止损底线(从-4收紧到-3, 3x杠杆下=-9%)
-        "cooldown_score_drop": 25,         # 情绪回落多少分就卖(从20提高到25)
+        "profit_take": 12.0,               # 止盈线(放宽到12%，让利润奔跑)
+        "stop_loss": -5.0,                 # 固定止损底线(放宽到-5%，减少噪音止损)
+        "cooldown_score_drop": 30,         # 情绪回落多少分就卖(提高到30，减少频繁卖出)
         "cooldown_min_hold": 3,            # 退潮信号最少持仓天数
-        "cooldown_velocity": -8.0,         # 退潮需要分数3日速度低于此值(从-5加严到-8)
-        "max_hold_days": 25,              # 最大持仓天数(从20放宽到25,让赢家跑更久)
+        "cooldown_velocity": -10.0,        # 退潮需要分数3日速度低于此值(加严到-10)
+        "max_hold_days": 30,               # 最大持仓天数(放宽到30，让赢家跑更久)
+        "min_hold_days": 3,                # 新增：最小持仓天数，防止买后立即卖
         "consecutive_loss_limit": 2,       # 连续亏损N笔后降仓
         "consecutive_loss_scale": 0.5,     # 连亏后仓位缩放系数
         "drawdown_circuit_breaker": -15.0, # 组合回撤超此值暂停开仓(%, 去杠杆仓位加权)
         "drawdown_resume": -8.0,           # 回撤恢复到此值才恢复开仓(%)
-        "momentum_reversal_v1": -3.0,      # 动量反转触发减仓/离场
-        "momentum_reversal_v2": -1.5,      # 加速度恶化阈值
-        "trailing_profit_floor": 4.0,      # 浮盈保护启动阈值(%)
-        "trailing_pullback": 3.5,          # 从峰值回撤超过该值离场(%)
-        "atr_stop_multiplier": 1.5,        # ATR止损倍数(从2.0收紧到1.5)
+        "momentum_reversal_v1": -5.0,      # 动量反转触发减仓/离场(放宽到-5)
+        "momentum_reversal_v2": -2.0,      # 加速度恶化阈值(放宽到-2)
+        "trailing_profit_floor": 6.0,      # 浮盈保护启动阈值(%)(提高到6%)
+        "trailing_pullback": 4.0,          # 从峰值回撤超过该值离场(%)(放宽到4%)
+        "atr_stop_multiplier": 2.0,        # ATR止损倍数(放宽到2.0)
         "score_zero_cooldown": 3,          # 分数低于清仓线需连续N天才真正清仓(防whipsaw)
+        "signal_confirm_days": 2,          # 新增：信号确认期，信号需持续N天才执行
     },
 
     # --- 牛市模式参数 ---

@@ -24,7 +24,33 @@ export default {
       },
       boxShadow: {
         'business': '0 10px 25px -3px rgba(0, 0, 0, 0.3), 0 4px 6px -2px rgba(0, 0, 0, 0.05)',
-      }
+      },
+      animation: {
+        'blink-orange': 'blink-orange 1.5s ease-in-out infinite',
+        'blink-red': 'blink-red 1.5s ease-in-out infinite',
+      },
+      keyframes: {
+        'blink-orange': {
+          '0%, 100%': { 
+            borderColor: 'rgba(251, 146, 60, 0.3)',
+            backgroundColor: 'rgba(251, 146, 60, 0.08)',
+          },
+          '50%': { 
+            borderColor: 'rgba(251, 146, 60, 0.6)',
+            backgroundColor: 'rgba(251, 146, 60, 0.15)',
+          },
+        },
+        'blink-red': {
+          '0%, 100%': { 
+            borderColor: 'rgba(239, 68, 68, 0.3)',
+            backgroundColor: 'rgba(239, 68, 68, 0.08)',
+          },
+          '50%': { 
+            borderColor: 'rgba(239, 68, 68, 0.6)',
+            backgroundColor: 'rgba(239, 68, 68, 0.15)',
+          },
+        },
+      },
     },
   },
   plugins: [],

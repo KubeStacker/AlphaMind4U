@@ -2,43 +2,29 @@
   <div class="space-y-3 md:space-y-4 max-w-6xl mx-auto pb-6">
     <section class="dashboard-panel panel-warm bg-business-dark rounded-2xl border border-business-light shadow-business overflow-hidden">
       <div class="h-px bg-gradient-to-r from-amber-400/70 via-business-highlight/30 to-transparent"></div>
-      <div class="p-2.5 md:p-3.5 border-b border-business-light">
-        <div class="flex flex-col gap-2 xl:flex-row xl:items-start xl:justify-between">
-          <div class="space-y-1.5">
-            <div class="inline-flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.24em] text-amber-300">
-              <span class="h-2 w-2 rounded-full bg-amber-400"></span>
+      <div class="border-b border-business-light px-2.5 py-2 md:px-3 md:py-2.5">
+        <div class="flex flex-col gap-1.5 lg:flex-row lg:items-start lg:justify-between">
+          <div class="space-y-1">
+            <div class="inline-flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-[0.22em] text-amber-300">
+              <span class="h-1.5 w-1.5 rounded-full bg-amber-400"></span>
               情绪驾驶舱
             </div>
-            <div class="flex flex-wrap items-center gap-2">
-              <h1 class="text-base md:text-lg font-bold tracking-tight text-white">
-                {{ sentimentHero.title }}
-              </h1>
-              <span
-                class="rounded-full border px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.2em]"
-                :class="sentimentHero.badgeClass"
-              >
-                {{ sentimentHero.bandLabel }}
-              </span>
-              <span class="text-[10px] text-slate-500">
-                最新交易日 {{ tradingBrief.tradeDate || '-' }}
-              </span>
-            </div>
-            <p class="max-w-3xl text-[12px] leading-[18px] text-slate-400">
-              {{ sentimentHero.summary }}
+            <p class="max-w-3xl text-[12px] md:text-[13px] leading-[18px] text-slate-300">
+              {{ sentimentHero.conclusion }}
             </p>
           </div>
 
-          <div class="flex flex-wrap items-center gap-2 text-[10px]">
+          <div class="flex flex-wrap items-center gap-1.5 text-[10px]">
             <button
               @click="openBacktestModal"
-              class="h-7 px-2.5 rounded-lg border border-business-light bg-slate-900/50 text-slate-300 font-bold transition-all hover:border-business-accent hover:text-white"
+              class="inline-flex h-7 min-w-[88px] items-center justify-center rounded-lg border border-business-light bg-slate-900/50 px-2.5 text-slate-300 font-bold transition-all hover:border-business-accent hover:text-white"
             >
               查看回测
             </button>
             <button
               @click="handleSyncSentiment"
               :disabled="syncingSentiment"
-              class="h-7 px-2.5 rounded-lg border font-bold transition-all disabled:opacity-60"
+              class="inline-flex h-7 min-w-[88px] items-center justify-center rounded-lg border px-2.5 font-bold transition-all disabled:opacity-60"
               :class="syncingSentiment ? 'border-emerald-300 bg-emerald-300 text-emerald-950' : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500 hover:text-white'"
             >
               {{ syncingSentiment ? '同步中...' : '同步情绪' }}
@@ -46,7 +32,7 @@
             <button
               @click="handlePreviewSentiment"
               :disabled="predictingSentiment"
-              class="h-7 px-2.5 rounded-lg border font-bold transition-all disabled:opacity-60"
+              class="inline-flex h-7 min-w-[88px] items-center justify-center rounded-lg border px-2.5 font-bold transition-all disabled:opacity-60"
               :class="predictingSentiment ? 'border-amber-300 bg-amber-300 text-amber-950' : 'border-amber-500/30 bg-amber-500/10 text-amber-300 hover:bg-amber-500 hover:text-white'"
             >
               {{ predictingSentiment ? '预测中...' : '预测情绪' }}
@@ -68,113 +54,24 @@
           </div>
         </div>
 
-        <div class="grid gap-2.5 xl:grid-cols-[1.15fr,0.85fr]">
-          <div class="rounded-lg border border-business-light bg-slate-900/35 p-2.5">
-            <div class="flex items-center justify-between gap-2">
-              <p class="text-[11px] font-bold text-white">今日结论</p>
-              <div class="rounded-lg border border-business-accent/30 bg-business-accent/10 px-2.5 py-1 text-[10px] font-bold text-business-accent">
-                置信度 {{ tradingBrief.confidence || '-' }}
-              </div>
-            </div>
-
-            <div class="mt-2 rounded-lg border border-business-light/80 bg-business-darker/45 divide-y divide-business-light/70">
-              <div
-                v-for="item in sentimentActionItems"
-                :key="item.label"
-                class="flex items-start gap-2.5 px-2.5 py-2"
-              >
-                <div class="w-12 shrink-0 text-[10px] text-slate-500">{{ item.label }}</div>
-                <div class="flex-1 text-[12px] font-semibold leading-[18px] text-slate-100">{{ item.value }}</div>
-              </div>
-
-              <div class="px-2.5 py-2">
-                <div class="flex items-start gap-2.5">
-                  <div class="w-12 shrink-0 text-[10px] text-slate-500">主线</div>
-                  <div class="flex-1">
-                    <div class="text-[12px] font-semibold text-slate-100">
-                      {{ currentMainline.name || '主线待确认' }}
-                    </div>
-                    <div class="mt-0.5 text-[10px] leading-4 text-slate-400">
-                      {{ currentMainline.reason || '当前没有明确主线时，先按情绪节奏控制仓位。' }}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div class="mt-2 rounded-lg border border-business-accent/20 bg-business-accent/10 px-2.5 py-2">
-              <div class="text-[10px] text-business-accent/80">
-                {{ sentimentHero.strategyTitle }}
-              </div>
-              <p class="mt-1 text-[12px] leading-[18px] text-slate-100">
-                {{ tradingBrief.action || '暂无执行建议' }}
-              </p>
+        <div class="rounded-lg border border-business-light bg-slate-900/35 p-2.5">
+          <div class="flex items-center justify-between gap-2">
+            <p class="text-[11px] font-bold text-white">交易节奏</p>
+            <div class="rounded-lg border border-business-accent/30 bg-business-accent/10 px-2.5 py-1 text-[10px] font-bold text-business-accent">
+              置信度 {{ tradingBrief.confidence || '-' }}
             </div>
           </div>
 
-          <div class="rounded-lg border border-amber-500/15 bg-gradient-to-br from-amber-500/[0.06] via-business-accent/[0.05] to-slate-900/40 p-2.5">
-            <div class="flex items-center justify-between gap-2">
-              <div>
-                <p class="text-[11px] font-bold text-slate-200">盘中辅助</p>
-                <p class="mt-0.5 text-[10px] text-slate-500">预测和统一建议集中显示</p>
-              </div>
-              <span class="text-[10px] text-slate-500">{{ sentimentPreview?.as_of || '未生成' }}</span>
-            </div>
-
-            <div v-if="previewError" class="mt-2.5 rounded-lg border border-rose-500/20 bg-rose-500/10 px-2.5 py-2 text-[12px] text-rose-200">
-              {{ previewError }}
-            </div>
-
-            <div v-else-if="sentimentPreview" class="mt-2.5 grid grid-cols-2 gap-1.5 text-[11px] sm:grid-cols-4">
-              <div class="rounded-lg border border-business-light/80 bg-business-darker/60 px-2 py-2">
-                <div class="text-slate-500">预测日</div>
-                <div class="mt-1 font-semibold text-white">{{ sentimentPreview.predicted_trade_date || '-' }}</div>
-              </div>
-              <div class="rounded-lg border border-business-light/80 bg-business-darker/60 px-2 py-2">
-                <div class="text-slate-500">预测分</div>
-                <div class="mt-1 font-semibold text-white">{{ fmt(sentimentPreview.projected_score, 1) }}</div>
-              </div>
-              <div class="rounded-lg border border-business-light/80 bg-business-darker/60 px-2 py-2">
-                <div class="text-slate-500">沪深300</div>
-                <div class="mt-1 font-semibold text-white">{{ fmt(sentimentPreview.index_pct_chg, 3, '%') }}</div>
-              </div>
-              <div class="rounded-lg border border-business-light/80 bg-business-darker/60 px-2 py-2">
-                <div class="text-slate-500">科创50</div>
-                <div class="mt-1 font-semibold text-white">{{ fmt(sentimentPreview.star50_pct_chg, 3, '%') }}</div>
-              </div>
-            </div>
-
-            <div v-else class="mt-2.5 rounded-lg border border-business-light bg-business-darker/60 px-2.5 py-2 text-[12px] leading-[18px] text-slate-400">
-              点击“预测情绪”后，这里会补充次日预判与统一建议。
-            </div>
-
-            <div v-if="sentimentPreview?.plan?.next_day_strategy" class="mt-2.5 rounded-lg border border-amber-500/20 bg-amber-500/10 px-2.5 py-2">
-              <div class="text-[10px] text-amber-200/80">次日策略</div>
-              <p class="mt-1 text-[12px] leading-[18px] text-amber-50">
-                {{ sentimentPreview.plan?.next_day_strategy || '-' }}
-              </p>
-            </div>
-
-            <div class="mt-2.5 divide-y divide-business-light/70 rounded-lg border border-business-light/80 bg-business-darker/55">
-              <div
-                v-for="cue in sentimentDecisionCues"
-                :key="cue.label"
-                class="px-2.5 py-2"
-              >
-                <div class="text-[10px] text-slate-500">{{ cue.label }}</div>
-                <div class="mt-1 text-[12px] leading-[18px] text-slate-200">{{ cue.value }}</div>
-              </div>
-            </div>
-
-            <div v-if="marketSuggestion" class="mt-2.5 rounded-lg border border-business-accent/20 bg-business-accent/10 px-2.5 py-2">
-              <div class="text-[10px] text-business-accent/80">统一市场建议</div>
-              <p class="mt-1 text-[12px] leading-[18px] text-slate-200">
-                {{ marketSuggestion.action || '-' }} · 仓位 {{ fmt((Number(marketSuggestion.target_position) || 0) * 100, 0, '%') }} · 主线 {{ marketSuggestion.rationale?.top_mainline || '-' }} · 风控 {{ fmt(marketSuggestion.risk_controls?.stop_loss_pct, 1, '%') }} / {{ fmt(marketSuggestion.risk_controls?.take_profit_pct, 1, '%') }}
-              </p>
-            </div>
-
-            <div v-else-if="suggestionError" class="mt-2.5 rounded-lg border border-rose-500/20 bg-rose-500/10 px-2.5 py-2 text-[12px] text-rose-200">
-              建议生成失败: {{ suggestionError }}
+          <div class="mt-2.5 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+            <div
+              v-for="item in sentimentActionItems"
+              :key="item.label"
+              class="rounded-lg border px-2.5 py-2 min-h-[84px]"
+              :class="item.toneClass"
+            >
+              <div class="text-[10px] uppercase tracking-[0.18em] text-slate-500">{{ item.label }}</div>
+              <div class="mt-1 text-[13px] font-semibold leading-[18px] text-slate-100">{{ item.value }}</div>
+              <div class="mt-1 text-[10px] leading-[16px] text-slate-400">{{ item.note }}</div>
             </div>
           </div>
         </div>
@@ -199,38 +96,30 @@
 
     <section class="dashboard-panel panel-cool bg-business-dark rounded-2xl border border-business-light shadow-business overflow-hidden">
       <div class="h-px bg-gradient-to-r from-business-accent/80 via-business-highlight/35 to-transparent"></div>
-      <div class="p-3 md:p-4 border-b border-business-light">
-        <div class="flex flex-col gap-2 xl:flex-row xl:items-start xl:justify-between">
-          <div class="space-y-2">
-            <div class="inline-flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.24em] text-business-accent">
-              <span class="h-2 w-2 rounded-full bg-business-accent"></span>
+      <div class="border-b border-business-light px-2.5 py-2 md:px-3 md:py-2.5">
+        <div class="flex flex-col gap-1.5 lg:flex-row lg:items-start lg:justify-between">
+          <div class="space-y-1">
+            <div class="inline-flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-[0.22em] text-business-accent">
+              <span class="h-1.5 w-1.5 rounded-full bg-business-accent"></span>
               主线作战板
             </div>
-            <div class="flex flex-wrap items-center gap-2">
-              <h2 class="text-lg md:text-xl font-bold tracking-tight text-white">
-                {{ mainlineHeadline.title }}
-              </h2>
-              <span
-                v-if="currentMainline.name"
-                class="rounded-full border border-business-accent/25 bg-business-accent/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.2em] text-business-accent"
-              >
-                {{ currentMainline.name }}{{ currentMainline.score ? ` · ${fmt(currentMainline.score, 1)}` : '' }}
-              </span>
-            </div>
-            <p class="max-w-4xl text-[13px] leading-5 text-slate-300">
-              {{ mainlineHeadline.summary }}
+            <p class="max-w-3xl text-[12px] md:text-[13px] leading-[18px] text-slate-300">
+              {{ mainlineHeadline }}
             </p>
           </div>
 
-          <div class="text-[11px] leading-5 text-slate-500">
+          <div class="text-[9px] leading-4 text-slate-500">
             <div>{{ mainlineReview?.date_range?.start || '-' }} 至 {{ mainlineReview?.date_range?.end || '-' }}</div>
-            <div class="mt-1">复盘交易日 {{ mainlineReview?.trade_days || 0 }} 天</div>
+            <div class="mt-0.5">复盘交易日 {{ mainlineReview?.trade_days || 0 }} 天</div>
           </div>
         </div>
       </div>
 
       <div class="p-3 md:p-4 space-y-3">
-        <div v-if="loadingTrend || loadingLeaders" class="py-10 text-center text-sm text-slate-400">
+        <div
+          v-if="loadingTrend && focusedMainlineCards.length === 0"
+          class="py-10 text-center text-sm text-slate-400"
+        >
           <div class="mx-auto mb-3 h-8 w-8 animate-spin rounded-full border-2 border-business-accent border-t-transparent"></div>
           主线数据加载中...
         </div>
@@ -243,132 +132,148 @@
         </div>
 
         <template v-else>
-          <div class="grid gap-2 md:grid-cols-3">
-            <div
-              v-for="card in mainlineSummaryCards"
-              :key="card.label"
-              class="rounded-lg border px-3 py-2"
-              :class="card.toneClass"
-            >
-              <div class="text-[10px] text-slate-500">{{ card.label }}</div>
-              <div class="mt-1 text-sm font-bold text-white">{{ card.value }}</div>
-              <div class="mt-0.5 text-[10px] leading-4 text-slate-400">{{ card.description }}</div>
-            </div>
-          </div>
-
-          <div class="grid gap-2.5 xl:grid-cols-[1.15fr,0.85fr]">
+          <div class="grid gap-2.5 xl:grid-cols-[1.14fr,0.86fr]">
             <div class="overflow-hidden rounded-xl border border-business-light bg-slate-900/30">
               <div class="divide-y divide-business-light/70">
                 <div
                   v-for="sector in focusedMainlineCards"
                   :key="sector.name"
-                  class="px-3 py-2.5"
-                  :class="sector.panelClass"
+                  class="cursor-pointer px-2.5 py-2 md:px-3 md:py-2.5 transition-colors"
+                  :class="[sector.panelClass, selectedMainlineName === sector.name ? 'ring-1 ring-inset ring-business-accent/35 bg-business-accent/[0.08]' : '']"
+                  role="button"
+                  tabindex="0"
+                  @click="toggleMainlineFocus(sector.name)"
+                  @keydown.enter.prevent="toggleMainlineFocus(sector.name)"
+                  @keydown.space.prevent="toggleMainlineFocus(sector.name)"
                 >
-                  <div class="flex items-start gap-3">
-                    <span class="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-business-darker text-[10px] font-bold text-white">
+                  <div class="flex items-center gap-2 md:items-start md:gap-3">
+                    <span class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-business-darker text-[9px] font-bold text-white md:h-6 md:w-6 md:text-[10px]">
                       {{ sector.displayRank }}
                     </span>
 
                     <div class="min-w-0 flex-1">
                       <div class="flex flex-wrap items-center gap-1.5">
-                        <div class="truncate text-sm font-bold text-white">{{ sector.name }}</div>
+                        <div class="truncate text-[13px] font-bold text-white md:text-sm">{{ sector.displayName || sector.name }}</div>
                         <span
-                          class="rounded-full border px-1.5 py-0.5 text-[9px] font-bold"
+                          class="rounded-full border px-1.5 py-0.5 text-[8px] font-bold md:text-[9px]"
                           :class="sector.roleClass"
                         >
                           {{ sector.roleLabel }}
                         </span>
                         <span
-                          class="rounded-full border px-1.5 py-0.5 text-[9px] font-semibold"
-                          :class="sector.heatClass"
+                          v-for="qt in sector.quickTags"
+                          :key="`qt-${sector.name}-${qt}`"
+                          class="rounded-full border px-1.5 py-0.5 text-[8px] font-bold md:text-[9px]"
+                          :class="sector.roleClass"
                         >
-                          {{ sector.heatLabel }}
+                          {{ qt }}
                         </span>
+                        <span class="text-[11px] font-black text-white md:hidden">{{ fmt(sector.score, 1) }}</span>
                       </div>
 
-                      <div class="mt-1 text-[12px] leading-5 text-slate-300">{{ sector.detail }}</div>
-                      <div class="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-slate-400">
-                        <span>上榜 {{ sector.activeDaysText }}</span>
-                        <span>连续 {{ sector.consecutiveDaysText }}</span>
-                        <span>涨停 {{ sector.limitUpsText }}</span>
-                        <span>样本 {{ sector.stockCountText }}</span>
+                      <div class="mt-0.5 text-[11px] leading-4 text-slate-400 md:mt-1 md:text-[12px] md:leading-5 md:text-slate-300 line-clamp-1 md:line-clamp-none">{{ sector.thesis }}</div>
+                      <div v-if="sector.evidenceTags?.length" class="mt-1 flex flex-wrap gap-1 md:gap-1.5">
+                        <span
+                          v-for="tag in sector.evidenceTags"
+                          :key="`${sector.name}-${tag}`"
+                          class="rounded-full border border-business-light/70 bg-business-darker/70 px-1.5 py-0.5 text-[8px] text-slate-400 md:px-2 md:text-[9px]"
+                        >
+                          {{ tag }}
+                        </span>
                       </div>
                     </div>
 
-                    <div class="shrink-0 text-right">
+                    <div class="hidden shrink-0 text-right md:block">
                       <div class="text-lg font-black text-white">{{ fmt(sector.score, 1) }}</div>
                       <button
-                        @click="toggleMainlineExpansion(sector.name)"
-                        class="mt-1 h-6 px-2 rounded-md border border-business-light bg-business-darker/80 text-[9px] font-bold text-slate-300 transition-all hover:border-business-highlight hover:text-white"
+                        @click.stop="toggleMainlineFocus(sector.name)"
+                        class="mt-1 inline-flex h-6 min-w-[68px] items-center justify-center rounded-md border border-business-light bg-business-darker/80 px-2 text-[9px] font-bold text-slate-300 transition-all hover:border-business-highlight hover:text-white"
                       >
-                        {{ expandedMainlineName === sector.name ? '收起龙头' : '看龙头' }}
+                        {{ selectedMainlineName === sector.name ? '收起' : '展开' }}
                       </button>
                     </div>
                   </div>
 
-                  <div v-if="expandedMainlineName === sector.name" class="mt-2.5 grid gap-1.5 sm:grid-cols-2">
+                  <div
+                    v-if="selectedMainlineName === sector.name"
+                    class="mt-3 rounded-lg border border-business-light/80 bg-business-darker/65 p-2.5"
+                  >
+                    <div class="flex items-start justify-between gap-2">
+                      <div>
+                        <p class="text-[9px] font-bold uppercase tracking-[0.18em] text-slate-500">龙头样本</p>
+                        <p class="mt-1 text-[10px] leading-4 text-slate-500">{{ getMainlineLeaderCaption(sector) }}</p>
+                      </div>
+                      <span class="rounded-full border border-business-light/80 bg-slate-950/45 px-2 py-1 text-[9px] font-bold text-slate-300">
+                        {{ sector.stocks?.length || 0 }} 只
+                      </span>
+                    </div>
+
                     <div
-                      v-for="(stock, sidx) in sector.stocks"
-                      :key="`${sector.name}-${stock.tsCode || stock.name}-${sidx}`"
-                      class="rounded-lg border border-business-light/70 bg-business-darker/60 px-2.5 py-2"
+                      v-if="loadingLeaders && !hasLeaderGroup(sector.name)"
+                      class="mt-2 rounded-lg border border-business-light/60 bg-slate-950/30 px-2 py-1.5 text-[10px] text-slate-500"
                     >
-                      <div class="flex items-center justify-between gap-2">
-                        <div class="min-w-0">
-                          <div class="flex items-center gap-1.5">
-                            <span class="text-[9px] text-slate-500">{{ sidx + 1 }}</span>
-                            <span class="truncate text-[12px] font-semibold text-slate-100">{{ stock.name }}</span>
+                      补充龙头强度中，先展示主线历史样本。
+                    </div>
+
+                    <div v-if="sector.stocks?.length" class="mt-2.5 grid gap-1.5 sm:grid-cols-2">
+                      <div
+                        v-for="(stock, sidx) in sector.stocks"
+                        :key="`${sector.name}-${stock.tsCode || stock.name}-${sidx}`"
+                        class="rounded-lg border border-business-light/70 bg-slate-950/45 px-2.5 py-2"
+                      >
+                        <div class="flex items-center justify-between gap-2">
+                          <div class="min-w-0">
+                            <div class="flex items-center gap-1.5">
+                              <span class="text-[9px] text-slate-500">{{ sidx + 1 }}</span>
+                              <span class="truncate text-[12px] font-semibold text-slate-100">{{ stock.name }}</span>
+                            </div>
                           </div>
-                          <div class="mt-0.5 truncate font-mono text-[9px] text-slate-500">{{ stock.tsCode || '-' }}</div>
+                          <div class="text-right">
+                            <div class="text-[11px]" :class="stock.changeClass">{{ stock.changeText }}</div>
+                            <div v-if="stock.badge" class="mt-0.5 text-[9px] text-slate-400">{{ stock.badge }}</div>
+                          </div>
                         </div>
-                        <div class="text-right">
-                          <div class="text-[11px]" :class="stock.changeClass">{{ stock.changeText }}</div>
-                          <div v-if="stock.badge" class="mt-0.5 text-[9px] text-slate-400">{{ stock.badge }}</div>
+                        <div class="mt-1 flex flex-wrap items-center gap-1 text-[9px] text-slate-500">
+                          <span class="font-mono">{{ stock.tsCode || '-' }}</span>
+                          <span v-if="stock.note">· {{ stock.note }}</span>
                         </div>
                       </div>
+                    </div>
+
+                    <div
+                      v-else
+                      class="mt-2.5 flex min-h-[72px] items-center justify-center rounded-lg border border-business-light/70 bg-slate-950/35 px-3 text-[11px] text-slate-500"
+                    >
+                      当前方向暂无可展示的龙头样本。
                     </div>
                   </div>
                 </div>
               </div>
             </div>
 
-            <div class="space-y-2.5">
-              <div class="rounded-xl border border-business-highlight/15 bg-gradient-to-br from-business-highlight/[0.06] to-slate-900/35 p-3">
-                <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                  <div>
-                    <p class="text-[10px] font-bold text-slate-500">趋势证据</p>
-                    <h2 class="mt-1 text-sm font-bold text-white">近10日主线演变</h2>
-                  </div>
-                  <div class="text-[10px] text-slate-500">图表只保留当前聚焦的最多 3 条主线</div>
+            <div class="rounded-xl border border-business-highlight/15 bg-gradient-to-br from-business-highlight/[0.06] to-slate-900/35 p-3">
+              <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p class="text-[10px] font-bold text-slate-500">趋势证据</p>
+                  <h2 class="mt-1 text-sm font-bold text-white">近10日主线强度</h2>
                 </div>
-
-                <div class="relative mt-3 h-60 w-full sm:h-72">
-                  <v-chart
-                    v-if="!loadingTrend && mainlineChartOption.series.length > 0"
-                    :option="mainlineChartOption"
-                    autoresize
-                  />
-                  <div v-if="loadingTrend" class="absolute inset-0 flex items-center justify-center">
-                    <div class="h-8 w-8 animate-spin rounded-full border-2 border-business-accent border-t-transparent"></div>
-                  </div>
-                  <div
-                    v-if="!loadingTrend && mainlineChartOption.series.length === 0"
-                    class="absolute inset-0 flex flex-col items-center justify-center space-y-2 text-slate-500"
-                  >
-                    <p class="text-xs font-bold uppercase tracking-[0.24em]">暂无近10日主线数据</p>
-                  </div>
-                </div>
+                <div class="text-[10px] text-slate-500">{{ mainlineChartCaption }}</div>
               </div>
 
-              <div v-if="trendAnalysis" class="rounded-xl border border-business-accent/15 bg-gradient-to-br from-business-accent/[0.05] to-slate-900/35 p-3">
-                <div class="flex items-start gap-3">
-                  <ChatBubbleLeftRightIcon class="mt-0.5 h-5 w-5 shrink-0 text-business-accent" />
-                  <div class="space-y-1">
-                    <h3 class="text-[10px] font-bold text-slate-500">量化推演结论</h3>
-                    <p class="text-[13px] leading-5 text-slate-300 whitespace-pre-line">
-                      {{ trendAnalysis }}
-                    </p>
-                  </div>
+              <div class="relative mt-3 h-60 w-full sm:h-72 xl:h-80">
+                <v-chart
+                  v-if="!loadingTrend && mainlineChartOption.series.length > 0"
+                  :option="mainlineChartOption"
+                  autoresize
+                />
+                <div v-if="loadingTrend" class="absolute inset-0 flex items-center justify-center">
+                  <div class="h-8 w-8 animate-spin rounded-full border-2 border-business-accent border-t-transparent"></div>
+                </div>
+                <div
+                  v-if="!loadingTrend && mainlineChartOption.series.length === 0"
+                  class="absolute inset-0 flex flex-col items-center justify-center space-y-2 text-slate-500"
+                >
+                  <p class="text-xs font-bold uppercase tracking-[0.24em]">暂无近10日主线数据</p>
                 </div>
               </div>
             </div>
@@ -378,111 +283,270 @@
     </section>
 
     <div
+      v-if="showSentimentPreviewModal"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      @click.self="showSentimentPreviewModal = false"
+    >
+      <div class="w-full max-w-2xl overflow-hidden rounded-2xl border border-slate-700 bg-slate-950/95 shadow-2xl backdrop-blur">
+        <div class="flex items-center justify-between border-b border-slate-800 px-4 py-3">
+          <div>
+            <h3 class="text-sm font-bold text-slate-200">情绪预测参考</h3>
+            <p class="mt-1 text-[11px] text-slate-500">点击时临时查看，不在首页持久占位。</p>
+          </div>
+          <button class="text-sm text-slate-400 transition-colors hover:text-white" @click="showSentimentPreviewModal = false">关闭</button>
+        </div>
+
+        <div class="max-h-[80vh] overflow-y-auto p-4">
+          <div v-if="predictingSentiment" class="flex min-h-[220px] items-center justify-center text-sm text-slate-400">
+            盘中情绪预测中...
+          </div>
+
+          <div v-else-if="previewError" class="flex min-h-[220px] items-center justify-center text-sm text-red-400">
+            {{ previewError }}
+          </div>
+
+          <div v-else-if="sentimentPreview" class="space-y-4">
+            <div class="grid gap-2 text-xs text-slate-300 sm:grid-cols-3">
+              <div class="rounded-xl border border-slate-800 bg-slate-900/80 p-3">
+                <div class="text-[10px] uppercase tracking-[0.18em] text-slate-500">预测日</div>
+                <div class="mt-2 text-sm font-bold text-white">{{ sentimentPreview.predicted_trade_date || '-' }}</div>
+              </div>
+              <div class="rounded-xl border border-slate-800 bg-slate-900/80 p-3">
+                <div class="text-[10px] uppercase tracking-[0.18em] text-slate-500">次日预估</div>
+                <div class="mt-2 text-sm font-bold text-white">{{ fmt(sentimentPreview.projected_score, 1) }}</div>
+              </div>
+              <div class="rounded-xl border border-slate-800 bg-slate-900/80 p-3">
+                <div class="text-[10px] uppercase tracking-[0.18em] text-slate-500">生成时间</div>
+                <div class="mt-2 text-sm font-bold text-white">{{ sentimentPreview.as_of || '-' }}</div>
+              </div>
+            </div>
+
+            <div class="rounded-xl border border-amber-500/20 bg-amber-500/10 p-3">
+              <div class="text-[10px] uppercase tracking-[0.18em] text-amber-200/80">次日策略</div>
+              <p class="mt-2 text-[13px] leading-5 text-amber-50">
+                {{ sentimentPreview.plan?.next_day_strategy || '暂无额外策略提示。' }}
+              </p>
+            </div>
+
+            <div class="rounded-xl border border-slate-800 bg-slate-900/80 p-3">
+              <div class="flex items-center justify-between gap-2">
+                <div class="text-[10px] uppercase tracking-[0.18em] text-slate-500">统一建议</div>
+                <div class="text-[10px] text-slate-500">{{ marketSuggestion?.action || '未生成' }}</div>
+              </div>
+              <div v-if="marketSuggestion" class="mt-2 grid gap-2 text-[11px] text-slate-300 sm:grid-cols-2">
+                <div class="rounded-lg border border-slate-800 bg-slate-950/70 px-3 py-2">
+                  目标仓位 {{ fmt((Number(marketSuggestion.target_position) || 0) * 100, 0, '%') }}
+                </div>
+                <div class="rounded-lg border border-slate-800 bg-slate-950/70 px-3 py-2">
+                  风控 {{ fmt(marketSuggestion.risk_controls?.stop_loss_pct, 1, '%') }} / {{ fmt(marketSuggestion.risk_controls?.take_profit_pct, 1, '%') }}
+                </div>
+                <div class="rounded-lg border border-slate-800 bg-slate-950/70 px-3 py-2 sm:col-span-2">
+                  {{ marketSuggestion.rationale?.summary || marketSuggestion.action || '暂无统一建议补充。' }}
+                </div>
+              </div>
+              <div v-else-if="suggestionError" class="mt-2 text-[11px] text-rose-300">
+                {{ suggestionError }}
+              </div>
+              <div v-else class="mt-2 text-[11px] text-slate-500">
+                暂无统一建议。
+              </div>
+            </div>
+          </div>
+
+          <div v-else class="flex min-h-[220px] items-center justify-center text-sm text-slate-500">
+            暂无盘中预测结果。
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div
       v-if="showBacktestModal"
       class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
       @click.self="showBacktestModal = false"
     >
-      <div class="w-full max-w-md rounded-xl border border-slate-700 bg-slate-900 p-4 shadow-2xl">
-        <div class="mb-3 flex items-center justify-between">
-          <h3 class="text-sm font-bold text-slate-200">情绪策略回测结果</h3>
-          <button class="text-slate-400 hover:text-white" @click="showBacktestModal = false">关闭</button>
+      <div class="w-full max-w-5xl overflow-hidden rounded-2xl border border-slate-700 bg-slate-950/95 shadow-2xl backdrop-blur">
+        <div class="flex items-center justify-between border-b border-slate-800 px-4 py-3">
+          <div>
+            <h3 class="text-sm font-bold text-slate-200">情绪策略回测结果</h3>
+            <p class="mt-1 text-[11px] text-slate-500">主结果与扩展诊断分栏展示，加载前后保持稳定布局。</p>
+          </div>
+          <button class="text-sm text-slate-400 transition-colors hover:text-white" @click="showBacktestModal = false">关闭</button>
         </div>
-        <div v-if="loadingBacktest" class="py-8 text-center text-slate-400 text-sm">回测结果加载中...</div>
-        <div v-else-if="backtestError" class="py-8 text-center text-red-400 text-sm">{{ backtestError }}</div>
-        <div v-else-if="backtestData" class="space-y-3 text-xs max-h-[70vh] overflow-y-auto">
-          <div class="grid grid-cols-2 gap-2 text-slate-300">
-            <div class="rounded bg-slate-800 p-2">总收益: <span class="font-bold text-white">{{ backtestData.metrics?.total_return || '-' }}</span></div>
-            <div class="rounded bg-slate-800 p-2">年化: <span class="font-bold text-white">{{ backtestData.metrics?.annual_return || '-' }}</span></div>
-            <div class="rounded bg-slate-800 p-2">回撤: <span class="font-bold text-white">{{ backtestData.metrics?.max_drawdown || '-' }}</span></div>
-            <div class="rounded bg-slate-800 p-2">胜率: <span class="font-bold text-white">{{ backtestData.metrics?.win_rate || '-' }}</span></div>
-            <div class="rounded bg-slate-800 p-2">日胜率: <span class="font-bold text-white">{{ backtestData.metrics?.day_win_rate || '-' }}</span></div>
-            <div class="rounded bg-slate-800 p-2">交易次数: <span class="font-bold text-white">{{ backtestData.metrics?.total_trades || '-' }}</span></div>
-            <div class="rounded bg-slate-800 p-2">夏普: <span class="font-bold text-white">{{ backtestData.metrics?.sharpe || '-' }}</span></div>
-            <div class="rounded bg-slate-800 p-2">基准: <span class="font-bold text-white">{{ backtestData.metrics?.benchmark_return || '-' }}</span></div>
+        <div class="max-h-[82vh] overflow-y-auto p-4">
+          <div v-if="loadingBacktest" class="flex min-h-[320px] items-center justify-center text-sm text-slate-400">
+            回测结果加载中...
           </div>
-          <div class="rounded bg-slate-800 p-2 text-slate-400">
-            参数: leverage={{ backtestData.policy?.leverage ?? '-' }}, trend_floor={{ backtestData.policy?.trend_floor_pos ?? '-' }}
+          <div v-else-if="backtestError" class="flex min-h-[320px] items-center justify-center text-sm text-red-400">
+            {{ backtestError }}
           </div>
-          <div v-if="backtestData.attribution && Object.keys(backtestData.attribution).length > 0" class="rounded bg-slate-800 p-2">
-            <div class="text-slate-300 font-semibold mb-1">归因分析</div>
-            <div class="grid grid-cols-2 gap-x-2 gap-y-1">
-              <template v-for="(val, key) in backtestData.attribution" :key="key">
-                <div class="text-slate-400">{{ key }}</div>
-                <div class="text-slate-200">{{ val.count }}次, {{ val.win_rate }}胜, {{ val.avg_pnl }}均</div>
-              </template>
+          <div v-else-if="backtestData" class="grid gap-4 text-xs xl:grid-cols-[1.1fr,0.9fr]">
+            <div class="space-y-4">
+              <div class="grid gap-2 text-slate-300 sm:grid-cols-2 xl:grid-cols-4">
+                <div class="rounded-xl border border-slate-800 bg-slate-900/80 p-3">
+                  <div class="text-[10px] uppercase tracking-[0.18em] text-slate-500">总收益</div>
+                  <div class="mt-2 text-sm font-bold text-white">{{ backtestData.metrics?.total_return || '-' }}</div>
+                </div>
+                <div class="rounded-xl border border-slate-800 bg-slate-900/80 p-3">
+                  <div class="text-[10px] uppercase tracking-[0.18em] text-slate-500">年化</div>
+                  <div class="mt-2 text-sm font-bold text-white">{{ backtestData.metrics?.annual_return || '-' }}</div>
+                </div>
+                <div class="rounded-xl border border-slate-800 bg-slate-900/80 p-3">
+                  <div class="text-[10px] uppercase tracking-[0.18em] text-slate-500">回撤</div>
+                  <div class="mt-2 text-sm font-bold text-white">{{ backtestData.metrics?.max_drawdown || '-' }}</div>
+                </div>
+                <div class="rounded-xl border border-slate-800 bg-slate-900/80 p-3">
+                  <div class="text-[10px] uppercase tracking-[0.18em] text-slate-500">胜率</div>
+                  <div class="mt-2 text-sm font-bold text-white">{{ backtestData.metrics?.win_rate || '-' }}</div>
+                </div>
+                <div class="rounded-xl border border-slate-800 bg-slate-900/80 p-3">
+                  <div class="text-[10px] uppercase tracking-[0.18em] text-slate-500">日胜率</div>
+                  <div class="mt-2 text-sm font-bold text-white">{{ backtestData.metrics?.day_win_rate || '-' }}</div>
+                </div>
+                <div class="rounded-xl border border-slate-800 bg-slate-900/80 p-3">
+                  <div class="text-[10px] uppercase tracking-[0.18em] text-slate-500">交易次数</div>
+                  <div class="mt-2 text-sm font-bold text-white">{{ backtestData.metrics?.total_trades || '-' }}</div>
+                </div>
+                <div class="rounded-xl border border-slate-800 bg-slate-900/80 p-3">
+                  <div class="text-[10px] uppercase tracking-[0.18em] text-slate-500">夏普</div>
+                  <div class="mt-2 text-sm font-bold text-white">{{ backtestData.metrics?.sharpe || '-' }}</div>
+                </div>
+                <div class="rounded-xl border border-slate-800 bg-slate-900/80 p-3">
+                  <div class="text-[10px] uppercase tracking-[0.18em] text-slate-500">基准</div>
+                  <div class="mt-2 text-sm font-bold text-white">{{ backtestData.metrics?.benchmark_return || '-' }}</div>
+                </div>
+              </div>
+
+              <div class="rounded-xl border border-slate-800 bg-slate-900/80 px-3 py-2 text-[11px] text-slate-400">
+                参数: leverage={{ backtestData.policy?.leverage ?? '-' }}, trend_floor={{ backtestData.policy?.trend_floor_pos ?? '-' }}
+              </div>
+
+              <div
+                v-if="backtestData.attribution && Object.keys(backtestData.attribution).length > 0"
+                class="rounded-xl border border-slate-800 bg-slate-900/80 p-3"
+              >
+                <div class="mb-2 text-[11px] font-semibold text-slate-300">归因分析</div>
+                <div class="grid gap-x-3 gap-y-2 sm:grid-cols-2">
+                  <template v-for="(val, key) in backtestData.attribution" :key="key">
+                    <div class="rounded-lg border border-slate-800 bg-slate-950/70 px-3 py-2">
+                      <div class="text-[10px] text-slate-500">{{ key }}</div>
+                      <div class="mt-1 text-[11px] text-slate-200">{{ val.count }}次, {{ val.win_rate }}胜, {{ val.avg_pnl }}均</div>
+                    </div>
+                  </template>
+                </div>
+              </div>
+
+              <div v-if="backtestData.trades && backtestData.trades.length > 0" class="rounded-xl border border-slate-800 bg-slate-900/80 p-3">
+                <div class="mb-2 text-[11px] font-semibold text-slate-300">交易记录 (最近10笔)</div>
+                <div class="max-h-56 overflow-auto">
+                  <table class="min-w-[560px] w-full text-[10px]">
+                    <thead class="text-slate-500">
+                      <tr>
+                        <th class="pb-2 text-left">入场</th>
+                        <th class="pb-2 text-left">出场</th>
+                        <th class="pb-2 text-right">盈亏</th>
+                        <th class="pb-2 text-right">持仓天</th>
+                        <th class="pb-2 text-left">原因</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="(t, i) in backtestData.trades.slice(-10)" :key="i" :class="t.profit_pct > 0 ? 'text-green-400' : 'text-red-400'">
+                        <td class="py-1">{{ t.entry_date?.slice(5) }}</td>
+                        <td class="py-1">{{ t.exit_date?.slice(5) }}</td>
+                        <td class="py-1 text-right">{{ t.profit_pct }}%</td>
+                        <td class="py-1 text-right">{{ t.hold_days }}</td>
+                        <td class="py-1 text-slate-300">{{ t.reason }}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+
+            <div class="space-y-3">
+              <div class="rounded-xl border border-slate-800 bg-slate-900/80 p-3">
+                <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <div class="text-[11px] font-semibold text-slate-200">扩展诊断</div>
+                    <div class="mt-1 text-[10px] text-slate-500">网格搜索和 Walk-Forward 分开加载，避免弹窗被新表格挤压。</div>
+                  </div>
+                  <div class="flex flex-wrap gap-2">
+                    <button
+                      @click="loadBacktestGrid"
+                      class="inline-flex min-w-[112px] items-center justify-center rounded-lg border border-sky-500/30 bg-sky-500/15 px-3 py-1.5 text-[11px] font-bold text-sky-200 transition-all hover:bg-sky-500 hover:text-white disabled:opacity-60"
+                      :disabled="loadingBacktestGrid"
+                    >
+                      {{ loadingBacktestGrid ? '加载中...' : '网格诊断' }}
+                    </button>
+                    <button
+                      @click="loadWalkforward"
+                      class="inline-flex min-w-[112px] items-center justify-center rounded-lg border border-violet-500/30 bg-violet-500/15 px-3 py-1.5 text-[11px] font-bold text-violet-200 transition-all hover:bg-violet-500 hover:text-white disabled:opacity-60"
+                      :disabled="loadingWalkforward"
+                    >
+                      {{ loadingWalkforward ? '加载中...' : 'Walk-Forward' }}
+                    </button>
+                  </div>
+                </div>
+
+                <div class="mt-3 grid gap-3 lg:grid-cols-2 xl:grid-cols-1">
+                  <div class="min-h-[220px] rounded-xl border border-slate-800 bg-slate-950/70 p-3">
+                    <div class="flex items-center justify-between">
+                      <div class="text-[11px] font-semibold text-slate-300">网格诊断</div>
+                      <div class="text-[10px] text-slate-500">{{ backtestGridData ? '已加载' : '按需加载' }}</div>
+                    </div>
+                    <div v-if="loadingBacktestGrid" class="flex min-h-[160px] items-center justify-center text-[11px] text-slate-500">网格诊断加载中...</div>
+                    <div v-else-if="backtestGridData" class="mt-3 max-h-48 overflow-auto">
+                      <table class="min-w-[460px] w-full text-[10px]">
+                        <thead class="text-slate-500">
+                          <tr>
+                            <th class="pb-2 text-left">杠杆</th>
+                            <th class="pb-2 text-right">Floor</th>
+                            <th class="pb-2 text-right">收益</th>
+                            <th class="pb-2 text-right">回撤</th>
+                            <th class="pb-2 text-right">胜率</th>
+                            <th class="pb-2 text-right">交易</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr v-for="(g, i) in backtestGridData.grid" :key="i" :class="g.dd_passed ? 'text-green-400' : 'text-red-400'">
+                            <td class="py-1">{{ g.leverage }}</td>
+                            <td class="py-1 text-right">{{ g.floor }}</td>
+                            <td class="py-1 text-right">{{ g.return }}</td>
+                            <td class="py-1 text-right">{{ g.max_dd }}</td>
+                            <td class="py-1 text-right">{{ g.win_rate }}</td>
+                            <td class="py-1 text-right">{{ g.trades }}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                    <div v-else class="flex min-h-[160px] items-center justify-center text-[11px] text-slate-500">
+                      点击“网格诊断”后在此展示结果。
+                    </div>
+                  </div>
+
+                  <div class="min-h-[220px] rounded-xl border border-slate-800 bg-slate-950/70 p-3">
+                    <div class="flex items-center justify-between">
+                      <div class="text-[11px] font-semibold text-slate-300">Walk-Forward</div>
+                      <div class="text-[10px] text-slate-500">{{ walkforwardData ? '已加载' : '按需加载' }}</div>
+                    </div>
+                    <div v-if="loadingWalkforward" class="flex min-h-[160px] items-center justify-center text-[11px] text-slate-500">Walk-Forward 加载中...</div>
+                    <div v-else-if="walkforwardData" class="mt-3 grid gap-2 text-[11px] text-slate-400 sm:grid-cols-2">
+                      <div class="rounded-lg border border-slate-800 bg-slate-900/80 px-3 py-2">OOS收益: <span class="text-white">{{ walkforwardData.metrics?.oos_total_return }}</span></div>
+                      <div class="rounded-lg border border-slate-800 bg-slate-900/80 px-3 py-2">OOS年化: <span class="text-white">{{ walkforwardData.metrics?.oos_annual_return }}</span></div>
+                      <div class="rounded-lg border border-slate-800 bg-slate-900/80 px-3 py-2">OOS回撤: <span class="text-white">{{ walkforwardData.metrics?.oos_max_drawdown }}</span></div>
+                      <div class="rounded-lg border border-slate-800 bg-slate-900/80 px-3 py-2">OOS胜率: <span class="text-white">{{ walkforwardData.metrics?.oos_win_rate }}</span></div>
+                      <div class="rounded-lg border border-slate-800 bg-slate-900/80 px-3 py-2 sm:col-span-2">窗口数: <span class="text-white">{{ walkforwardData.metrics?.oos_total_trades }}</span></div>
+                    </div>
+                    <div v-else class="flex min-h-[160px] items-center justify-center text-[11px] text-slate-500">
+                      点击“Walk-Forward”后在此展示样本外结果。
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="text-[11px] text-slate-500">生成时间: {{ backtestData.generated_at || '-' }}</div>
             </div>
           </div>
-          <div v-if="backtestData.trades && backtestData.trades.length > 0" class="rounded bg-slate-800 p-2">
-            <div class="text-slate-300 font-semibold mb-1">交易记录 (最近10笔)</div>
-            <div class="max-h-32 overflow-y-auto">
-              <table class="w-full text-[10px]">
-                <thead class="text-slate-500">
-                  <tr>
-                    <th class="text-left">入场</th>
-                    <th class="text-left">出场</th>
-                    <th class="text-right">盈亏</th>
-                    <th class="text-right">持仓天</th>
-                    <th class="text-left">原因</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="(t, i) in backtestData.trades.slice(-10)" :key="i" :class="t.profit_pct > 0 ? 'text-green-400' : 'text-red-400'">
-                    <td>{{ t.entry_date?.slice(5) }}</td>
-                    <td>{{ t.exit_date?.slice(5) }}</td>
-                    <td class="text-right">{{ t.profit_pct }}%</td>
-                    <td class="text-right">{{ t.hold_days }}</td>
-                    <td>{{ t.reason }}</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-          <div class="flex gap-2">
-            <button @click="loadBacktestGrid" class="flex-1 rounded bg-sky-700 hover:bg-sky-600 px-2 py-1 text-white text-xs" :disabled="loadingBacktestGrid">
-              {{ loadingBacktestGrid ? '加载中...' : '网格诊断' }}
-            </button>
-            <button @click="loadWalkforward" class="flex-1 rounded bg-purple-700 hover:bg-purple-600 px-2 py-1 text-white text-xs" :disabled="loadingWalkforward">
-              {{ loadingWalkforward ? '加载中...' : 'Walk-Forward' }}
-            </button>
-          </div>
-          <div v-if="backtestGridData" class="rounded bg-slate-800 p-2">
-            <div class="text-slate-300 font-semibold mb-1">网格诊断</div>
-            <div class="max-h-32 overflow-y-auto">
-              <table class="w-full text-[10px]">
-                <thead class="text-slate-500">
-                  <tr>
-                    <th class="text-left">杠杆</th>
-                    <th class="text-right">Floor</th>
-                    <th class="text-right">收益</th>
-                    <th class="text-right">回撤</th>
-                    <th class="text-right">胜率</th>
-                    <th class="text-right">交易</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="(g, i) in backtestGridData.grid" :key="i" :class="g.dd_passed ? 'text-green-400' : 'text-red-400'">
-                    <td>{{ g.leverage }}</td>
-                    <td class="text-right">{{ g.floor }}</td>
-                    <td class="text-right">{{ g.return }}</td>
-                    <td class="text-right">{{ g.max_dd }}</td>
-                    <td class="text-right">{{ g.win_rate }}</td>
-                    <td class="text-right">{{ g.trades }}</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-          <div v-if="walkforwardData" class="rounded bg-slate-800 p-2">
-            <div class="text-slate-300 font-semibold mb-1">Walk-Forward结果</div>
-            <div class="grid grid-cols-2 gap-1 text-slate-400">
-              <div>OOS收益: <span class="text-white">{{ walkforwardData.metrics?.oos_total_return }}</span></div>
-              <div>OOS年化: <span class="text-white">{{ walkforwardData.metrics?.oos_annual_return }}</span></div>
-              <div>OOS回撤: <span class="text-white">{{ walkforwardData.metrics?.oos_max_drawdown }}</span></div>
-              <div>OOS胜率: <span class="text-white">{{ walkforwardData.metrics?.oos_win_rate }}</span></div>
-              <div>窗口数: <span class="text-white">{{ walkforwardData.metrics?.oos_total_trades }}</span></div>
-            </div>
-          </div>
-          <div class="text-[11px] text-slate-500">生成时间: {{ backtestData.generated_at || '-' }}</div>
         </div>
       </div>
     </div>
@@ -490,14 +554,14 @@
 </template>
 
 <script setup>
-import { computed, ref, onMounted, onBeforeUnmount } from 'vue';
+import { computed, ref, onMounted, onBeforeUnmount, watch } from 'vue';
 import { getMainlineHistory, getMarketSentiment, getSentimentPreview, getMarketSuggestion, getBacktestResult, getBacktestGrid, getBacktestWalkforward, syncSentiment, getTasksStatus, getMainlineLeaders } from '@/services/api';
-import { ChatBubbleLeftRightIcon } from '@heroicons/vue/20/solid'
 
 const loadingTrend = ref(false);
 const trendAnalysis = ref('');
 const mainlineChartDates = ref([]);
-const expandedMainlineName = ref('');
+const selectedMainlineName = ref('');
+const showSentimentPreviewModal = ref(false);
 const showBacktestModal = ref(false);
 const loadingBacktest = ref(false);
 const backtestError = ref('');
@@ -514,7 +578,14 @@ const sentimentPreview = ref(null);
 const previewError = ref('');
 const marketSuggestion = ref(null);
 const suggestionError = ref('');
-const currentMainline = ref({ name: '', score: 0, reason: '' });
+const currentMainline = ref({
+  name: '',
+  displayName: '',
+  score: 0,
+  reason: '',
+  focusTags: [],
+  driverSummary: '',
+});
 const mainlineReview = ref(null);
 const mainlineTrendSeries = ref([]);
 const mainlineOverview = ref({ current: null, continuous: null });
@@ -842,11 +913,9 @@ const buildTradingBrief = () => {
 
 const sentimentHero = computed(() => {
   const score = Number(tradingBrief.value.scoreValue);
-  const previewScore = Number(sentimentPreview.value?.projected_score);
   const regime = tradingBrief.value.regimeBase || '';
   const band = getSentimentBand(score);
   const theme = getSentimentTheme(regime);
-  const mainlineName = currentMainline.value?.name || tradingBrief.value.mainlineShort || '主线待确认';
 
   let title = '等待更清晰的情绪确认';
   if (regime === '强势') title = '情绪强势，主线内主动进攻';
@@ -855,28 +924,17 @@ const sentimentHero = computed(() => {
   else if (regime === '偏弱') title = '情绪偏弱，先防守后出手';
   else if (regime === '弱势') title = '情绪冰冷，先缩手等拐点';
 
-  let previewSummary = '未生成盘中预测，先按收盘信号执行。';
-  if (Number.isFinite(previewScore) && Number.isFinite(score)) {
-    if (previewScore >= score + 2) {
-      previewSummary = `次日预估继续回暖到 ${previewScore.toFixed(1)}，可以优先看主线承接。`;
-    } else if (previewScore <= score - 2) {
-      previewSummary = `次日预估降温到 ${previewScore.toFixed(1)}，明早先看冲高回落风险。`;
-    } else {
-      previewSummary = `次日预估维持在 ${previewScore.toFixed(1)} 左右，策略以延续为主。`;
-    }
-  }
-
   const summaryParts = [];
   if (tradingBrief.value.position) summaryParts.push(`建议仓位 ${tradingBrief.value.position}`);
-  if (mainlineName) summaryParts.push(`主线先看 ${mainlineName}`);
-  if (tradingBrief.value.attack) summaryParts.push(tradingBrief.value.attack);
-  summaryParts.push(previewSummary);
+  if (tradingBrief.value.attack) summaryParts.push(`进攻方式 ${tradingBrief.value.attack}`);
+  if (tradingBrief.value.risk) summaryParts.push(`风控底线 ${tradingBrief.value.risk}`);
 
   return {
     title,
     bandLabel: band.label,
     strategyTitle: band.strategyTitle,
-    summary: summaryParts.join('；'),
+    summary: summaryParts.join('；') || '先按收盘节奏规划仓位、进攻方式和风控底线。',
+    conclusion: [title, summaryParts.join('；')].filter(Boolean).join('；'),
     scoreDisplay: Number.isFinite(score) ? score.toFixed(1) : '--',
     scoreClass: theme.scoreClass,
     progressClass: theme.progressClass,
@@ -891,111 +949,60 @@ const sentimentHero = computed(() => {
 });
 
 const sentimentMetricCards = computed(() => {
-  const previewCard = sentimentPreview.value
-    ? {
-        label: '次日预估',
-        value: fmt(sentimentPreview.value.projected_score, 1),
-        description: `${sentimentPreview.value.predicted_trade_date || '-'} · ${sentimentPreview.value.plan?.next_day_strategy || '等待策略说明'}`,
-        toneClass: 'border-emerald-500/18 bg-emerald-500/[0.07]',
-      }
-    : {
-        label: '主线锚点',
-        value: currentMainline.value?.name || tradingBrief.value.mainlineShort || '-',
-        description: currentMainline.value?.reason || '暂无明确主线',
-        toneClass: 'border-cyan-500/18 bg-cyan-500/[0.07]',
-      };
-
   return [
     {
       label: '最新交易日',
       value: tradingBrief.value.tradeDate || '-',
-      description: tradingBrief.value.regime || '等待情绪数据完成',
       toneClass: 'border-sky-500/18 bg-sky-500/[0.07]',
     },
     {
-      label: '情绪状态',
+      label: '情绪分区',
       value: sentimentHero.value.bandLabel,
-      description: tradingBrief.value.scoreText || '-',
       toneClass: 'border-amber-500/18 bg-amber-500/[0.08]',
     },
     {
-      label: '建议仓位',
-      value: tradingBrief.value.position || '-',
-      description: tradingBrief.value.attack || '等待主线确认',
+      label: '收盘读数',
+      value: Number.isFinite(Number(tradingBrief.value.rawScore)) ? fmt(tradingBrief.value.rawScore, 1) : '-',
       toneClass: 'border-business-accent/18 bg-business-accent/[0.08]',
     },
-    previewCard,
+    {
+      label: '情绪 MA5',
+      value: Number.isFinite(Number(tradingBrief.value.scoreValue)) ? fmt(tradingBrief.value.scoreValue, 1) : '-',
+      toneClass: 'border-cyan-500/18 bg-cyan-500/[0.07]',
+    },
   ];
 });
 
 const sentimentActionItems = computed(() => [
   {
-    label: '仓位',
+    label: '市场节奏',
+    value: tradingBrief.value.regime || '等待情绪数据',
+    note: sentimentHero.value.strategyTitle || '先等情绪信号完成',
+    toneClass: 'border-sky-500/18 bg-sky-500/[0.07]',
+  },
+  {
+    label: '建议仓位',
     value: tradingBrief.value.position || '等待信号',
+    note: '仓位按 2-5 个交易日节奏微调，不因单根 K 线满仓切换。',
     toneClass: 'border-business-accent/18 bg-business-accent/[0.08]',
   },
   {
-    label: '进攻方向',
+    label: '进攻方式',
     value: tradingBrief.value.attack || '等待主线确认',
+    note: '只定义出手方式，具体主线和龙头交给下方作战板。',
     toneClass: 'border-amber-500/18 bg-amber-500/[0.08]',
   },
   {
     label: '风控底线',
     value: tradingBrief.value.risk || '先控制回撤',
+    note: '没有一致性时宁可少做，不用频率去补胜率。',
     toneClass: 'border-rose-500/18 bg-rose-500/[0.08]',
   },
 ]);
 
-const sentimentDecisionCues = computed(() => {
-  const previewSummary = sentimentPreview.value
-    ? `${sentimentPreview.value.predicted_trade_date || '-'} 预估 ${fmt(sentimentPreview.value.projected_score, 1)}，${sentimentPreview.value.plan?.next_day_strategy || '继续观察'}`
-    : '还没有盘中预测，先按收盘情绪和主线强度执行。';
-
-  const suggestionSummary = marketSuggestion.value
-    ? `${marketSuggestion.value.action || '-'} / 目标仓位 ${fmt((Number(marketSuggestion.value.target_position) || 0) * 100, 0, '%')} / 主线 ${marketSuggestion.value.rationale?.top_mainline || '-'}`
-    : suggestionError.value
-      ? `统一建议生成失败: ${suggestionError.value}`
-      : '需要时可点击“预测情绪”补充统一市场建议。';
-
-  return [
-    {
-      label: '市场状态',
-      value: tradingBrief.value.regime || '等待情绪数据',
-    },
-    {
-      label: '盘中预判',
-      value: previewSummary,
-    },
-    {
-      label: '统一建议',
-      value: suggestionSummary,
-    },
-  ];
-});
-
-const mainlineHeadline = computed(() => {
-  const current = mainlineOverview.value.current;
-  const continuous = mainlineOverview.value.continuous;
-
-  let title = '主线暂未收束，先控制试错';
-  if (current?.name && continuous?.name && current.name === continuous.name) {
-    title = `${current.name} 是当前最值得聚焦的方向`;
-  } else if (current?.name && continuous?.name) {
-    title = `先盯 ${current.name}，持续性再看 ${continuous.name}`;
-  } else if (current?.name) {
-    title = `${current.name} 是当前最强方向`;
-  } else if (continuous?.name) {
-    title = `${continuous.name} 仍是近10日持续主线`;
-  }
-
-  return {
-    title,
-    summary: mainlineReview.value?.summary
-      || current?.detail
-      || continuous?.detail
-      || '主线强度来自近10日复盘与实时龙头共振。',
-  };
-});
+const mainlineHeadline = computed(() => (
+  mainlineRotationNote.value || '主线暂未收束，先控制试错。'
+));
 
 const getMainlinePriorityScore = (sector) => {
   const score = Number(sector?.score) || 0;
@@ -1071,21 +1078,22 @@ const getMainlinePanelClass = (roleLabel) => {
   return 'bg-slate-900/20';
 };
 
-const getMainlineRuleText = (sector) => {
+const getMainlineExecutionBias = (sector) => {
   const consecutiveDays = Number(sector?.consecutiveDays) || 0;
   const limitUps = Number(sector?.limitUps) || 0;
   const activeDays = Number(sector?.activeDays) || 0;
+  const resonance = Number(sector?.resonance) || 0;
 
-  if (consecutiveDays >= 3 && limitUps >= 3) {
-    return '满足“连续 3 日走强 + 强度达标”，可以进入深看名单。';
+  if (consecutiveDays >= 3 && resonance >= 55) {
+    return '连续性和板块共振都在前排，分歧后的承接更值得跟。';
   }
   if (consecutiveDays >= 3) {
-    return '连续性达标，重点看分歧后的承接和龙头换手。';
+    return '连续性已经达标，优先看分歧回踩后的承接。';
   }
-  if (limitUps >= 3 || activeDays >= 5) {
-    return '强度存在，但还需要继续确认是否只是短线脉冲。';
+  if (limitUps >= 3 || activeDays >= 5 || resonance >= 50) {
+    return '强度已进入观察名单，但还要确认能否继续走出持续性。';
   }
-  return '当前更像预备方向，先观察再决定是否提高优先级。';
+  return '当前更偏预备方向，先看龙头是否能维持强度。';
 };
 
 const mainlinePriorityCards = computed(() => (
@@ -1112,36 +1120,106 @@ const focusedMainlineCards = computed(() => (
       panelClass: getMainlinePanelClass(role.label),
       roleLabel: role.label,
       roleClass: role.className,
-      ruleText: getMainlineRuleText(sector),
-      priorityText: role.note,
+      thesis: sector.thesis || getMainlineExecutionBias(sector),
     };
   })
 ));
 
-const mainlineSummaryCards = computed(() => [
-  {
-    label: '主盯方向',
-    value: mainlineOverview.value.current?.name || '等待数据',
-    description: mainlineOverview.value.current?.detail || '按最新主线强度排序。',
-    toneClass: 'border-business-accent/18 bg-business-accent/[0.08]',
-  },
-  {
-    label: '持续方向',
-    value: mainlineOverview.value.continuous?.name || '等待数据',
-    description: mainlineOverview.value.continuous?.detail || '优先看近10日能持续的方向。',
-    toneClass: 'border-business-highlight/18 bg-business-highlight/[0.08]',
-  },
-  {
-    label: '聚焦规则',
-    value: focusedMainlineCards.value.length ? `最多 ${focusedMainlineCards.value.length} 条` : '等待数据',
-    description: '按持续性、强度、共振筛选，Top5 龙头折叠展示。',
-    toneClass: 'border-amber-500/18 bg-amber-500/[0.08]',
-  },
-]);
+const selectedMainlineCard = computed(() => (
+  focusedMainlineCards.value.find((item) => item.name === selectedMainlineName.value) || null
+));
 
-const toggleMainlineExpansion = (name) => {
-  expandedMainlineName.value = expandedMainlineName.value === name ? '' : name;
+const normalizeSentenceText = (text = '') => text.replace(/[\s，。；：、“”"'（）()【】\[\]\-]/g, '');
+
+const pickDistinctAnalysisSentence = (text, compareTexts = []) => {
+  const sentences = `${text || ''}`
+    .split(/[。；！!\n]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const comparePool = compareTexts
+    .map((item) => normalizeSentenceText(item))
+    .filter(Boolean);
+
+  return sentences.find((sentence) => {
+    const normalized = normalizeSentenceText(sentence);
+    if (normalized.length < 12) return false;
+    return !comparePool.some((item) => item.includes(normalized) || normalized.includes(item));
+  }) || '';
 };
+
+const mainlineChartCaption = computed(() => {
+  const names = focusedMainlineCards.value.map((item) => item.name).filter(Boolean);
+  if (!names.length) return '图表自动跟随当前聚焦方向';
+  return `图表仅保留 ${names.join(' / ')} 三条以内主线`;
+});
+
+const getMainlineLeaderCaption = (sector) => {
+  if (!sector) return '点开方向卡片后，在卡片内直接看龙头样本。';
+  if (sector.driverSummary) return sector.driverSummary;
+  const tags = (sector.quickTags || []).slice(0, 2).join(' · ');
+  if (tags) return tags;
+  if (sector.roleLabel === '主盯') {
+    return '优先看龙头承接是否稳定，不需要额外拆一块固定席位。';
+  }
+  return '作为轮动备份观察，确认强度后再切换注意力。';
+};
+
+const mainlineRotationNote = computed(() => {
+  const primary = focusedMainlineCards.value[0];
+  const secondary = focusedMainlineCards.value[1];
+  const selected = selectedMainlineCard.value;
+  if (!primary) return '';
+
+  const parts = [];
+
+  if (selected?.name && selected.name !== primary.name) {
+    parts.push(`当前展开 ${selected.name} 只是保留轮动备份，不建议和 ${primary.name} 平均分配仓位`);
+  } else {
+    parts.push(`先盯 ${primary.name}，龙头承接没丢前不需要频繁切换观察中心`);
+  }
+
+  if (secondary?.name && secondary.name !== primary.name) {
+    parts.push(`只有在 ${primary.name} 承接转弱且 ${secondary.name} 强度继续抬升时，再把注意力切到 ${secondary.name}`);
+  }
+
+  const distinctInsight = pickDistinctAnalysisSentence(trendAnalysis.value, parts);
+  if (distinctInsight) {
+    parts.push(distinctInsight);
+  }
+
+  return `${parts.join('；')}。`;
+});
+
+const mergeMainlineLeaders = (payload) => {
+  const current = Array.isArray(mainlineLeaders.value?.mainlines)
+    ? mainlineLeaders.value.mainlines
+    : [];
+  const incoming = Array.isArray(payload?.mainlines) ? payload.mainlines : [];
+  const merged = new Map();
+
+  current.forEach((item) => {
+    if (item?.sector) merged.set(item.sector, item);
+  });
+  incoming.forEach((item) => {
+    if (item?.sector) merged.set(item.sector, item);
+  });
+
+  mainlineLeaders.value = {
+    ...(mainlineLeaders.value || {}),
+    ...(payload || {}),
+    mainlines: Array.from(merged.values()),
+  };
+};
+
+const toggleMainlineFocus = (name) => {
+  if (!name) return;
+  selectedMainlineName.value = selectedMainlineName.value === name ? '' : name;
+};
+
+watch([selectedMainlineName, loadingLeaders], ([name, isLoading]) => {
+  if (!name || isLoading || hasLeaderGroup(name)) return;
+  void fetchMainlineLeaders(name);
+});
 
 const waitForSentimentTaskDone = async (timeoutMs = 180000) => {
   const start = Date.now();
@@ -1177,9 +1255,11 @@ const handleSyncSentiment = async () => {
 
 const handlePreviewSentiment = async () => {
   if (predictingSentiment.value) return;
+  showSentimentPreviewModal.value = true;
   predictingSentiment.value = true;
   previewError.value = '';
   suggestionError.value = '';
+  sentimentPreview.value = null;
   marketSuggestion.value = null;
   try {
     const res = await getSentimentPreview('dc');
@@ -1292,6 +1372,8 @@ const toSignedPctClass = (value) => {
   return n >= 0 ? 'text-red-400' : 'text-emerald-400';
 };
 
+const hasLeaderGroup = (name) => Boolean(getLeaderGroupByName(name));
+
 const getLeaderGroupByName = (name) => {
   if (!name) return null;
   return (mainlineLeaders.value?.mainlines || []).find((item) => item.sector === name) || null;
@@ -1355,11 +1437,63 @@ const normalizeMainlineStocks = (stocks = []) => (
   })
 );
 
+const buildMainlineThesis = ({ labels = [], activeDays, consecutiveDays, limitUps, resonance, driverSummary = '' }) => {
+  if (driverSummary) {
+    if (consecutiveDays >= 3 || resonance >= 50) {
+      return `${driverSummary}，优先看细分龙头分歧后的承接。`;
+    }
+    return `${driverSummary}，先确认这个细分是否还能继续扩散。`;
+  }
+  if (consecutiveDays >= 3 && resonance >= 55) {
+    return '连续性和板块共振都在前排，优先看分歧后的承接。';
+  }
+  if (labels.includes('当前最强') && limitUps >= 3) {
+    return '当前强度最靠前，先盯龙头能否继续维持溢价。';
+  }
+  if (consecutiveDays >= 3) {
+    return '连续性已建立，适合跟踪分歧回踩后的确认点。';
+  }
+  if (activeDays >= 5 || resonance >= 50) {
+    return '近10日反复活跃，但还要等盘中继续走出确认。';
+  }
+  return '当前仍在确认阶段，先观察龙头是否继续发酵。';
+};
+
+const buildMainlineEvidenceTags = ({ activeDays, consecutiveDays, limitUps, resonance, stockCount, focusTags = [] }) => {
+  const tags = [];
+  // 不再放入板块概念标签（已在标题展示），也不放涨停/连天（已移到header）
+  return tags;
+};
+
+const buildMainlineQuickTags = ({ consecutiveDays, limitUps }) => {
+  const tags = [];
+  if (Number.isFinite(limitUps) && limitUps > 0) {
+    tags.push(`涨停${Math.round(limitUps)}`);
+  }
+  if (Number.isFinite(consecutiveDays) && consecutiveDays >= 2) {
+    tags.push(`连${Math.round(consecutiveDays)}天`);
+  }
+  return tags;
+};
+
 const buildFocusCard = (name, labels = [], reviewLine = null) => {
   if (!name) return null;
 
   const leaderGroup = getLeaderGroupByName(name);
   const latestPoint = getLatestMainlinePoint(name);
+  const displayName = leaderGroup?.display_sector
+    || reviewLine?.display_name
+    || (currentMainline.value?.name === name ? currentMainline.value?.displayName : '')
+    || name;
+  const focusTags = Array.from(new Set([
+    ...(reviewLine?.focus_tags || []),
+    ...(leaderGroup?.focus_tags || []),
+    ...((currentMainline.value?.name === name ? currentMainline.value?.focusTags : []) || []),
+  ])).filter(Boolean);
+  const driverSummary = leaderGroup?.driver_summary
+    || reviewLine?.driver_summary
+    || (currentMainline.value?.name === name ? currentMainline.value?.driverSummary : '')
+    || '';
   const stocks = normalizeMainlineStocks(
     leaderGroup?.leaders?.length
       ? leaderGroup.leaders
@@ -1405,38 +1539,21 @@ const buildFocusCard = (name, labels = [], reviewLine = null) => {
     ? Number(leaderGroup.resonance)
     : null;
 
-  let detail = '';
-  if (reviewLine) {
-    detail = `近10日上榜${activeDays ?? 0}天，连续${consecutiveDays ?? 0}天`;
-  } else if (leaderGroup) {
-    detail = `最新主线样本${stockCount ?? '-'}只${Number.isFinite(resonance) ? `，板块共振${Math.round(resonance)}%` : ''}`;
-  } else {
-    detail = currentMainline.value?.reason || '主线强度来自近10日历史走势';
-  }
-
-  let stockHint = '优先展示实时评分龙头';
-  if (!leaderGroup?.leaders?.length && reviewLine?.leaders?.length) {
-    stockHint = '回退到近10日活跃龙头';
-  } else if (!leaderGroup?.leaders?.length && latestPoint?.top_stocks?.length) {
-    stockHint = '回退到最新交易日强势股';
-  }
-
   return {
     name,
+    displayName,
     labels: [...labels],
-    detail,
+    thesis: buildMainlineThesis({ labels, activeDays, consecutiveDays, limitUps, resonance, driverSummary }),
+    evidenceTags: buildMainlineEvidenceTags({ activeDays, consecutiveDays, limitUps, resonance, stockCount, focusTags }),
+    quickTags: buildMainlineQuickTags({ consecutiveDays, limitUps }),
+    focusTags,
+    driverSummary,
     score,
     activeDays,
     consecutiveDays,
     limitUps,
     stockCount,
     resonance,
-    resonanceText: Number.isFinite(resonance) ? `板块共振 ${Math.round(resonance)}%` : '',
-    activeDaysText: Number.isFinite(activeDays) ? `${Math.round(activeDays)}天` : '-',
-    consecutiveDaysText: Number.isFinite(consecutiveDays) ? `${Math.round(consecutiveDays)}天` : '-',
-    limitUpsText: Number.isFinite(limitUps) ? `${Math.round(limitUps)}家` : '-',
-    stockCountText: Number.isFinite(stockCount) ? `${Math.round(stockCount)}只` : '-',
-    stockHint,
     stocks,
   };
 };
@@ -1454,7 +1571,7 @@ const rebuildMainlineFocus = () => {
           score: Number.isFinite(Number(currentMainline.value?.score))
             ? Number(currentMainline.value.score)
             : Number(currentReview?.latest_score) || 0,
-          detail: currentMainline.value?.reason || '按最新交易日主线强度排序',
+          reason: currentMainline.value?.reason || '按最新交易日主线强度排序',
         }
       : null,
     continuous: continuousLine
@@ -1463,7 +1580,8 @@ const rebuildMainlineFocus = () => {
           score: Number.isFinite(Number(continuousLine.latest_score))
             ? Number(continuousLine.latest_score)
             : Number(continuousLine.avg_score) || 0,
-          detail: `近10日上榜${continuousLine.active_days}天，连续${continuousLine.consecutive_days}天`,
+          activeDays: Number(continuousLine.active_days) || 0,
+          consecutiveDays: Number(continuousLine.consecutive_days) || 0,
         }
       : null,
   };
@@ -1495,8 +1613,11 @@ const rebuildMainlineFocus = () => {
     .sort((a, b) => Number(b?.score || 0) - Number(a?.score || 0))
     .slice(0, 6);
 
-  if (expandedMainlineName.value && !mainlineFocusCards.value.some((item) => item.name === expandedMainlineName.value)) {
-    expandedMainlineName.value = '';
+  if (
+    selectedMainlineName.value
+    && !mainlineFocusCards.value.some((item) => item.name === selectedMainlineName.value)
+  ) {
+    selectedMainlineName.value = '';
   }
 
   refreshMainlineChart();
@@ -1740,11 +1861,14 @@ const fetchMainlineHistory = async () => {
     if (analysis?.top_mainline) {
       currentMainline.value = {
         name: analysis.top_mainline.name || '',
+        displayName: analysis.top_mainline.display_name || analysis.top_mainline.name || '',
         score: analysis.top_mainline.score || 0,
-        reason: analysis.top_mainline.reason || ''
+        reason: analysis.top_mainline.reason || '',
+        focusTags: analysis.top_mainline.focus_tags || [],
+        driverSummary: analysis.top_mainline.driver_summary || '',
       };
     } else {
-      currentMainline.value = { name: '', score: 0, reason: '' };
+      currentMainline.value = { name: '', displayName: '', score: 0, reason: '', focusTags: [], driverSummary: '' };
     }
     mainlineReview.value = analysis?.review_10d || null;
     buildTradingBrief();
@@ -1754,7 +1878,7 @@ const fetchMainlineHistory = async () => {
     mainlineChartDates.value = [];
     mainlineTrendSeries.value = [];
     mainlineReview.value = null;
-    currentMainline.value = { name: '', score: 0, reason: '' };
+    currentMainline.value = { name: '', displayName: '', score: 0, reason: '', focusTags: [], driverSummary: '' };
     mainlineFocusCards.value = [];
     mainlineOverview.value = { current: null, continuous: null };
     refreshMainlineChart();
@@ -1977,19 +2101,27 @@ const fetchMarketSentiment = async () => {
 };
 
 // 加载主线龙头推荐
-const fetchMainlineLeaders = async () => {
+const fetchMainlineLeaders = async (sector = '') => {
   loadingLeaders.value = true;
   try {
-    const res = await getMainlineLeaders({ limit: 5, min_score: 60 });
+    const params = { limit: 5, min_score: 60 };
+    if (sector) {
+      params.sector = sector;
+    }
+    const res = await getMainlineLeaders(params);
     if (res.data.status === 'success') {
-      mainlineLeaders.value = res.data;
+      mergeMainlineLeaders(res.data);
     } else {
-      mainlineLeaders.value = null;
+      if (!mainlineLeaders.value?.mainlines?.length) {
+        mainlineLeaders.value = null;
+      }
     }
     rebuildMainlineFocus();
   } catch (e) {
     console.error('加载主线龙头失败', e);
-    mainlineLeaders.value = null;
+    if (!mainlineLeaders.value?.mainlines?.length) {
+      mainlineLeaders.value = null;
+    }
     rebuildMainlineFocus();
   } finally {
     loadingLeaders.value = false;
@@ -2001,7 +2133,6 @@ onMounted(async () => {
   window.addEventListener('resize', updateViewport);
   fetchMainlineHistory();
   fetchMarketSentiment();
-  fetchMainlineLeaders();
 });
 
 onBeforeUnmount(() => {

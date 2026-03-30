@@ -3,6 +3,7 @@
 import json
 import logging
 import re
+from collections import defaultdict
 from functools import lru_cache
 
 import arrow
@@ -15,7 +16,13 @@ from .config import (
     CATEGORY_WEIGHTS,
     CONCEPT_MAPPING,
     CONCEPT_NOISE_PATTERNS,
+    DRIVER_DISPLAY_MODE,
+    DRIVER_DOMINANCE_THRESHOLD,
+    DRIVER_REPLACE_SECTOR_MIN_SCORE_SHARE,
+    DRIVER_REPLACE_SECTOR_MIN_SUPPORT_COUNT,
+    DRIVER_REPLACE_SECTOR_MIN_SUPPORT_RATIO,
     INDUSTRY_ANCHOR_RULES,
+    SECTOR_GENERIC_TAGS,
 )
 
 logger = logging.getLogger(__name__)
@@ -36,15 +43,69 @@ class MainlineAnalyst:
         self.category_weights = category_weights if category_weights else CATEGORY_WEIGHTS
         self.noise_patterns = noise_patterns if noise_patterns else CONCEPT_NOISE_PATTERNS
         self.industry_anchor_rules = INDUSTRY_ANCHOR_RULES
+        self.sector_generic_tags = SECTOR_GENERIC_TAGS
         self._concept_score_cache = {}
         self._sector_mapping_cache = {}
         self._compiled_noise_patterns = [re.compile(p, re.IGNORECASE) for p in self.noise_patterns]
         self._prepared_industry_anchor_rules = self._prepare_industry_anchor_rules()
+        self._prepared_sector_generic_tags = self._prepare_sector_generic_tags()
 
     def invalidate_cache(self):
         self._concept_score_cache.clear()
         self._sector_mapping_cache.clear()
         self.analyze.cache_clear()
+        self.get_history.cache_clear()
+        self._load_concept_snapshot.cache_clear()
+        self._load_stock_basic_snapshot.cache_clear()
+        self._load_tag_snapshot.cache_clear()
+        self._get_stock_mainline_map_snapshot.cache_clear()
+
+    @lru_cache(maxsize=1)
+    def _load_concept_snapshot(self) -> pd.DataFrame:
+        concept_df = fetch_df(
+            """
+            SELECT DISTINCT ts_code, concept_name
+            FROM stock_concept_details
+            WHERE concept_name IS NOT NULL
+            """
+        )
+        if concept_df.empty:
+            return pd.DataFrame(columns=["ts_code", "concept_name"])
+
+        concept_df["ts_code"] = concept_df["ts_code"].astype(str).str.strip()
+        concept_df["concept_name"] = concept_df["concept_name"].astype(str).str.strip()
+        concept_df = concept_df[(concept_df["ts_code"] != "") & (concept_df["concept_name"] != "")]
+        return concept_df.drop_duplicates().reset_index(drop=True)
+
+    @lru_cache(maxsize=1)
+    def _load_stock_basic_snapshot(self) -> pd.DataFrame:
+        stock_basic_df = fetch_df(
+            """
+            SELECT ts_code, industry
+            FROM stock_basic
+            """
+        )
+        if stock_basic_df.empty:
+            return pd.DataFrame(columns=["ts_code", "industry"])
+
+        stock_basic_df["ts_code"] = stock_basic_df["ts_code"].astype(str).str.strip()
+        stock_basic_df["industry"] = stock_basic_df["industry"].fillna("").astype(str).str.strip()
+        stock_basic_df = stock_basic_df[stock_basic_df["ts_code"] != ""]
+        return stock_basic_df.drop_duplicates(subset=["ts_code"]).reset_index(drop=True)
+
+    @lru_cache(maxsize=1)
+    def _load_tag_snapshot(self) -> pd.DataFrame:
+        concept_df = self._load_concept_snapshot()
+        if concept_df.empty:
+            return pd.DataFrame(columns=["ts_code", "tag_name", "tag_type"])
+
+        tag_df = concept_df.rename(columns={"concept_name": "tag_name"}).copy()
+        tag_df["tag_type"] = "concept"
+        return tag_df[["ts_code", "tag_name", "tag_type"]].drop_duplicates().reset_index(drop=True)
+
+    @lru_cache(maxsize=1)
+    def _get_stock_mainline_map_snapshot(self) -> pd.DataFrame:
+        return self._build_stock_mainline_map("", "")
 
     def refresh_recent_scores(self, days: int = 30) -> int:
         date_df = fetch_df(
@@ -158,6 +219,22 @@ class MainlineAnalyst:
             }
         return prepared
 
+    def _prepare_sector_generic_tags(self) -> dict:
+        prepared = {}
+        for sector, tags in (self.sector_generic_tags or {}).items():
+            cleaned_tags = set()
+            for tag in tags or []:
+                cleaned = self._clean_concept_name(tag).upper()
+                if cleaned:
+                    cleaned_tags.add(cleaned)
+
+            sector_clean = self._clean_concept_name(sector).upper()
+            if sector_clean:
+                cleaned_tags.add(sector_clean)
+
+            prepared[sector] = cleaned_tags
+        return prepared
+
     def _get_industry_anchor(self, industry: str):
         cleaned = self._clean_concept_name(industry)
         if not cleaned:
@@ -202,6 +279,49 @@ class MainlineAnalyst:
 
         return best["sector"], float(best["score"])
 
+    def _get_industry_evidence_score(self, industry: str, anchor: dict | None = None) -> float:
+        scores = self._get_concept_scores(industry)
+        best_score = float(scores[0]["score"]) if scores else 0.0
+        base_score = max(best_score * 1.35, 12.0 if best_score > 0 else 0.0)
+        if anchor:
+            base_score = max(base_score, float(anchor.get("anchor_score", 0.0)))
+        return round(base_score, 4)
+
+    def _resolve_tag_sector(self, tag_name: str, tag_type: str = "concept") -> str:
+        cleaned = self._clean_concept_name(tag_name)
+        if not cleaned or cleaned in CONCEPT_BLACKLIST or self._is_noise_concept(cleaned):
+            return ""
+
+        cache_key = f"{tag_type}:{cleaned.upper()}"
+        cached = self._sector_mapping_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        if tag_type == "industry":
+            anchor = self._get_industry_anchor(cleaned)
+            resolved = anchor["sector"] if anchor else self._get_mapped_concept(cleaned)
+            self._sector_mapping_cache[cache_key] = resolved
+            return resolved
+
+        scores = self._get_concept_scores(cleaned)
+        resolved = scores[0]["sector"] if scores else ""
+        self._sector_mapping_cache[cache_key] = resolved
+        return resolved
+
+    def _get_tag_priority_multiplier(self, sector_name: str, tag_name: str, tag_type: str) -> float:
+        cleaned = self._clean_concept_name(tag_name).upper()
+        multiplier = 1.0
+
+        if cleaned in self._prepared_sector_generic_tags.get(sector_name, set()):
+            multiplier *= 0.42
+
+        if tag_type == "industry":
+            multiplier *= 0.94
+        else:
+            multiplier *= 1.08
+
+        return multiplier
+
     def _decayed_sector_score(self, scores: list[float]) -> float:
         if not scores:
             return 0.0
@@ -216,6 +336,27 @@ class MainlineAnalyst:
                 weight = weights[-1] * (0.65 ** (idx - len(weights) + 1))
             total += score * weight
         return round(total, 4)
+
+    def _build_generic_sector_override_mask(self, merged: pd.DataFrame) -> pd.Series:
+        if merged.empty:
+            return pd.Series(dtype=bool)
+
+        concept_weight = merged["mapped_name"].map(self.category_weights).fillna(1.0)
+        fallback_weight = merged["mapped_name_fallback"].map(self.category_weights).fillna(1.0)
+        min_required_score = np.maximum(
+            merged["fallback_score"] * 1.2,
+            merged["fallback_score"] + 3.5,
+        )
+        return (
+            merged["mapped_name"].notna()
+            & merged["mapped_name_fallback"].notna()
+            & (merged["mapped_name"] != merged["mapped_name_fallback"])
+            & (merged["support_count"] >= 1)
+            & (concept_weight >= 2.5)
+            & (fallback_weight <= 1.9)
+            & ((concept_weight - fallback_weight) >= 0.7)
+            & (merged["map_score"] >= min_required_score)
+        )
 
     def _resolve_trade_window(self, days: int, trade_date: str | None = None):
         if trade_date:
@@ -255,7 +396,7 @@ class MainlineAnalyst:
     def get_stock_mainline_map(
         self, min_date: str | None = None, max_date: str | None = None, ts_codes: list[str] | None = None
     ) -> pd.DataFrame:
-        df = self._build_stock_mainline_map(min_date or "", max_date or "")
+        df = self._get_stock_mainline_map_snapshot().copy()
         if ts_codes:
             df = df[df["ts_code"].isin(ts_codes)]
         return df.reset_index(drop=True)
@@ -268,23 +409,11 @@ class MainlineAnalyst:
         3. 用行业锚点纠偏多主题冲突，例如电力运营类公司优先归入电力公用。
         4. 若概念不足，则回退到 stock_basic.industry。
         """
-        concept_df = fetch_df(
-            """
-            SELECT DISTINCT ts_code, concept_name
-            FROM stock_concept_details
-            WHERE concept_name IS NOT NULL
-            """
-        )
+        concept_df = self._load_concept_snapshot()
 
         concept_evidence = {}
         concept_supports = {}
-        fallback_df = fetch_df(
-            """
-            SELECT ts_code, industry
-            FROM stock_basic
-            WHERE industry IS NOT NULL AND industry <> ''
-            """
-        )
+        fallback_df = self._load_stock_basic_snapshot()
         fallback_rows = []
         industry_anchor_map = {}
         if not fallback_df.empty:
@@ -296,14 +425,26 @@ class MainlineAnalyst:
 
                 anchor = self._get_industry_anchor(industry)
                 mapped = anchor["sector"] if anchor else self._get_mapped_concept(industry)
-                fallback_rows.append({"ts_code": ts_code, "mapped_name": mapped or industry})
+                if anchor:
+                    industry_anchor_map[ts_code] = anchor
 
-                if not anchor:
+                if not mapped:
+                    fallback_rows.append({"ts_code": ts_code, "mapped_name": industry, "fallback_score": 0.0})
                     continue
 
-                industry_anchor_map[ts_code] = anchor
-                key = (ts_code, anchor["sector"])
-                concept_evidence.setdefault(key, []).append(float(anchor.get("anchor_score", 0.0)))
+                industry_score = self._get_industry_evidence_score(industry, anchor=anchor)
+                fallback_rows.append(
+                    {
+                        "ts_code": ts_code,
+                        "mapped_name": mapped,
+                        "fallback_score": industry_score,
+                    }
+                )
+                if industry_score <= 0:
+                    continue
+
+                key = (ts_code, mapped)
+                concept_evidence.setdefault(key, []).append(industry_score)
                 concept_supports.setdefault(key, set()).add(f"industry:{industry}")
 
         if not concept_df.empty:
@@ -356,22 +497,39 @@ class MainlineAnalyst:
                     ascending=[True, False, False],
                 )
                 .drop_duplicates(subset=["ts_code"])
-                .drop(columns=["map_score", "support_count"])
             )
 
         fallback_map = (
             pd.DataFrame(fallback_rows)
             if fallback_rows
-            else pd.DataFrame(columns=["ts_code", "mapped_name"])
+            else pd.DataFrame(columns=["ts_code", "mapped_name", "fallback_score"])
         )
 
         if df_map.empty:
-            return fallback_map.drop_duplicates(subset=["ts_code"])
+            return fallback_map[["ts_code", "mapped_name"]].drop_duplicates(subset=["ts_code"])
         if fallback_map.empty:
-            return df_map.drop_duplicates(subset=["ts_code"])
+            return df_map[["ts_code", "mapped_name"]].drop_duplicates(subset=["ts_code"])
 
         merged = fallback_map.merge(df_map, on="ts_code", how="left", suffixes=("_fallback", ""))
-        merged["mapped_name"] = merged["mapped_name"].fillna(merged["mapped_name_fallback"])
+        merged["fallback_score"] = merged["fallback_score"].fillna(0.0)
+        merged["map_score"] = merged["map_score"].fillna(0.0)
+        merged["support_count"] = merged["support_count"].fillna(0).astype(int)
+        generic_sector_override = self._build_generic_sector_override_mask(merged)
+        concept_wins = (
+            merged["mapped_name"].notna()
+            & (
+                merged["mapped_name_fallback"].isna()
+                | (merged["mapped_name"] == merged["mapped_name_fallback"])
+                | (merged["support_count"] >= 2)
+                | (merged["map_score"] >= merged["fallback_score"] * 1.65)
+                | generic_sector_override
+            )
+        )
+        merged["mapped_name"] = np.where(
+            concept_wins,
+            merged["mapped_name"],
+            merged["mapped_name_fallback"],
+        )
         merged = merged[["ts_code", "mapped_name"]].drop_duplicates(subset=["ts_code"])
         return merged
 
@@ -382,7 +540,7 @@ class MainlineAnalyst:
 
         market_df = fetch_df(
             """
-            SELECT p.trade_date, p.ts_code, p.pct_chg, p.amount, b.name AS stock_name,
+            SELECT p.trade_date, p.ts_code, p.pct_chg, p.amount, b.name AS stock_name, b.industry,
                    COALESCE(m.net_mf_amount, 0) AS net_mf_amount
             FROM daily_price p
             LEFT JOIN stock_moneyflow m
@@ -429,6 +587,87 @@ class MainlineAnalyst:
         grouped["net_mf_ratio"] = grouped["net_mf"] / grouped["total_amt"].replace(0, np.nan)
         grouped["net_mf_ratio"] = grouped["net_mf_ratio"].fillna(0.0)
 
+        industry_source = merged.copy()
+        industry_source["industry"] = industry_source["industry"].fillna("").astype(str).str.strip()
+        industry_source = industry_source[industry_source["industry"] != ""].copy()
+        if not industry_source.empty:
+            industry_source["industry_weight"] = (
+                industry_source["pct_chg"].clip(lower=0.0) * 0.8
+                + (industry_source["pct_chg"] > 0).astype(float) * 0.8
+                + (industry_source["pct_chg"] >= 5.0).astype(float) * 3.0
+                + np.log(industry_source["amount"] + 1.0) * 0.08
+            )
+            industry_grouped = (
+                industry_source.groupby(["trade_date", "mapped_name", "industry"])
+                .agg(
+                    industry_stock_count=("ts_code", "nunique"),
+                    industry_weight=("industry_weight", "sum"),
+                    industry_strong_count=("pct_chg", lambda x: int((x >= 5.0).sum())),
+                )
+                .reset_index()
+            )
+            industry_grouped["industry_signal"] = (
+                industry_grouped["industry_weight"]
+                + industry_grouped["industry_strong_count"] * 1.4
+            )
+            dominant_industry = (
+                industry_grouped.sort_values(
+                    ["trade_date", "mapped_name", "industry_signal", "industry_stock_count"],
+                    ascending=[True, True, False, False],
+                )
+                .drop_duplicates(subset=["trade_date", "mapped_name"])
+                .rename(
+                    columns={
+                        "industry": "dominant_industry",
+                        "industry_signal": "dominant_industry_signal",
+                        "industry_stock_count": "dominant_industry_stock_count",
+                    }
+                )
+            )
+            industry_summary = (
+                industry_grouped.groupby(["trade_date", "mapped_name"])
+                .agg(
+                    industry_signal_total=("industry_signal", "sum"),
+                    industry_count=("industry", "nunique"),
+                )
+                .reset_index()
+            )
+            industry_summary = dominant_industry.merge(
+                industry_summary,
+                on=["trade_date", "mapped_name"],
+                how="left",
+            )
+            industry_summary["dominant_industry_share"] = (
+                industry_summary["dominant_industry_signal"]
+                / industry_summary["industry_signal_total"].replace(0, np.nan)
+            ).fillna(0.0)
+            grouped = grouped.merge(
+                industry_summary[
+                    [
+                        "trade_date",
+                        "mapped_name",
+                        "dominant_industry",
+                        "industry_count",
+                        "dominant_industry_stock_count",
+                        "dominant_industry_share",
+                    ]
+                ],
+                on=["trade_date", "mapped_name"],
+                how="left",
+            )
+        else:
+            grouped["dominant_industry"] = ""
+            grouped["industry_count"] = 0
+            grouped["dominant_industry_stock_count"] = 0
+            grouped["dominant_industry_share"] = 0.0
+
+        grouped["industry_count"] = grouped["industry_count"].fillna(0).astype(int)
+        grouped["dominant_industry_stock_count"] = (
+            grouped["dominant_industry_stock_count"].fillna(0).astype(int)
+        )
+        grouped["dominant_industry_share"] = grouped["dominant_industry_share"].fillna(0.0)
+        grouped["industry_alignment"] = grouped["dominant_industry_share"].clip(lower=0.0, upper=1.0)
+
         grouped["score"] = (
             grouped["avg_ret"] * 1.6
             + grouped["lu_ratio"] * 65.0
@@ -437,6 +676,7 @@ class MainlineAnalyst:
             + grouped["leader_ratio"] * 12.0
             + np.log(grouped["total_amt"] + 1.0) * 0.35
             + grouped["net_mf_ratio"].clip(-0.02, 0.02) * 800.0
+            + grouped["industry_alignment"] * 6.5
         )
 
         weak_mask = (
@@ -444,6 +684,12 @@ class MainlineAnalyst:
             | ((grouped["breadth"] < 0.15) & (grouped["strong_ratio"] < 0.02))
         )
         grouped.loc[weak_mask, "score"] *= 0.35
+        noisy_mask = (
+            (grouped["stock_count"] >= 16)
+            & (grouped["industry_alignment"] < 0.14)
+            & (grouped["leader_ratio"] < 0.08)
+        )
+        grouped.loc[noisy_mask, "score"] *= 0.92
         grouped["score"] = grouped["score"].fillna(0.0).round(2)
         grouped["rank"] = grouped.groupby("trade_date")["score"].rank(method="first", ascending=False)
         return grouped
@@ -504,6 +750,17 @@ class MainlineAnalyst:
             | (work["strong_ratio"] >= 0.18)
             | (work["leader_ratio"] >= 0.08)
         ).astype(int)
+        recent_window = recent_dates[-min(5, len(recent_dates)):]
+        recent_weights = [0.45, 0.7, 1.0, 1.35, 1.8][-len(recent_window):]
+        recent_weight_map = {
+            pd.to_datetime(trade_date): weight
+            for trade_date, weight in zip(recent_window, recent_weights)
+        }
+        work["recent_weight"] = work["trade_date"].map(recent_weight_map).fillna(0.0)
+        work["recent_score_component"] = work["score"] * work["recent_weight"]
+        work["recent_limit_component"] = work["limit_ups"] * work["recent_weight"]
+        work["recent_top3_component"] = work["top3_flag"] * work["recent_weight"]
+        work["recent_alignment_component"] = work["industry_alignment"] * work["recent_weight"]
 
         summary = (
             work.groupby("mapped_name")
@@ -514,6 +771,10 @@ class MainlineAnalyst:
                 top3_days=("top3_flag", "sum"),
                 strong_days=("strong_flag", "sum"),
                 max_limit_ups=("limit_ups", "max"),
+                recent_score_sum=("recent_score_component", "sum"),
+                recent_limit_ups_sum=("recent_limit_component", "sum"),
+                recent_top3_sum=("recent_top3_component", "sum"),
+                recent_alignment_sum=("recent_alignment_component", "sum"),
             )
             .reset_index()
         )
@@ -537,6 +798,7 @@ class MainlineAnalyst:
                     "breadth",
                     "leader_ratio",
                     "stock_count",
+                    "industry_alignment",
                 ]
             ]
             .rename(
@@ -547,6 +809,7 @@ class MainlineAnalyst:
                     "breadth": "latest_breadth",
                     "leader_ratio": "latest_leader_ratio",
                     "stock_count": "latest_stock_count",
+                    "industry_alignment": "latest_industry_alignment",
                 }
             )
         )
@@ -559,90 +822,276 @@ class MainlineAnalyst:
         summary["latest_breadth"] = summary["latest_breadth"].fillna(0.0)
         summary["latest_leader_ratio"] = summary["latest_leader_ratio"].fillna(0.0)
         summary["latest_stock_count"] = summary["latest_stock_count"].fillna(0).astype(int)
+        summary["latest_industry_alignment"] = summary["latest_industry_alignment"].fillna(0.0)
 
         summary["selection_score"] = (
-            summary["score_sum"]
-            + summary["avg_score"] * 1.4
-            + summary["active_days"] * 9.0
-            + summary["top3_days"] * 12.0
-            + summary["strong_days"] * 10.0
-            + summary["consecutive_days"] * 15.0
-            + summary["latest_score"] * 1.2
-            + summary["max_limit_ups"] * 3.0
+            summary["score_sum"] * 0.45
+            + summary["avg_score"] * 1.1
+            + summary["recent_score_sum"] * 2.5
+            + summary["recent_limit_ups_sum"] * 5.5
+            + summary["recent_top3_sum"] * 10.0
+            + summary["active_days"] * 6.5
+            + summary["top3_days"] * 10.0
+            + summary["strong_days"] * 8.5
+            + summary["consecutive_days"] * 12.0
+            + summary["latest_score"] * 1.8
+            + summary["latest_limit_ups"] * 4.5
+            + summary["latest_breadth"] * 18.0
+            + summary["recent_alignment_sum"] * 10.0
+            + summary["latest_industry_alignment"] * 12.0
+            + summary["max_limit_ups"] * 2.5
+        )
+        summary["current_relevance"] = (
+            summary["recent_score_sum"]
+            + summary["latest_score"] * 1.4
+            + summary["latest_limit_ups"] * 2.8
         )
 
         qualified = summary[
-            (summary["active_days"] >= 3)
+            (summary["active_days"] >= 2)
             | (summary["consecutive_days"] >= 2)
+            | (summary["recent_score_sum"] >= 45)
             | ((summary["latest_score"] >= 24) & (summary["top3_days"] >= 1))
         ].copy()
         if qualified.empty:
             qualified = summary.copy()
 
         qualified = qualified.sort_values(
-            ["selection_score", "latest_score", "score_sum"],
-            ascending=[False, False, False],
+            ["selection_score", "current_relevance", "latest_score", "score_sum"],
+            ascending=[False, False, False, False],
         )
         return qualified.head(max(1, int(limit))).reset_index(drop=True)
+
+    def _build_leader_theme_map(
+        self,
+        ts_codes: list[str],
+        sector_name: str,
+        focus_tags: list[str] | None = None,
+    ) -> dict[str, dict]:
+        codes = [str(code).strip() for code in (ts_codes or []) if str(code).strip()]
+        if not codes:
+            return {}
+
+        keyword_map = {}
+        for item in [sector_name, *((focus_tags or []))]:
+            cleaned = self._clean_concept_name(item).upper()
+            if cleaned and cleaned not in keyword_map:
+                keyword_map[cleaned] = str(item)
+        if not keyword_map:
+            return {}
+
+        tag_df = self._load_sector_tag_rows(codes)
+        basic_df = self._load_stock_basic_snapshot()
+        if not basic_df.empty:
+            basic_df = basic_df[basic_df["ts_code"].isin(codes)].copy()
+
+        candidate_map = defaultdict(list)
+        if not tag_df.empty:
+            for _, row in tag_df.iterrows():
+                code = str(row.get("ts_code") or "").strip()
+                tag_name = str(row.get("tag_name") or "").strip()
+                if code and tag_name:
+                    candidate_map[code].append(tag_name)
+        if not basic_df.empty:
+            for _, row in basic_df.iterrows():
+                code = str(row.get("ts_code") or "").strip()
+                industry_name = str(row.get("industry") or "").strip()
+                if code and industry_name:
+                    candidate_map[code].append(industry_name)
+
+        hit_map = {}
+        for code in codes:
+            hits = []
+            seen_hits = set()
+            for raw_tag in candidate_map.get(code, []):
+                cleaned_tag = self._clean_concept_name(raw_tag).upper()
+                if not cleaned_tag:
+                    continue
+                for keyword, display_name in keyword_map.items():
+                    if keyword in cleaned_tag or cleaned_tag in keyword:
+                        if display_name not in seen_hits:
+                            hits.append(display_name)
+                            seen_hits.add(display_name)
+                        break
+            hit_map[code] = {
+                "theme_hit_count": len(hits),
+                "theme_hit_names": hits[:3],
+            }
+
+        return hit_map
 
     def _build_leader_review(
         self,
         line_df: pd.DataFrame,
         review_dates: list[pd.Timestamp],
+        sector_name: str = "",
+        focus_tags: list[str] | None = None,
         top_n: int = 3,
     ) -> list[dict]:
         if line_df.empty or not review_dates:
             return []
 
-        latest_date = review_dates[-1]
-        recent_dates = review_dates[-min(3, len(review_dates)):]
-        recent_strong = (
-            line_df[
-                (line_df["trade_date"].isin(recent_dates)) & (line_df["pct_chg"] >= 3.0)
-            ]
-            .groupby("ts_code")
-            .size()
-            .to_dict()
-        )
-        latest_slice = (
-            line_df[line_df["trade_date"] == latest_date][["ts_code", "pct_chg"]]
-            .rename(columns={"pct_chg": "latest_pct"})
-        )
-
-        leader_source = line_df[line_df["pct_chg"] >= 3.0].copy()
-        if leader_source.empty:
-            leader_source = line_df.copy()
-
-        leader_df = (
-            leader_source.groupby(["ts_code", "stock_name"])
-            .agg(
-                active_days=("trade_date", "nunique"),
-                limit_ups=("pct_chg", lambda x: int((x >= 9.5).sum())),
-                avg_pct=("pct_chg", "mean"),
-                max_pct=("pct_chg", "max"),
-                total_amt=("amount", "sum"),
-            )
-            .reset_index()
-        )
-        if leader_df.empty:
+        line_df = line_df[~line_df["ts_code"].astype(str).str.upper().str.endswith(".BJ")].copy()
+        if line_df.empty:
             return []
 
-        leader_df = leader_df.merge(latest_slice, on="ts_code", how="left")
-        leader_df["recent_active_days"] = leader_df["ts_code"].map(recent_strong).fillna(0).astype(int)
-        leader_df["latest_pct"] = leader_df["latest_pct"].fillna(0.0)
+        latest_date = review_dates[-1]
+        recent_dates = review_dates[-min(3, len(review_dates)):]
+        latest_slice = (
+            line_df[line_df["trade_date"] == latest_date][["ts_code", "pct_chg", "amount", "net_mf_amount"]]
+            .rename(
+                columns={
+                    "pct_chg": "latest_pct",
+                    "amount": "latest_amount",
+                    "net_mf_amount": "latest_net_mf_amount",
+                }
+            )
+        )
+
+        theme_map = self._build_leader_theme_map(
+            line_df["ts_code"].dropna().tolist(),
+            sector_name=sector_name,
+            focus_tags=focus_tags,
+        )
+        review_days = max(1, len(review_dates))
+        recent_window = max(1, len(recent_dates))
+        leader_rows = []
+        for (ts_code, stock_name), rows in line_df.groupby(["ts_code", "stock_name"]):
+            rows = rows.sort_values("trade_date").reset_index(drop=True)
+            pct_list = [float(item) if item is not None else 0.0 for item in rows["pct_chg"].tolist()]
+            amount_list = [float(item) if item is not None else 0.0 for item in rows["amount"].tolist()]
+            flow_list = [float(item) if item is not None else 0.0 for item in rows["net_mf_amount"].tolist()]
+            strong_flags = [pct >= 3.0 for pct in pct_list]
+            positive_flow_flags = [flow > 0 for flow in flow_list]
+            active_days = int(sum(strong_flags))
+            recent_active_days = int(sum(strong_flags[-recent_window:])) if strong_flags else 0
+            strong_streak = self._recent_true_streak(strong_flags)
+            positive_flow_days = int(sum(positive_flow_flags))
+            total_amt = float(sum(amount_list))
+            positive_inflow = float(sum(max(flow, 0.0) for flow in flow_list))
+            net_inflow = float(sum(flow_list))
+            first_strong_idx = next((idx for idx, flag in enumerate(strong_flags) if flag), None)
+            pioneer_score = 0.0
+            if first_strong_idx is not None:
+                pioneer_score = round((review_days - first_strong_idx) / review_days * 100, 2)
+
+            latest_pct = float(pct_list[-1]) if pct_list else 0.0
+            latest_amount = float(amount_list[-1]) if amount_list else 0.0
+            latest_net_mf_amount = float(flow_list[-1]) if flow_list else 0.0
+            limit_ups = int(sum(1 for pct in pct_list if pct >= 9.5))
+
+            theme_meta = theme_map.get(ts_code, {})
+            theme_hit_names = theme_meta.get("theme_hit_names", [])
+            theme_hit_count = int(theme_meta.get("theme_hit_count", 0))
+
+            trend_score = min(
+                100.0,
+                active_days * 10.0
+                + recent_active_days * 16.0
+                + strong_streak * 14.0
+                + pioneer_score * 0.18
+                + min(limit_ups, 2) * 8.0,
+            )
+            capital_score = min(
+                100.0,
+                positive_flow_days * 9.0
+                + (18.0 if positive_inflow > 100000 else 12.0 if positive_inflow > 50000 else 6.0 if positive_inflow > 10000 else 0.0)
+                + (min(max(net_inflow / total_amt, 0.0), 0.05) * 700 if total_amt > 0 else 0.0)
+                + (8.0 if latest_net_mf_amount > 0 else 0.0),
+            )
+            heat_score = min(
+                100.0,
+                max(latest_pct, 0.0) * 2.2
+                + np.log(total_amt + 1.0) * 3.5
+                + np.log(latest_amount + 1.0) * 1.6,
+            )
+            theme_score = min(100.0, theme_hit_count * 26.0 + len(theme_hit_names) * 8.0)
+            current_score = min(
+                100.0,
+                max(latest_pct, 0.0) * 3.2
+                + (16.0 if latest_net_mf_amount > 0 else 0.0)
+                + (10.0 if latest_amount > total_amt / max(1, review_days) else 0.0),
+            )
+            leader_score = (
+                trend_score * 0.34
+                + capital_score * 0.24
+                + heat_score * 0.18
+                + theme_score * 0.14
+                + current_score * 0.10
+            )
+
+            reason_parts = []
+            if active_days:
+                reason_parts.append(f"近10日强势{active_days}天")
+            if recent_active_days:
+                reason_parts.append(f"最近3日走强{recent_active_days}天")
+            if positive_flow_days:
+                reason_parts.append(f"资金净流入{positive_flow_days}天")
+            if theme_hit_names:
+                reason_parts.append(f"题材命中{' / '.join(theme_hit_names[:2])}")
+            if not reason_parts:
+                reason_parts.append(f"最近涨幅{latest_pct:.2f}%")
+
+            leader_rows.append(
+                {
+                    "ts_code": ts_code,
+                    "stock_name": stock_name or ts_code,
+                    "active_days": active_days,
+                    "recent_active_days": recent_active_days,
+                    "strong_streak": strong_streak,
+                    "positive_flow_days": positive_flow_days,
+                    "limit_ups": limit_ups,
+                    "avg_pct": round(float(np.mean(pct_list)) if pct_list else 0.0, 2),
+                    "max_pct": round(float(max(pct_list)) if pct_list else 0.0, 2),
+                    "latest_pct": round(latest_pct, 2),
+                    "latest_amount": latest_amount,
+                    "latest_net_mf_amount": latest_net_mf_amount,
+                    "total_amt": total_amt,
+                    "trend_pioneer_score": pioneer_score,
+                    "theme_hit_count": theme_hit_count,
+                    "theme_hit_names": theme_hit_names,
+                    "trend_score": round(trend_score, 1),
+                    "capital_score": round(capital_score, 1),
+                    "heat_score": round(heat_score, 1),
+                    "theme_score": round(theme_score, 1),
+                    "leader_reason": "，".join(reason_parts),
+                    "leader_score": round(float(leader_score), 1),
+                }
+            )
+
+        if not leader_rows:
+            return []
+
+        leader_df = pd.DataFrame(leader_rows)
+        if latest_slice is not None and not latest_slice.empty:
+            leader_df = leader_df.merge(latest_slice, on="ts_code", how="left", suffixes=("", "_latest"))
+            leader_df["latest_pct"] = leader_df["latest_pct_latest"].fillna(leader_df["latest_pct"]).round(2)
+            leader_df["latest_amount"] = leader_df["latest_amount_latest"].fillna(leader_df["latest_amount"])
+            leader_df["latest_net_mf_amount"] = (
+                leader_df["latest_net_mf_amount_latest"].fillna(leader_df["latest_net_mf_amount"])
+            )
+            leader_df = leader_df.drop(
+                columns=[
+                    col for col in [
+                        "latest_pct_latest",
+                        "latest_amount_latest",
+                        "latest_net_mf_amount_latest",
+                    ]
+                    if col in leader_df.columns
+                ]
+            )
+
+        leader_df["latest_amount_rank_pct"] = leader_df["latest_amount"].rank(pct=True, method="max")
+        leader_df["total_amount_rank_pct"] = leader_df["total_amt"].rank(pct=True, method="max")
         leader_df["leader_score"] = (
-            leader_df["active_days"] * 18.0
-            + leader_df["recent_active_days"] * 10.0
-            + leader_df["limit_ups"] * 20.0
-            + leader_df["avg_pct"].clip(lower=0.0) * 3.0
-            + leader_df["max_pct"].clip(lower=0.0) * 1.8
-            + np.log(leader_df["total_amt"] + 1.0) * 0.25
-            + leader_df["latest_pct"].clip(lower=0.0) * 2.0
+            leader_df["leader_score"]
+            + leader_df["latest_amount_rank_pct"] * 6.0
+            + leader_df["total_amount_rank_pct"] * 4.0
         )
 
         leader_df = leader_df.sort_values(
-            ["leader_score", "recent_active_days", "latest_pct", "max_pct"],
-            ascending=[False, False, False, False],
+            ["leader_score", "recent_active_days", "positive_flow_days", "latest_pct", "total_amt"],
+            ascending=[False, False, False, False, False],
         ).head(max(1, int(top_n)))
 
         return [
@@ -651,14 +1100,313 @@ class MainlineAnalyst:
                 "name": row["stock_name"] or row["ts_code"],
                 "active_days": int(row["active_days"]),
                 "recent_active_days": int(row["recent_active_days"]),
+                "strong_streak": int(row["strong_streak"]),
                 "limit_ups": int(row["limit_ups"]),
+                "positive_flow_days": int(row["positive_flow_days"]),
                 "avg_pct": round(float(row["avg_pct"]), 2),
                 "max_pct": round(float(row["max_pct"]), 2),
                 "latest_pct": round(float(row["latest_pct"]), 2),
+                "trend_pioneer_score": round(float(row["trend_pioneer_score"]), 1),
+                "theme_hit_count": int(row["theme_hit_count"]),
+                "theme_hit_names": row["theme_hit_names"] if isinstance(row["theme_hit_names"], list) else [],
+                "trend_score": round(float(row["trend_score"]), 1),
+                "capital_score": round(float(row["capital_score"]), 1),
+                "heat_score": round(float(row["heat_score"]), 1),
+                "theme_score": round(float(row["theme_score"]), 1),
+                "leader_reason": str(row.get("leader_reason") or ""),
                 "leader_score": round(float(row["leader_score"]), 1),
             }
             for _, row in leader_df.iterrows()
         ]
+
+    def _load_sector_tag_rows(self, ts_codes: list[str]) -> pd.DataFrame:
+        codes = sorted({str(code).strip() for code in (ts_codes or []) if str(code).strip()})
+        if not codes:
+            return pd.DataFrame(columns=["ts_code", "tag_name", "tag_type"])
+        tag_df = self._load_tag_snapshot()
+        if tag_df.empty:
+            return pd.DataFrame(columns=["ts_code", "tag_name", "tag_type"])
+
+        tag_df = tag_df[tag_df["ts_code"].isin(codes)].copy()
+        if tag_df.empty:
+            return pd.DataFrame(columns=["ts_code", "tag_name", "tag_type"])
+        return tag_df.reset_index(drop=True)
+
+    def _build_sector_driver_profile(
+        self,
+        line_df: pd.DataFrame,
+        sector_name: str,
+        review_dates: list[pd.Timestamp],
+        top_n: int = 3,
+    ) -> dict:
+        if line_df.empty or not sector_name or not review_dates:
+            return {
+                "focus_tags": [],
+                "display_name": sector_name,
+                "driver_summary": "",
+                "driver_details": [],
+            }
+
+        latest_date = review_dates[-1]
+        recent_focus_dates = review_dates[-min(3, len(review_dates)):]
+        latest_slice = (
+            line_df[line_df["trade_date"] == latest_date][["ts_code", "pct_chg"]]
+            .rename(columns={"pct_chg": "latest_pct"})
+        )
+        recent_active = (
+            line_df[
+                (line_df["trade_date"].isin(recent_focus_dates)) & (line_df["pct_chg"] >= 3.0)
+            ]
+            .groupby("ts_code")
+            .size()
+            .to_dict()
+        )
+
+        stock_stats = (
+            line_df.groupby(["ts_code", "stock_name"])
+            .agg(
+                active_days=("trade_date", "nunique"),
+                strong_days=("pct_chg", lambda x: int((x >= 5.0).sum())),
+                limit_ups=("pct_chg", lambda x: int((x >= 9.5).sum())),
+                avg_positive_pct=("pct_chg", lambda x: float(x[x > 0].mean()) if (x > 0).any() else 0.0),
+                total_amt=("amount", "sum"),
+                industry=("industry", lambda x: next((str(v).strip() for v in x if str(v).strip()), "")),
+            )
+            .reset_index()
+        )
+        if stock_stats.empty:
+            return {
+                "focus_tags": [],
+                "display_name": sector_name,
+                "driver_summary": "",
+                "driver_details": [],
+            }
+
+        stock_stats = stock_stats.merge(latest_slice, on="ts_code", how="left")
+        stock_stats["latest_pct"] = stock_stats["latest_pct"].fillna(0.0)
+        stock_stats["recent_active_days"] = stock_stats["ts_code"].map(recent_active).fillna(0).astype(int)
+        stock_stats["tag_weight"] = (
+            stock_stats["active_days"] * 7.0
+            + stock_stats["recent_active_days"] * 12.0
+            + stock_stats["strong_days"] * 11.0
+            + stock_stats["limit_ups"] * 18.0
+            + stock_stats["avg_positive_pct"].clip(lower=0.0) * 1.8
+            + stock_stats["latest_pct"].clip(lower=0.0) * 2.6
+            + np.log(stock_stats["total_amt"] + 1.0) * 0.16
+        )
+        stock_stats = stock_stats[stock_stats["tag_weight"] > 0].copy()
+        if stock_stats.empty:
+            return {
+                "focus_tags": [],
+                "display_name": sector_name,
+                "driver_summary": "",
+                "driver_details": [],
+            }
+
+        tag_df = self._load_sector_tag_rows(stock_stats["ts_code"].tolist())
+
+        stock_meta = {
+            row["ts_code"]: {
+                "stock_name": row["stock_name"] or row["ts_code"],
+                "latest_pct": float(row["latest_pct"]),
+                "tag_weight": float(row["tag_weight"]),
+                "industry": str(row.get("industry") or "").strip(),
+            }
+            for _, row in stock_stats.iterrows()
+        }
+        sector_stock_total = len(stock_stats)
+
+        candidates = defaultdict(
+            lambda: {
+                "name": "",
+                "tag_type": "",
+                "score": 0.0,
+                "support_stocks": set(),
+                "top_samples": [],
+                "latest_pct": 0.0,
+            }
+        )
+
+        for ts_code, meta in stock_meta.items():
+            industry_name = meta["industry"]
+            if not industry_name:
+                continue
+            if self._resolve_tag_sector(industry_name, tag_type="industry") != sector_name:
+                continue
+
+            multiplier = self._get_tag_priority_multiplier(
+                sector_name,
+                industry_name,
+                "industry",
+            ) * 1.06
+            candidate = candidates[industry_name]
+            candidate["name"] = industry_name
+            candidate["tag_type"] = "industry"
+            candidate["score"] += meta["tag_weight"] * multiplier
+            candidate["support_stocks"].add(ts_code)
+            candidate["latest_pct"] = max(candidate["latest_pct"], meta["latest_pct"])
+            candidate["top_samples"].append((meta["latest_pct"], meta["stock_name"]))
+
+        for ts_code, rows in tag_df.groupby("ts_code"):
+            meta = stock_meta.get(ts_code)
+            if not meta:
+                continue
+
+            valid_tags = []
+            seen_cleaned = set()
+            for _, row in rows.iterrows():
+                tag_name = str(row["tag_name"]).strip()
+                tag_type = str(row["tag_type"]).strip() or "concept"
+                cleaned = self._clean_concept_name(tag_name)
+                if not cleaned or cleaned in seen_cleaned:
+                    continue
+
+                resolved_sector = self._resolve_tag_sector(tag_name, tag_type=tag_type)
+                if resolved_sector != sector_name:
+                    continue
+
+                seen_cleaned.add(cleaned)
+                valid_tags.append(
+                    (
+                        tag_name,
+                        tag_type,
+                        self._get_tag_priority_multiplier(sector_name, tag_name, tag_type),
+                    )
+                )
+
+            if not valid_tags:
+                continue
+
+            distributed_weight = meta["tag_weight"] / max(1, len(valid_tags))
+            for tag_name, tag_type, multiplier in valid_tags:
+                candidate = candidates[tag_name]
+                candidate["name"] = tag_name
+                candidate["tag_type"] = tag_type
+                candidate["score"] += distributed_weight * multiplier
+                candidate["support_stocks"].add(ts_code)
+                candidate["latest_pct"] = max(candidate["latest_pct"], meta["latest_pct"])
+                candidate["top_samples"].append((meta["latest_pct"], meta["stock_name"]))
+
+        if not candidates:
+            return {
+                "focus_tags": [],
+                "display_name": sector_name,
+                "driver_summary": "",
+                "driver_details": [],
+            }
+
+        ranked = []
+        total_candidate_score = sum(float(item["score"]) for item in candidates.values()) or 1.0
+        for candidate in candidates.values():
+            samples = sorted(candidate["top_samples"], key=lambda item: item[0], reverse=True)
+            cleaned = self._clean_concept_name(candidate["name"]).upper()
+            support_count = len(candidate["support_stocks"])
+            support_ratio = support_count / max(1, sector_stock_total)
+            score = round(float(candidate["score"]), 2)
+            ranked.append(
+                {
+                    "name": candidate["name"],
+                    "tag_type": candidate["tag_type"],
+                    "score": score,
+                    "support_count": support_count,
+                    "support_ratio": round(support_ratio, 4),
+                    "score_share": round(score / total_candidate_score, 4),
+                    "latest_pct": round(float(candidate["latest_pct"]), 2),
+                    "sample_stocks": [name for _, name in samples[:3]],
+                    "is_generic": cleaned in self._prepared_sector_generic_tags.get(sector_name, set()),
+                }
+            )
+
+        ranked = sorted(
+            ranked,
+            key=lambda item: (
+                item["score"],
+                item["support_count"],
+                item["support_ratio"],
+                item["latest_pct"],
+                1 if item["tag_type"] == "concept" else 0,
+            ),
+            reverse=True,
+        )
+
+        concept_candidates = [
+            item for item in ranked
+            if item["tag_type"] == "concept" and not item["is_generic"]
+        ]
+        industry_candidates = [
+            item for item in ranked
+            if item["tag_type"] == "industry" and not item["is_generic"]
+        ]
+        non_generic = [item for item in ranked if not item["is_generic"]]
+        generic = [item for item in ranked if item["is_generic"]]
+        top_details = []
+
+        if concept_candidates and concept_candidates[0]["support_ratio"] >= 0.1:
+            top_details.append(concept_candidates[0])
+        if (
+            industry_candidates
+            and industry_candidates[0]["support_ratio"] >= 0.16
+            and all(item["name"] != industry_candidates[0]["name"] for item in top_details)
+        ):
+            top_details.append(industry_candidates[0])
+
+        preferred_pool = concept_candidates[1:] + industry_candidates[1:] + non_generic + generic
+        for item in preferred_pool:
+            if len(top_details) >= max(1, int(top_n)):
+                break
+            if item["support_ratio"] < 0.08 and item["score_share"] < 0.12:
+                continue
+            if any(existing["name"] == item["name"] for existing in top_details):
+                continue
+            top_details.append(item)
+
+        if len(top_details) < max(1, int(top_n)):
+            for item in generic:
+                if len(top_details) >= max(1, int(top_n)):
+                    break
+                if any(existing["name"] == item["name"] for existing in top_details):
+                    continue
+                top_details.append(item)
+
+        focus_tags = [item["name"] for item in top_details]
+
+        # 根据细分驱动强度决定显示模式
+        allow_replace_sector = False
+        if focus_tags and DRIVER_DISPLAY_MODE == "auto":
+            top_driver = top_details[0]
+            allow_replace_sector = (
+                top_driver["tag_type"] == "concept"
+                and float(top_driver["score"]) >= DRIVER_DOMINANCE_THRESHOLD
+                and float(top_driver["support_ratio"]) >= DRIVER_REPLACE_SECTOR_MIN_SUPPORT_RATIO
+                and int(top_driver["support_count"]) >= DRIVER_REPLACE_SECTOR_MIN_SUPPORT_COUNT
+                and float(top_driver["score_share"]) >= DRIVER_REPLACE_SECTOR_MIN_SCORE_SHARE
+            )
+        elif focus_tags and DRIVER_DISPLAY_MODE == "driver_first":
+            allow_replace_sector = True
+
+        if allow_replace_sector and focus_tags:
+            display_name = (
+                " / ".join(focus_tags[:2])
+                if len(focus_tags) >= 2
+                else focus_tags[0]
+            )
+        else:
+            display_name = (
+                f"{sector_name} · {' / '.join(focus_tags[:2])}"
+                if focus_tags
+                else sector_name
+            )
+        driver_summary = (
+            f"细分驱动：{' / '.join(focus_tags[:3])}"
+            if focus_tags
+            else ""
+        )
+        return {
+            "focus_tags": focus_tags,
+            "display_name": display_name,
+            "driver_summary": driver_summary,
+            "driver_details": top_details,
+        }
 
     def _build_ten_day_review(
         self,
@@ -698,7 +1446,19 @@ class MainlineAnalyst:
             latest_line = grouped_review[
                 (grouped_review["trade_date"] == review_dates[-1]) & (grouped_review["mapped_name"] == line_name)
             ].copy()
-            leaders = self._build_leader_review(line_df, review_dates, top_n=5)
+            driver_profile = self._build_sector_driver_profile(
+                line_df=line_df,
+                sector_name=line_name,
+                review_dates=review_dates,
+                top_n=3,
+            )
+            leaders = self._build_leader_review(
+                line_df=line_df,
+                review_dates=review_dates,
+                sector_name=line_name,
+                focus_tags=driver_profile.get("focus_tags", []),
+                top_n=5,
+            )
             coach_fit = {
                 "sustained": int(row["consecutive_days"]) >= 3,
                 "strength": int(row["max_limit_ups"]) >= 3 or int(row["strong_days"]) >= 2,
@@ -724,6 +1484,10 @@ class MainlineAnalyst:
                     "latest_breadth": round(float(row["latest_breadth"]), 4),
                     "max_limit_ups": int(row["max_limit_ups"]),
                     "leaders": leaders,
+                    "focus_tags": driver_profile.get("focus_tags", []),
+                    "display_name": driver_profile.get("display_name") or line_name,
+                    "driver_summary": driver_profile.get("driver_summary", ""),
+                    "driver_details": driver_profile.get("driver_details", []),
                     "coach_fit": coach_fit,
                 }
             )
@@ -731,8 +1495,12 @@ class MainlineAnalyst:
         summary_parts = []
         for line in mainlines[:2]:
             leader_names = "、".join(item["name"] for item in line["leaders"][:2]) or "暂无明确龙头"
+            driver_text = ""
+            if line.get("focus_tags"):
+                driver_text = f"细分以{'、'.join(line['focus_tags'][:2])}为主，"
             summary_parts.append(
                 f"{line['name']}上榜{line['active_days']}天，最近连续{line['consecutive_days']}天，"
+                f"{driver_text}"
                 f"最高{line['max_limit_ups']}家涨停，龙头以{leader_names}为主"
             )
         summary = (
@@ -1013,6 +1781,7 @@ class MainlineAnalyst:
         except Exception as exc:
             logger.error(f"持久化主线数据失败: {exc}")
 
+    @lru_cache(maxsize=16)
     def get_history(self, days=30):
         """
         获取历史主线演变数据，用于前端可视化展示。
@@ -1044,13 +1813,18 @@ class MainlineAnalyst:
         latest_focus = grouped[
             (grouped["trade_date"] == latest_date) & (grouped["mapped_name"].isin(top_concepts))
         ].sort_values("score", ascending=False)
+        best_display_name = best_name = ""
+        best_focus_tags = []
+        best_driver_summary = ""
         if latest_focus.empty:
             best_name = focus.iloc[0]["mapped_name"]
+            best_display_name = best_name
             best_score = float(focus.iloc[0]["latest_score"])
             best_reason = "近阶段持续性最强"
         else:
             row = latest_focus.iloc[0]
             best_name = row["mapped_name"]
+            best_display_name = best_name
             best_score = float(row["score"])
             best_reason = (
                 f"涨停{int(row['limit_ups'])}家，上涨占比{row['breadth']*100:.1f}%，"
@@ -1092,19 +1866,46 @@ class MainlineAnalyst:
         if review_mainlines:
             stable_mainline = review_mainlines[0]
             stable_names = {item["name"] for item in review_mainlines[:2]}
-            if best_score < 18 or best_name not in stable_names:
+            stable_score = float(stable_mainline.get("latest_score") or stable_mainline.get("avg_score") or 0.0)
+            matched = next((item for item in review_mainlines if item.get("name") == best_name), None)
+            if matched:
+                best_display_name = matched.get("display_name") or best_name
+                best_focus_tags = matched.get("focus_tags", []) or []
+                best_driver_summary = matched.get("driver_summary", "")
+
+            should_use_stable = (
+                (best_score < 18 and int(stable_mainline.get("consecutive_days", 0)) >= 3)
+                or (
+                    best_name not in stable_names
+                    and best_score < stable_score + max(4.0, stable_score * 0.15)
+                    and int(stable_mainline.get("consecutive_days", 0)) >= 4
+                    and stable_score >= 18
+                )
+            )
+            if should_use_stable:
                 best_name = stable_mainline["name"]
-                best_score = float(stable_mainline.get("latest_score") or stable_mainline.get("avg_score") or 0.0)
+                best_display_name = stable_mainline.get("display_name") or best_name
+                best_score = stable_score
                 best_reason = (
                     f"近10日上榜{stable_mainline.get('active_days', 0)}天，"
                     f"连续{stable_mainline.get('consecutive_days', 0)}天，"
                     f"最高{stable_mainline.get('max_limit_ups', 0)}家涨停"
                 )
+
+            if best_name == stable_mainline.get("name"):
+                best_focus_tags = stable_mainline.get("focus_tags", best_focus_tags)
+                best_driver_summary = stable_mainline.get("driver_summary", best_driver_summary)
+
+        if not best_display_name:
+            best_display_name = best_name
+
         deduction_parts = [
-            f"【当前主线：{best_name}】",
+            f"【当前主线：{best_display_name}】",
             f"评分：{best_score:.2f}",
             f"依据：{best_reason}",
         ]
+        if best_driver_summary:
+            deduction_parts.append(best_driver_summary)
         if review_10d.get("summary"):
             deduction_parts.append(f"近10日复盘：{review_10d['summary']}")
 
@@ -1115,8 +1916,11 @@ class MainlineAnalyst:
                 "phase": "Mainline_MultiFactor",
                 "top_mainline": {
                     "name": best_name,
+                    "display_name": best_display_name,
                     "score": round(best_score, 2),
                     "reason": best_reason,
+                    "focus_tags": best_focus_tags,
+                    "driver_summary": best_driver_summary,
                 },
                 "review_10d": review_10d,
                 "deduction": "\n".join(deduction_parts),

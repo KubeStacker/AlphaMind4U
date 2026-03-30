@@ -317,13 +317,18 @@ def _build_commentary_snapshot(detail: dict) -> str:
     if not detail:
         return "暂无量化点评。"
 
+    classification = detail.get("classification") or {}
     decision = detail.get("decision") or {}
     trade_plan = detail.get("trade_plan") or {}
     levels = detail.get("key_levels") or []
+    level_methodology = detail.get("level_methodology") or []
     level_text = "、".join(
         f"{item.get('label')} {_fmt_price(item.get('price'))}" for item in levels[:3] if item.get("price") is not None
     )
     parts = []
+    if classification.get("primary_label"):
+        reason = str(classification.get("reason") or "").strip()
+        parts.append(f"- 定位：{classification['primary_label']}。{reason}" if reason else f"- 定位：{classification['primary_label']}")
     if decision.get("summary"):
         parts.append(f"- 结论：{decision['summary']}")
     if trade_plan.get("entry"):
@@ -332,6 +337,8 @@ def _build_commentary_snapshot(detail: dict) -> str:
         parts.append(f"- 失效：{trade_plan['invalid']}")
     if level_text:
         parts.append(f"- 关键位：{level_text}")
+    if level_methodology:
+        parts.append(f"- 点位定义：{' '.join(str(item).strip() for item in level_methodology[:2] if str(item).strip())}")
     return "\n".join(parts) if parts else (detail.get("summary") or "暂无量化点评。")
 
 
@@ -726,7 +733,14 @@ async def analyze_stock_with_ai(request: Request, body: AIAnalyzeRequest):
         from etl.utils.kline_patterns import PatternRecognizer, get_professional_commentary_detailed
 
         latest_patterns = PatternRecognizer(analysis_df).recognize()
-        commentary_detail = get_professional_commentary_detailed(analysis_df, latest_patterns)
+        commentary_detail = get_professional_commentary_detailed(
+            analysis_df,
+            latest_patterns,
+            context={
+                "ts_code": body.ts_code,
+                "stock_name": stock_basic.get("name", "") if stock_basic else "",
+            },
+        )
         price_snapshot, price_metrics = _build_price_snapshot(analysis_df)
         money_flow_snapshot = _build_money_flow_snapshot(money_flow_df)
         margin_snapshot = _build_margin_snapshot(margin_df)

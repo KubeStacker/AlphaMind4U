@@ -108,6 +108,17 @@ class CapitalFlowTask(BaseTask):
             except Exception as e:
                 logger.error(f"同步资金流向 {date_str} 失败: {e}")
 
+    def sync_capital_flow_for_date(self, trade_date: str):
+        try:
+            df = self.provider.moneyflow(trade_date=trade_date)
+            if df.empty:
+                logger.warning(f"{trade_date} 未返回资金流向数据")
+                return
+            df["trade_date"] = pd.to_datetime(df["trade_date"]).dt.date
+            self._upsert_capital_flow_data(df)
+        except Exception as exc:
+            logger.error(f"同步资金流向 {trade_date} 失败: {exc}")
+
     def _upsert_capital_flow_data(self, df: pd.DataFrame):
         """更新或插入资金流向数据
         

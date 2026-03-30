@@ -27,7 +27,7 @@ export function useStockSearch() {
     cachePromise = (async () => {
       try {
         // 通过API获取所有股票基础数据
-        const res = await searchStocks('', 5000)
+        const res = await searchStocks('', 10000)
         stockCache = (res.data?.data || []).map(stock => ({
           ts_code: stock.ts_code,
           name: stock.name,

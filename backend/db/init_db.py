@@ -111,6 +111,23 @@ def initialize_database():
             except Exception as e:
                 print(f"添加 stock_basic 拼音列失败: {e}")
 
+            try:
+                # 为 watchlist 表添加 sort_order 列
+                con.execute("ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS sort_order INTEGER DEFAULT 0")
+                # 根据 created_at 初始化已有数据的 sort_order
+                con.execute("""
+                    UPDATE watchlist SET sort_order = sub.rn
+                    FROM (
+                        SELECT user_id, ts_code,
+                               ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY created_at DESC) AS rn
+                        FROM watchlist WHERE sort_order = 0
+                    ) AS sub
+                    WHERE watchlist.user_id = sub.user_id AND watchlist.ts_code = sub.ts_code
+                """)
+                print("已添加 watchlist.sort_order 列")
+            except Exception as e:
+                print(f"添加 watchlist.sort_order 列失败: {e}")
+
     except Exception as e:
         print(f"数据库初始化失败: {e}")
 

@@ -189,6 +189,204 @@ CREATE TABLE IF NOT EXISTS stock_margin (
 """
 
 
+# -- 季度利润表 (stock_income) --
+CREATE_STOCK_INCOME_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS stock_income (
+    ts_code         VARCHAR(15) NOT NULL,
+    ann_date        DATE,
+    f_ann_date      DATE,
+    end_date        DATE NOT NULL,
+    report_type     INTEGER,
+    comp_type       INTEGER,
+    end_type        VARCHAR(10),
+    basic_eps       DOUBLE,
+    diluted_eps     DOUBLE,
+    total_revenue   DOUBLE,
+    revenue         DOUBLE,
+    int_income      DOUBLE,
+    prem_earned     DOUBLE,
+    comm_income     DOUBLE,
+    n_commis_income DOUBLE,
+    n_oth_income    DOUBLE,
+    n_oth_b_income  DOUBLE,
+    prem_income     DOUBLE,
+    total_cogs      DOUBLE,
+    oper_cost       DOUBLE,
+    int_exp         DOUBLE,
+    comm_exp        DOUBLE,
+    biz_tax_surchg  DOUBLE,
+    sell_exp        DOUBLE,
+    admin_exp       DOUBLE,
+    fin_exp         DOUBLE,
+    assets_impair_loss DOUBLE,
+    operate_profit  DOUBLE,
+    total_profit    DOUBLE,
+    income_tax      DOUBLE,
+    n_income        DOUBLE,
+    n_income_attr_p DOUBLE,
+    minority_gain   DOUBLE,
+    total_operate_income DOUBLE,
+    operate_exp     DOUBLE,
+    total_operate_cost DOUBLE,
+    PRIMARY KEY (ts_code, end_date, report_type)
+);
+"""
+
+
+# -- 财务指标表 (stock_fina_indicator) --
+CREATE_STOCK_FINA_INDICATOR_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS stock_fina_indicator (
+    ts_code VARCHAR(15) NOT NULL,
+    ann_date DATE,
+    end_date DATE NOT NULL,
+    eps DOUBLE,
+    eps_yoy DOUBLE,
+    bvps DOUBLE,
+    roe DOUBLE,
+    roe_yoy DOUBLE,
+    net_profit_margin DOUBLE,
+    net_profit_margin_yoy DOUBLE,
+    gross_profit_margin DOUBLE,
+    gross_profit_margin_yoy DOUBLE,
+    total_rev DOUBLE,
+    total_rev_yoy DOUBLE,
+    rev_ps DOUBLE,
+    profit DOUBLE,
+    profit_yoy DOUBLE,
+    profit_ps DOUBLE,
+    PRIMARY KEY (ts_code, end_date)
+);
+"""
+
+
+# -- 股票日频基础指标表 (stock_daily_basic) --
+CREATE_STOCK_DAILY_BASIC_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS stock_daily_basic (
+    trade_date       DATE NOT NULL,
+    ts_code          VARCHAR(15) NOT NULL,
+    close            DOUBLE,
+    turnover_rate    DOUBLE,
+    turnover_rate_f  DOUBLE,
+    volume_ratio     DOUBLE,
+    pe               DOUBLE,
+    pe_ttm           DOUBLE,
+    pb               DOUBLE,
+    ps               DOUBLE,
+    ps_ttm           DOUBLE,
+    dv_ratio         DOUBLE,
+    dv_ttm           DOUBLE,
+    total_share      DOUBLE,
+    float_share      DOUBLE,
+    free_share       DOUBLE,
+    total_mv         DOUBLE,
+    circ_mv          DOUBLE,
+    PRIMARY KEY (trade_date, ts_code)
+);
+"""
+
+
+# -- 股票申万行业归属表 (stock_index_member_all) --
+CREATE_STOCK_INDEX_MEMBER_ALL_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS stock_index_member_all (
+    l1_code          VARCHAR(20),
+    l1_name          VARCHAR(100),
+    l2_code          VARCHAR(20),
+    l2_name          VARCHAR(100),
+    l3_code          VARCHAR(20),
+    l3_name          VARCHAR(100),
+    ts_code          VARCHAR(15) NOT NULL,
+    name             VARCHAR(100),
+    in_date          DATE,
+    out_date         DATE,
+    is_new           VARCHAR(5),
+    PRIMARY KEY (ts_code, l3_code, in_date)
+);
+"""
+
+
+# -- 业绩快报表 (stock_express) --
+CREATE_STOCK_EXPRESS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS stock_express (
+    ts_code                      VARCHAR(15) NOT NULL,
+    ann_date                     DATE,
+    end_date                     DATE NOT NULL,
+    revenue                      DOUBLE,
+    operate_profit               DOUBLE,
+    total_profit                 DOUBLE,
+    n_income                     DOUBLE,
+    total_assets                 DOUBLE,
+    total_hldr_eqy_exc_min_int   DOUBLE,
+    diluted_eps                  DOUBLE,
+    diluted_roe                  DOUBLE,
+    yoy_net_profit               DOUBLE,
+    bps                          DOUBLE,
+    perf_summary                 TEXT,
+    update_flag                  VARCHAR(10),
+    PRIMARY KEY (ts_code, end_date, ann_date)
+);
+"""
+
+
+# -- 股票因子宽表 (stock_factor_daily) --
+CREATE_STOCK_FACTOR_DAILY_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS stock_factor_daily (
+    trade_date             DATE NOT NULL,
+    ts_code                VARCHAR(15) NOT NULL,
+    industry               VARCHAR(100),
+    market                 VARCHAR(50),
+    sw_l1_name             VARCHAR(100),
+    sw_l2_name             VARCHAR(100),
+    sw_l3_name             VARCHAR(100),
+    close                  DOUBLE,
+    pct_chg                DOUBLE,
+    ma5                    DOUBLE,
+    ma10                   DOUBLE,
+    ma20                   DOUBLE,
+    ma60                   DOUBLE,
+    ma120                  DOUBLE,
+    high_250               DOUBLE,
+    vol_ma5                DOUBLE,
+    avg_ret_60             DOUBLE,
+    vol_60                 DOUBLE,
+    rps_20                 DOUBLE,
+    rps_50                 DOUBLE,
+    rps_120                DOUBLE,
+    rps_250                DOUBLE,
+    turnover_rate          DOUBLE,
+    turnover_rate_f        DOUBLE,
+    volume_ratio           DOUBLE,
+    pe                     DOUBLE,
+    pe_ttm                 DOUBLE,
+    pb                     DOUBLE,
+    ps                     DOUBLE,
+    ps_ttm                 DOUBLE,
+    total_mv               DOUBLE,
+    circ_mv                DOUBLE,
+    net_mf_amount          DOUBLE,
+    net_mf_ratio           DOUBLE,
+    big_order_ratio        DOUBLE,
+    roe                    DOUBLE,
+    roe_yoy                DOUBLE,
+    net_profit_margin      DOUBLE,
+    gross_profit_margin    DOUBLE,
+    total_rev_yoy          DOUBLE,
+    profit_yoy             DOUBLE,
+    express_revenue        DOUBLE,
+    express_operate_profit DOUBLE,
+    express_n_income       DOUBLE,
+    express_yoy_net_profit DOUBLE,
+    trend_score            DOUBLE,
+    liquidity_score        DOUBLE,
+    quality_score          DOUBLE,
+    value_score            DOUBLE,
+    flow_score             DOUBLE,
+    event_score            DOUBLE,
+    factor_score           DOUBLE,
+    PRIMARY KEY (trade_date, ts_code)
+);
+"""
+
+
 # -- 盯盘自选表 (watchlist) --
 
 CREATE_WATCHLIST_TABLE_SQL = """
@@ -202,6 +400,8 @@ CREATE TABLE IF NOT EXISTS watchlist (
     name            VARCHAR(50),
 
     remark          VARCHAR(255),
+
+    sort_order      INTEGER DEFAULT 0,
 
     created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
@@ -320,9 +520,17 @@ ALL_TABLES_SQL = [
     "CREATE INDEX IF NOT EXISTS idx_concept_details_tscode ON stock_concept_details (ts_code);",
     CREATE_STOCK_MONEYFLOW_TABLE_SQL,
     "CREATE INDEX IF NOT EXISTS idx_moneyflow_date ON stock_moneyflow (trade_date);",
+    CREATE_STOCK_DAILY_BASIC_TABLE_SQL,
+    "CREATE INDEX IF NOT EXISTS idx_stock_daily_basic_date ON stock_daily_basic (trade_date);",
+    "CREATE INDEX IF NOT EXISTS idx_stock_daily_basic_tscode ON stock_daily_basic (ts_code);",
     CREATE_MARKET_INDEX_TABLE_SQL,
     CREATE_MARKET_SENTIMENT_TABLE_SQL,
     CREATE_STOCK_MARGIN_TABLE_SQL,
+    CREATE_STOCK_INCOME_TABLE_SQL,
+    CREATE_STOCK_FINA_INDICATOR_TABLE_SQL,
+    CREATE_STOCK_INDEX_MEMBER_ALL_TABLE_SQL,
+    CREATE_STOCK_EXPRESS_TABLE_SQL,
+    CREATE_STOCK_FACTOR_DAILY_TABLE_SQL,
     CREATE_WATCHLIST_TABLE_SQL,
     CREATE_MAINLINE_SCORES_TABLE_SQL,
     CREATE_USER_AI_CONFIG_TABLE_SQL,
@@ -332,5 +540,9 @@ ALL_TABLES_SQL = [
     CREATE_ETL_TASKS_TABLE_SQL,
     "CREATE INDEX IF NOT EXISTS idx_stock_margin_date ON stock_margin (trade_date);",
     "CREATE INDEX IF NOT EXISTS idx_stock_margin_tscode ON stock_margin (ts_code);",
+    "CREATE INDEX IF NOT EXISTS idx_stock_index_member_tscode ON stock_index_member_all (ts_code);",
+    "CREATE INDEX IF NOT EXISTS idx_stock_express_tscode ON stock_express (ts_code);",
+    "CREATE INDEX IF NOT EXISTS idx_stock_factor_daily_date ON stock_factor_daily (trade_date);",
+    "CREATE INDEX IF NOT EXISTS idx_stock_factor_daily_tscode ON stock_factor_daily (ts_code);",
     "CREATE INDEX IF NOT EXISTS idx_ai_analysis_cache_user_tscode ON ai_analysis_cache (user_id, ts_code);",
 ]

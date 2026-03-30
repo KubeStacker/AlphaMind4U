@@ -162,8 +162,11 @@ class FinancialsTask(BaseTask):
         if not stock_codes:
             return set()
         try:
-            codes_str = ','.join(stock_codes)
-            df = fetch_df(f"SELECT ts_code, end_date FROM stock_income WHERE ts_code IN ({codes_str})")
+            placeholders = ",".join(["?"] * len(stock_codes))
+            df = fetch_df(
+                f"SELECT ts_code, end_date FROM stock_income WHERE ts_code IN ({placeholders})",
+                params=stock_codes,
+            )
             return set(zip(df['ts_code'], df['end_date'].astype(str).str.replace('-', '')))
         except:
             return set()

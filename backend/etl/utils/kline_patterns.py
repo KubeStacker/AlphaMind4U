@@ -16,12 +16,16 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 import numpy as np
 import pandas as pd
+from db.connection import fetch_df
+from strategy.mainline.config import CATEGORY_WEIGHTS, CONCEPT_MAPPING
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +55,28 @@ CORE_FEATURE_COLS = {
     "trend_down",
     "close_rank_20",
 }
+
+COMMENTARY_SUBTHEME_RULES = (
+    {
+        "label": "半导体材料",
+        "sector": "半导体",
+        "concept_keywords": (
+            "半导体", "芯片", "集成电路", "光刻胶", "先进封装", "封装测试",
+            "存储芯片", "晶圆", "光芯片", "chiplet", "eda",
+        ),
+        "industry_keywords": ("化工", "材料", "新材料", "电子化学", "化学制品"),
+        "reason": "交易和产业归因更接近国产半导体材料转型方向。"
+    },
+    {
+        "label": "半导体设备",
+        "sector": "半导体",
+        "concept_keywords": (
+            "半导体", "芯片", "集成电路", "光刻", "刻蚀", "检测设备", "先进封装",
+        ),
+        "industry_keywords": ("专用设备", "自动化设备", "机械设备", "仪器仪表"),
+        "reason": "概念落在半导体链条，交易上更按设备/工艺升级理解。"
+    },
+)
 
 
 # ============================================================================
@@ -1595,16 +1621,293 @@ def _position_text(action: str, confidence: str) -> str:
     return "空仓或极轻仓处理，优先控制回撤。"
 
 
-def get_professional_commentary(df: pd.DataFrame, patterns: list) -> str:
+def _clean_theme_token(value: Any) -> str:
+    if value is None:
+        return ""
+    cleaned = str(value).strip().replace("_THS", "")
+    for token in ("概念股", "概念", "题材", "板块", "指数", "产业链", "同花顺"):
+        cleaned = cleaned.replace(token, "")
+    cleaned = re.sub(r"[\s/,_\-]+", "", cleaned)
+    return cleaned.upper()
+
+
+def _match_theme_keyword(values: Sequence[str], keywords: Sequence[str]) -> list[str]:
+    matched: list[str] = []
+    cleaned_keywords = [_clean_theme_token(keyword) for keyword in keywords if _clean_theme_token(keyword)]
+    for raw in values:
+        cleaned = _clean_theme_token(raw)
+        if not cleaned:
+            continue
+        if any(keyword in cleaned or cleaned in keyword for keyword in cleaned_keywords):
+            matched.append(str(raw))
+    return matched
+
+
+def _infer_primary_sector(industry: str, concepts: Sequence[str]) -> tuple[str, list[str]]:
+    tokens = [industry] + list(concepts or [])
+    scores: dict[str, float] = {}
+    matched: dict[str, list[str]] = {}
+
+    for sector, keywords in CONCEPT_MAPPING.items():
+        sector_score = 0.0
+        hits: list[str] = []
+        sector_keywords = [sector, *(keywords or [])]
+        cleaned_keywords = [_clean_theme_token(keyword) for keyword in sector_keywords if _clean_theme_token(keyword)]
+        for raw in tokens:
+            cleaned = _clean_theme_token(raw)
+            if not cleaned:
+                continue
+            for keyword, original_keyword in zip(cleaned_keywords, sector_keywords):
+                if keyword in cleaned or cleaned in keyword:
+                    sector_score += len(keyword) * float(CATEGORY_WEIGHTS.get(sector, 1.0))
+                    if raw not in hits:
+                        hits.append(str(raw))
+                    break
+        if sector_score > 0:
+            scores[sector] = sector_score
+            matched[sector] = hits
+
+    if not scores:
+        return "", []
+
+    sector = max(scores.items(), key=lambda item: item[1])[0]
+    return sector, matched.get(sector, [])
+
+
+def _classify_commentary_theme(industry: str, concepts: Sequence[str]) -> dict:
+    concepts = [str(item).strip() for item in (concepts or []) if str(item).strip()]
+    cleaned_industry = _clean_theme_token(industry)
+    cleaned_concepts = [_clean_theme_token(item) for item in concepts if _clean_theme_token(item)]
+
+    for rule in COMMENTARY_SUBTHEME_RULES:
+        concept_hits = _match_theme_keyword(concepts, rule["concept_keywords"])
+        if not concept_hits:
+            continue
+        if rule.get("industry_keywords"):
+            cleaned_industry_hits = [
+                keyword for keyword in rule["industry_keywords"]
+                if _clean_theme_token(keyword) and _clean_theme_token(keyword) in cleaned_industry
+            ]
+            if not cleaned_industry_hits:
+                continue
+
+        return {
+            "sector": rule["sector"],
+            "primary_label": rule["label"],
+            "matched_concepts": concept_hits[:4],
+            "legacy_industry": industry,
+            "reason": (
+                f"基础行业归在{industry or '待确认'}，"
+                f"但概念命中{'、'.join(concept_hits[:3])}，{rule['reason']}"
+            ),
+            "is_reclassified": True,
+        }
+
+    sector, hits = _infer_primary_sector(industry, concepts)
+    if sector:
+        preferred_label = hits[0] if hits and hits[0] != industry else sector
+        return {
+            "sector": sector,
+            "primary_label": preferred_label,
+            "matched_concepts": hits[:4],
+            "legacy_industry": industry,
+            "reason": (
+                f"综合基础行业{industry or '待确认'}与概念标签{'、'.join(hits[:3]) or '暂无'}，"
+                f"当前更按{sector}方向理解。"
+            ),
+            "is_reclassified": bool(industry and preferred_label and preferred_label != industry),
+        }
+
+    fallback_label = industry or "待确认"
+    return {
+        "sector": fallback_label,
+        "primary_label": fallback_label,
+        "matched_concepts": concepts[:4],
+        "legacy_industry": industry,
+        "reason": "缺少足够概念标签时，先按基础行业定位。",
+        "is_reclassified": False,
+    }
+
+
+@lru_cache(maxsize=1024)
+def _load_commentary_context(ts_code: str) -> dict:
+    code = str(ts_code or "").strip().upper()
+    if not code:
+        return {}
+
+    basic_df = fetch_df(
+        """
+        SELECT ts_code, name, industry
+        FROM stock_basic
+        WHERE ts_code = ?
+        """,
+        params=[code],
+    )
+    concept_df = fetch_df(
+        """
+        SELECT concept_name
+        FROM stock_concept_details
+        WHERE ts_code = ?
+          AND concept_name IS NOT NULL
+        ORDER BY concept_name
+        """,
+        params=[code],
+    )
+
+    stock_name = ""
+    industry = ""
+    if not basic_df.empty:
+        stock_name = str(basic_df.iloc[0].get("name") or "").strip()
+        industry = str(basic_df.iloc[0].get("industry") or "").strip()
+
+    concepts = []
+    if not concept_df.empty:
+        concepts = [
+            str(item).strip()
+            for item in concept_df["concept_name"].tolist()
+            if str(item).strip()
+        ]
+
+    classification = _classify_commentary_theme(industry, concepts)
+    return {
+        "ts_code": code,
+        "stock_name": stock_name,
+        "industry": industry,
+        "concepts": concepts,
+        "classification": classification,
+    }
+
+
+def _resolve_commentary_context(context: dict | None) -> dict:
+    if not context:
+        return {}
+
+    resolved = dict(context)
+    ts_code = str(resolved.get("ts_code") or "").strip().upper()
+    if ts_code and not resolved.get("classification"):
+        cached = _load_commentary_context(ts_code)
+        if cached:
+            cached.update({k: v for k, v in resolved.items() if v not in (None, "", [], {})})
+            return cached
+    return resolved
+
+
+def _build_level_candidate(
+    level_type: str,
+    source: str,
+    price: float | None,
+    close: float,
+    weight: float,
+) -> dict | None:
+    value = _safe_number(price)
+    if value is None or close <= 0:
+        return None
+    if level_type == "support" and value > close:
+        return None
+    if level_type == "resistance" and value < close:
+        return None
+
+    distance_pct = abs(close - value) / close * 100
+    if source.startswith("MA"):
+        window = source.replace("MA", "")
+        basis = f"{window}日均线"
+        definition = f"近{window}个交易日平均成本线"
+        breach_rule = "收盘跌破说明均线支撑削弱" if level_type == "support" else "放量站上才算均线压力化解"
+    elif source.startswith("LOW_"):
+        window = source.replace("LOW_", "")
+        basis = f"近{window}日最低价"
+        definition = f"近{window}日回撤低点"
+        breach_rule = "跌破意味着该时间窗防守区被击穿"
+    else:
+        window = source.replace("HIGH_", "")
+        basis = f"近{window}日最高价" if source.startswith("HIGH_") else source
+        definition = f"近{window}日上方成交密集区" if source.startswith("HIGH_") else source
+        breach_rule = "放量站上才算有效突破"
+
+    return {
+        "type": level_type,
+        "source": source,
+        "price": round(value, 2),
+        "distance_pct": round(distance_pct, 2),
+        "weight": float(weight),
+        "basis": basis,
+        "definition": definition,
+        "breach_rule": breach_rule,
+    }
+
+
+def _select_key_levels(close: float, candidates: Sequence[dict], level_type: str, top_n: int = 2) -> list[dict]:
+    if not candidates:
+        return []
+
+    tolerance = max(close * 0.0035, 0.03)
+    ordered = sorted(
+        candidates,
+        key=lambda item: (item["distance_pct"], -item["weight"]),
+    )
+    merged: list[dict] = []
+    for item in ordered:
+        existing = next(
+            (
+                level for level in merged
+                if abs(float(level["price"]) - float(item["price"])) <= tolerance
+            ),
+            None,
+        )
+        if existing:
+            if item["weight"] > existing["weight"]:
+                existing["price"] = item["price"]
+                existing["basis"] = item["basis"]
+                existing["definition"] = item["definition"]
+                existing["breach_rule"] = item["breach_rule"]
+            existing["weight"] = max(float(existing["weight"]), float(item["weight"]))
+            existing["distance_pct"] = min(float(existing["distance_pct"]), float(item["distance_pct"]))
+            sources = set(existing.get("sources", []))
+            sources.add(item["source"])
+            existing["sources"] = sorted(sources)
+            continue
+
+        cloned = dict(item)
+        cloned["sources"] = [item["source"]]
+        merged.append(cloned)
+
+    selected = []
+    for idx, item in enumerate(merged[:max(1, int(top_n))], start=1):
+        source_text = "、".join(item.get("sources", []))
+        direction_text = "下方" if level_type == "support" else "上方"
+        role_text = "多头防守位" if level_type == "support" else "突破确认位"
+        selected.append(
+            {
+                "label": f"{'支撑' if level_type == 'support' else '压力'}{idx}",
+                "price": item["price"],
+                "type": level_type,
+                "source": item["basis"],
+                "sources": item.get("sources", []),
+                "distance_pct": round(float(item["distance_pct"]), 2),
+                "definition": item["definition"],
+                "note": (
+                    f"来源：{item['basis']}（{source_text}）；定义：{item['definition']}，"
+                    f"距离现价{direction_text}约 {item['distance_pct']:.2f}%，属于{role_text}。{item['breach_rule']}。"
+                ),
+            }
+        )
+    return selected
+
+
+def get_professional_commentary(df: pd.DataFrame, patterns: list, context: dict | None = None) -> str:
     """
     根据形态和最近行情，给出专业的点评分析（机构/游资视角）。
     返回: 简洁的汇总字符串 (兼容旧接口)
     """
-    detail = get_professional_commentary_detailed(df, patterns)
+    detail = get_professional_commentary_detailed(df, patterns, context=context)
     return detail.get("summary", "暂无明显信号，观望为主。")
 
 
-def get_professional_commentary_detailed(df: pd.DataFrame, patterns: list) -> dict:
+def get_professional_commentary_detailed(
+    df: pd.DataFrame,
+    patterns: list,
+    context: dict | None = None,
+) -> dict:
     """
     根据形态和最近行情，给出专业的点评分析（机构/游资视角）。
     返回详细的结构化数据，供前端展示。
@@ -1615,7 +1918,9 @@ def get_professional_commentary_detailed(df: pd.DataFrame, patterns: list) -> di
             "decision": {},
             "trade_plan": {},
             "key_levels": [],
+            "level_methodology": [],
             "observation_points": [],
+            "classification": {},
             "institution": [],
             "hotmoney": [],
             "patterns": [],
@@ -1624,6 +1929,8 @@ def get_professional_commentary_detailed(df: pd.DataFrame, patterns: list) -> di
         }
 
     df = df.copy()
+    commentary_context = _resolve_commentary_context(context)
+    classification = commentary_context.get("classification") or {}
     if "volume" not in df.columns and "vol" in df.columns:
         df = df.rename(columns={"vol": "volume"})
     for ma in (5, 10, 20, 60):
@@ -2243,27 +2550,29 @@ def get_professional_commentary_detailed(df: pd.DataFrame, patterns: list) -> di
     low_10 = _safe_number(last_10["low"].min() if "low" in last_10.columns else None)
     low_20 = _safe_number(last_20["low"].min() if "low" in last_20.columns else None)
 
-    below_levels = sorted(
-        {
-            round(v, 2)
-            for v in [ma5, ma10, ma20, ma60, low_5, low_10, low_20]
-            if _safe_number(v) is not None and _safe_number(v) <= close
-        },
-        reverse=True,
-    )
-    above_levels = sorted(
-        {
-            round(v, 2)
-            for v in [high_5, high_10, high_20, ma60]
-            if _safe_number(v) is not None and _safe_number(v) >= close
-        }
-    )
+    support_candidates = [
+        _build_level_candidate("support", "MA5", ma5, close, 0.95),
+        _build_level_candidate("support", "MA10", ma10, close, 1.05),
+        _build_level_candidate("support", "MA20", ma20, close, 1.2),
+        _build_level_candidate("support", "MA60", ma60, close, 1.25),
+        _build_level_candidate("support", "LOW_5", low_5, close, 0.92),
+        _build_level_candidate("support", "LOW_10", low_10, close, 1.08),
+        _build_level_candidate("support", "LOW_20", low_20, close, 1.22),
+    ]
+    resistance_candidates = [
+        _build_level_candidate("resistance", "HIGH_5", high_5, close, 0.94),
+        _build_level_candidate("resistance", "HIGH_10", high_10, close, 1.06),
+        _build_level_candidate("resistance", "HIGH_20", high_20, close, 1.2),
+        _build_level_candidate("resistance", "MA60", ma60, close, 1.12),
+    ]
+    support_levels = _select_key_levels(close, [item for item in support_candidates if item], "support")
+    resistance_levels = _select_key_levels(close, [item for item in resistance_candidates if item], "resistance")
 
-    support_1 = below_levels[0] if below_levels else None
-    support_2 = below_levels[1] if len(below_levels) > 1 else None
-    resistance_1 = above_levels[0] if above_levels else None
-    resistance_2 = above_levels[1] if len(above_levels) > 1 else None
-    stop_level = support_2 or support_1 or low_20
+    support_1 = support_levels[0]["price"] if support_levels else None
+    support_2 = support_levels[1]["price"] if len(support_levels) > 1 else None
+    resistance_1 = resistance_levels[0]["price"] if resistance_levels else None
+    resistance_2 = resistance_levels[1]["price"] if len(resistance_levels) > 1 else None
+    stop_level = support_2 or support_1 or low_20 or ma20
 
     fmt_level = lambda value: f"{value:.2f}" if value is not None else "待确认"
 
@@ -2286,19 +2595,27 @@ def get_professional_commentary_detailed(df: pd.DataFrame, patterns: list) -> di
         invalid_text = f"只有重新站稳 {fmt_level(resistance_1)} 并放量，弱势判断才可能修复。"
 
     risk_brief = risk_alert[0]["title"] if risk_alert else ("量能不足" if vol_ratio_20 < 0.8 else "等待确认")
-    decision_summary = f"{bias}，当前以{style}为主，建议 {action}。"
 
-    key_levels = []
-    if support_1 is not None:
-        key_levels.append({"label": "支撑1", "price": support_1, "note": "近端防守位"})
-    if support_2 is not None:
-        key_levels.append({"label": "支撑2", "price": support_2, "note": "失守后结构明显转弱"})
-    if resistance_1 is not None:
-        key_levels.append({"label": "压力1", "price": resistance_1, "note": "放量突破才算确认"})
-    if resistance_2 is not None:
-        key_levels.append({"label": "压力2", "price": resistance_2, "note": "强势延伸目标位"})
+    classification_text = ""
+    if classification.get("primary_label"):
+        classification_text = f"定位 {classification['primary_label']}；"
+    decision_summary = (
+        f"{classification_text}{bias}，当前以{style}为主，建议 {action}。"
+        f"支撑 {fmt_level(support_1)}、压力 {fmt_level(resistance_1)}。"
+    )
+
+    key_levels = [*support_levels, *resistance_levels]
+    level_methodology = [
+        "支撑位定义：从现价下方的 MA5/10/20/60 与近 5/10/20 日低点中筛选，优先选择距离更近、周期更长、且多来源重合的价位。",
+        "压力位定义：从现价上方的近 5/10/20 日高点及 MA60 中筛选，优先选择距离更近、历史抛压更明确、且需要量能确认的价位。",
+    ]
 
     observation_points = []
+    if classification.get("primary_label"):
+        observation_points.append(
+            f"定位：{classification['primary_label']}。{classification.get('reason', '')}".strip()
+        )
+    observation_points.extend(level_methodology)
     if institution_view:
         observation_points.append(institution_view[0]["desc"])
     if hotmoney_view:
@@ -2307,13 +2624,14 @@ def get_professional_commentary_detailed(df: pd.DataFrame, patterns: list) -> di
         observation_points.append(f"{pattern_view[0]['pattern']}：{pattern_view[0]['desc']}")
     if risk_alert:
         observation_points.append(f"风险：{risk_alert[0]['desc']}")
-    observation_points = observation_points[:4]
+    observation_points = observation_points[:5]
 
     summary_parts = [
         f"【结论】{decision_summary}",
         f"【计划】{entry_text}",
         f"【风险】{risk_brief}，跌破 {fmt_level(stop_level)} 需收缩仓位。",
     ]
+    summary_parts = [item for item in summary_parts if item]
 
     institution_order = {"strong": 0, "medium": 1, "light": 2, "neutral": 3, "weak": 4, "warning": 5, "bearish": 6}
     hotmoney_order = {"extreme": 0, "strong": 1, "medium": 2, "light": 3, "neutral": 4, "weak": 5, "warning": 6, "danger": 7}
@@ -2341,7 +2659,9 @@ def get_professional_commentary_detailed(df: pd.DataFrame, patterns: list) -> di
             "position": _position_text(action, confidence),
         },
         "key_levels": key_levels,
+        "level_methodology": level_methodology,
         "observation_points": observation_points,
+        "classification": classification,
         "institution": institution_sorted,
         "hotmoney": hotmoney_sorted,
         "patterns": pattern_sorted,

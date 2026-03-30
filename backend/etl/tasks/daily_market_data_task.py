@@ -147,6 +147,14 @@ class DailyMarketDataTask(BaseTask):
             self._upsert_daily_data(df)
             
             if calc_factors:
+                try:
+                    from etl.tasks.capital_flow_task import CapitalFlowTask
+                    from etl.tasks.factor_data_task import FactorDataTask
+
+                    CapitalFlowTask(self.provider).sync_capital_flow_for_date(date_str)
+                    FactorDataTask(self.provider).sync_daily_basic_for_date(date_str)
+                except Exception as exc:
+                    logger.warning(f"同步 {date_str} 的因子依赖数据失败，因子将使用已有数据: {exc}")
                 self.calculate_technical_factors(date_str)
                 
             time.sleep(0.5) # 避免限流

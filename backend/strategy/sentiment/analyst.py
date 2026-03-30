@@ -148,6 +148,7 @@ class SentimentAnalyst:
             score_std10 = 0.0
             score_z = 0.0
             score_drawdown5 = 0.0
+            score_ema3 = current_score  # 新增：3日EMA平滑分数
             
             # 情绪动量新增指标
             breadth_divergence = 0.0  # 涨跌家数背离
@@ -168,6 +169,14 @@ class SentimentAnalyst:
                 score_std10 = float(np.std(combined_scores[-10:])) if len(combined_scores) >= 2 else 0.0
                 score_z = (current_score - score_ma10) / score_std10 if score_std10 > 0 else 0.0
                 score_drawdown5 = current_score - max(combined_scores[-5:])
+                
+                # 计算3日EMA平滑分数 (用于减少信号抖动)
+                if len(combined_scores) >= 3:
+                    alpha = 2.0 / 4.0  # EMA3平滑系数
+                    ema_prev = combined_scores[-2] if len(combined_scores) >= 2 else current_score
+                    score_ema3 = alpha * current_score + (1 - alpha) * ema_prev
+                else:
+                    score_ema3 = current_score
                 
                 # 持续高涨天数 (分数 > 80)
                 consecutive_highs = 0
@@ -255,7 +264,7 @@ class SentimentAnalyst:
             # Generate Raw Plan (传入持仓状态)
             plan = self._generate_plan(
                 fingerprint, current_score, v1, v2, crash_exp_ret, trend_context,
-                score_ma5, v1_rate, sustained_high_days, new_metrics, position_info
+                score_ma5, v1_rate, sustained_high_days, new_metrics, position_info, score_ema3
             )
 
             # Verify breakout/chase BUY signals first, then update position state.
@@ -950,12 +959,14 @@ class SentimentAnalyst:
             return {'mode': final_mode}
         except: return {'mode': 'CHOP'}
 
-    def _generate_plan(self, fp, score, v1, v2, crash_exp_ret=0.0, trend_context=None, score_ma5=None, v1_rate=0.0, sustained_high_days=0, new_metrics=None, position_info=None):
+    def _generate_plan(self, fp, score, v1, v2, crash_exp_ret=0.0, trend_context=None, score_ma5=None, v1_rate=0.0, sustained_high_days=0, new_metrics=None, position_info=None, score_ema3=None):
         """
         V34: 平衡型情绪策略
         1. 先做风险裁剪，再做择时。
-        2. 买卖都由同一套状态变量驱动，避免“只卖不买”偏置。
+        2. 买卖都由同一套状态变量驱动，避免"只卖不买"偏置。
         3. 采用三类入场（逆向/趋势/突破）与三类离场（风控/衰减/保护）。
+        4. 新增：最小持仓期限制，防止买后立即卖
+        5. 新增：使用平滑分数决策，减少信号抖动
         """
         if new_metrics is None:
             new_metrics = {}
@@ -965,6 +976,8 @@ class SentimentAnalyst:
             trend_context = {'mode': 'CHOP'}
         if score_ma5 is None:
             score_ma5 = score
+        if score_ema3 is None:
+            score_ema3 = score
 
         buy_cfg = SENTIMENT_CONFIG.get('buy', {})
         sell_cfg = SENTIMENT_CONFIG.get('sell', {})
@@ -986,33 +999,36 @@ class SentimentAnalyst:
         above_ma5_required = bool(m_cfg.get('buy_score_above_ma5', True))
         above_ma5_ok = (score >= score_ma5) if above_ma5_required else True
 
+        # 使用平滑分数减少信号抖动
+        smooth_score = score_ema3 if score_ema3 is not None else score
+
         # 统一状态变量
-        chase_zone = score >= m_cfg.get('avoid_chase_score', 92)
-        overheat_zone = score >= sell_cfg.get('euphoria_threshold', 85)
+        chase_zone = smooth_score >= m_cfg.get('avoid_chase_score', 92)
+        overheat_zone = smooth_score >= sell_cfg.get('euphoria_threshold', 85)
         momentum_break = (
-            (v1 <= sell_cfg.get('momentum_reversal_v1', -3.0) and v2 <= sell_cfg.get('momentum_reversal_v2', -1.5))
-            or score_drawdown5 <= -8
+            (v1 <= sell_cfg.get('momentum_reversal_v1', -5.0) and v2 <= sell_cfg.get('momentum_reversal_v2', -2.0))
+            or score_drawdown5 <= -10
         )
         divergence_risk = (
-            score >= m_cfg.get('sell_divergence_score', 78)
+            smooth_score >= m_cfg.get('sell_divergence_score', 78)
             and (breadth_div < -0.06 or mom_div > 8 or score_z > m_cfg.get('score_z_top', 1.2))
         )
 
-        # 三类入场模板：逆向、顺势、突破
+        # 三类入场模板：逆向、顺势、突破（使用平滑分数）
         rebound_entry = (
-            score <= m_cfg.get('buy_neglect_score', 42)
+            smooth_score <= m_cfg.get('buy_neglect_score', 42)
             and breadth_ratio <= m_cfg.get('buy_neglect_breadth_max', 0.45)
             and (v1 >= -3.0 or v2 >= 0.0)
         )
         trend_entry = (
-            score >= max(chop_cfg.get('range_low_score', 32), buy_cfg.get('normal_buy_min_score', 25))
-            and score <= max(chop_cfg.get('range_high_score', 62), 68)
+            smooth_score >= max(chop_cfg.get('range_low_score', 32), buy_cfg.get('normal_buy_min_score', 25))
+            and smooth_score <= max(chop_cfg.get('range_high_score', 62), 68)
             and above_ma5_ok
             and v1 > 0
             and breadth_ratio >= 0.48
         )
         breakout_entry = (
-            score >= buy_cfg.get('breakout_score', 58)
+            smooth_score >= buy_cfg.get('breakout_score', 58)
             and above_ma5_ok
             and v1 >= max(3.0, buy_cfg.get('momentum_v1_threshold', 5.0) - 2.0)
             and v2 >= max(0.0, buy_cfg.get('momentum_v2_threshold', 0.5) - 0.5)
@@ -1025,10 +1041,21 @@ class SentimentAnalyst:
             profit_pct = position_info.get('profit_pct', 0)
             peak_profit_pct = position_info.get('peak_profit_pct', 0)
 
+            # 0) 最小持仓期限制：买入后至少持有N天才允许卖出
+            min_hold_days = sell_cfg.get('min_hold_days', 3)
+            if hold_days < min_hold_days:
+                # 在最小持仓期内，只有硬止损才允许卖出
+                hard_stop_loss = sell_cfg.get('stop_loss', -5.0)
+                if profit_pct <= hard_stop_loss:
+                    return self._pack_result(MarketMood.ICE_POINT, "PLAN_SELL_ALL", "【止损清仓】跌破风控阈值。", 95, 5, fp, score, v1, v2, score_ma5, v1_rate, sustained_high_days)
+                else:
+                    # 未触发硬止损，强制持有
+                    return self._pack_result(MarketMood.CONFUSED, "PLAN_HOLD", f"【持有中】最小持仓期({min_hold_days}天)保护，继续观察。", 28, 72, fp, score, v1, v2, score_ma5, v1_rate, sustained_high_days)
+
             # 1) 硬风控
             if profit_pct <= sell_cfg.get('stop_loss', -5.0):
                 return self._pack_result(MarketMood.ICE_POINT, "PLAN_SELL_ALL", "【止损清仓】跌破风控阈值。", 95, 5, fp, score, v1, v2, score_ma5, v1_rate, sustained_high_days)
-            if hold_days >= sell_cfg.get('max_hold_days', 20):
+            if hold_days >= sell_cfg.get('max_hold_days', 30):
                 signal = "PLAN_SELL_PARTIAL" if profit_pct > 0 else "PLAN_SELL_ALL"
                 return self._pack_result(MarketMood.CONFUSED, signal, "【到期减仓】持仓时长达到上限。", 75, 25, fp, score, v1, v2, score_ma5, v1_rate, sustained_high_days)
 
@@ -1056,12 +1083,12 @@ class SentimentAnalyst:
             # 3) 浮盈回撤保护
             pullback = peak_profit_pct - profit_pct
             if (
-                peak_profit_pct >= sell_cfg.get('trailing_profit_floor', 4.0)
-                and pullback >= sell_cfg.get('trailing_pullback', 3.5)
+                peak_profit_pct >= sell_cfg.get('trailing_profit_floor', 6.0)
+                and pullback >= sell_cfg.get('trailing_pullback', 4.0)
             ):
                 return self._pack_result(MarketMood.BOILING, "PLAN_SELL_PARTIAL", "【浮盈保护】高位回撤触发减仓。", 78, 22, fp, score, v1, v2, score_ma5, v1_rate, sustained_high_days)
 
-            if profit_pct >= sell_cfg.get('profit_take', 8.0) and (v1 < -0.5 or overheat_zone):
+            if profit_pct >= sell_cfg.get('profit_take', 12.0) and (v1 < -0.5 or overheat_zone):
                 return self._pack_result(MarketMood.BOILING, "PLAN_SELL_PARTIAL", "【分批止盈】收益达标且动量趋弱。", 55, 45, fp, score, v1, v2, score_ma5, v1_rate, sustained_high_days)
 
             # 4) 否则持有
@@ -1069,52 +1096,52 @@ class SentimentAnalyst:
 
         # === 无持仓：买入决策 ===
         if chase_zone and not breakout_entry:
-            return self._pack_result(MarketMood.EUPHORIA, "PLAN_WATCH", "【观望】情绪过热，避免追高。", 72, 28, fp, score, v1, v2, score_ma5, v1_rate, sustained_high_days)
+            return self._pack_result(MarketMood.EUPHORIA, "PLAN_WATCH", "【观望】情绪过热，避免追高。", 72, 28, fp, smooth_score, v1, v2, score_ma5, v1_rate, sustained_high_days)
 
         iv_z = float(fp.get('iv_proxy_z', 0.0))
         if mode != 'BULL' and iv_z >= 1.2 and breadth_ratio < 0.5 and v1 < 2.0:
-            return self._pack_result(MarketMood.CONFUSED, "PLAN_WATCH", "【观望】高波动弱广度环境，等待更高确定性。", 78, 22, fp, score, v1, v2, score_ma5, v1_rate, sustained_high_days)
+            return self._pack_result(MarketMood.CONFUSED, "PLAN_WATCH", "【观望】高波动弱广度环境，等待更高确定性。", 78, 22, fp, smooth_score, v1, v2, score_ma5, v1_rate, sustained_high_days)
 
         # 极端恐慌但动量未企稳，避免接飞刀
-        if score <= buy_cfg.get('ice_point_max_score', 35) and v1 < -6 and v2 <= 0:
-            return self._pack_result(MarketMood.ICE_POINT, "PLAN_WATCH", "【风控】冰点惯性下跌，等待动量拐点。", 88, 12, fp, score, v1, v2, score_ma5, v1_rate, sustained_high_days)
+        if smooth_score <= buy_cfg.get('ice_point_max_score', 35) and v1 < -6 and v2 <= 0:
+            return self._pack_result(MarketMood.ICE_POINT, "PLAN_WATCH", "【风控】冰点惯性下跌，等待动量拐点。", 88, 12, fp, smooth_score, v1, v2, score_ma5, v1_rate, sustained_high_days)
 
         if rebound_entry and sustained_low_days >= m_cfg.get('buy_neglect_days', 1):
-            return self._pack_result(MarketMood.ICE_POINT, "PLAN_BUY_PARTIAL", "【逆向分批买入】连续低迷后动量拐点出现。", 24, 95, fp, score, v1, v2, score_ma5, v1_rate, sustained_high_days)
+            return self._pack_result(MarketMood.ICE_POINT, "PLAN_BUY_PARTIAL", "【逆向分批买入】连续低迷后动量拐点出现。", 24, 95, fp, smooth_score, v1, v2, score_ma5, v1_rate, sustained_high_days)
 
         # 冰点反转
         if (
-            score <= buy_cfg.get('ice_point_max_score', 35)
+            smooth_score <= buy_cfg.get('ice_point_max_score', 35)
             and v1 >= min(0.0, buy_cfg.get('ice_point_v1_threshold', 0) + 0.5)
             and v2 >= min(0.5, buy_cfg.get('rebound_v2_threshold', 1.0))
             and breadth_ratio >= max(0.40, m_cfg.get('buy_min_breadth', 0.45) - 0.05)
         ):
-            return self._pack_result(MarketMood.ICE_POINT, "PLAN_BUY_FULL", "【冰点反转重仓】低位情绪动量共振修复。", 26, 94, fp, score, v1, v2, score_ma5, v1_rate, sustained_high_days)
+            return self._pack_result(MarketMood.ICE_POINT, "PLAN_BUY_FULL", "【冰点反转重仓】低位情绪动量共振修复。", 26, 94, fp, smooth_score, v1, v2, score_ma5, v1_rate, sustained_high_days)
 
         # 动量突破
         if breakout_entry:
-            signal = "PLAN_BUY_FULL" if (score >= 68 or breadth_ratio >= 0.55) else "PLAN_BUY_PARTIAL"
-            return self._pack_result(MarketMood.DIVERGENCE, signal, "【动量突破】分数与动量同步抬升。", 32, 90, fp, score, v1, v2, score_ma5, v1_rate, sustained_high_days)
+            signal = "PLAN_BUY_FULL" if (smooth_score >= 68 or breadth_ratio >= 0.55) else "PLAN_BUY_PARTIAL"
+            return self._pack_result(MarketMood.DIVERGENCE, signal, "【动量突破】分数与动量同步抬升。", 32, 90, fp, smooth_score, v1, v2, score_ma5, v1_rate, sustained_high_days)
 
         # 牛市顺势
         if mode == 'BULL' and (
             (trend_entry and v1 >= bull_cfg.get('buy_min_v1', -2.0))
-            or (score >= bull_cfg.get('buy_min_score', 20) and above_ma5_ok and v1 >= -1.0 and breadth_ratio >= 0.46)
+            or (smooth_score >= bull_cfg.get('buy_min_score', 20) and above_ma5_ok and v1 >= -1.0 and breadth_ratio >= 0.46)
         ):
-            return self._pack_result(MarketMood.DIVERGENCE, "PLAN_BUY_PARTIAL", "【牛市顺势分批】趋势环境下优先跟随主升。", 34, 88, fp, score, v1, v2, score_ma5, v1_rate, sustained_high_days)
+            return self._pack_result(MarketMood.DIVERGENCE, "PLAN_BUY_PARTIAL", "【牛市顺势分批】趋势环境下优先跟随主升。", 34, 88, fp, smooth_score, v1, v2, score_ma5, v1_rate, sustained_high_days)
 
         # 震荡低吸
         if mode != 'BULL' and trend_entry:
-            return self._pack_result(MarketMood.DIVERGENCE, "PLAN_BUY_PARTIAL", "【震荡低吸分批】区间下沿修复，轻仓试错。", 38, 82, fp, score, v1, v2, score_ma5, v1_rate, sustained_high_days)
+            return self._pack_result(MarketMood.DIVERGENCE, "PLAN_BUY_PARTIAL", "【震荡低吸分批】区间下沿修复，轻仓试错。", 38, 82, fp, smooth_score, v1, v2, score_ma5, v1_rate, sustained_high_days)
 
         if crash_exp_ret > 0.1 and v1 > 1.5 and breadth_ratio >= 0.5:
-            return self._pack_result(MarketMood.DIVERGENCE, "PLAN_BUY_FULL", "【修复狙击重仓】历史恐慌后修复胜率提升。", 35, 86, fp, score, v1, v2, score_ma5, v1_rate, sustained_high_days)
+            return self._pack_result(MarketMood.DIVERGENCE, "PLAN_BUY_FULL", "【修复狙击重仓】历史恐慌后修复胜率提升。", 35, 86, fp, smooth_score, v1, v2, score_ma5, v1_rate, sustained_high_days)
 
         # 兜底买点：避免长期只有卖出没有买入
-        if score >= 48 and v1 >= 1.0 and breadth_ratio >= 0.50 and above_ma5_ok and iv_z < 1.6:
-            return self._pack_result(MarketMood.DIVERGENCE, "PLAN_BUY_PARTIAL", "【趋势试单】动量转正，先行分批试错。", 45, 70, fp, score, v1, v2, score_ma5, v1_rate, sustained_high_days)
+        if smooth_score >= 48 and v1 >= 1.0 and breadth_ratio >= 0.50 and above_ma5_ok and iv_z < 1.6:
+            return self._pack_result(MarketMood.DIVERGENCE, "PLAN_BUY_PARTIAL", "【趋势试单】动量转正，先行分批试错。", 45, 70, fp, smooth_score, v1, v2, score_ma5, v1_rate, sustained_high_days)
 
-        return self._pack_result(MarketMood.CONFUSED, "PLAN_WATCH", "【观望】等待情绪动量与广度共振。", 62, 38, fp, score, v1, v2, score_ma5, v1_rate, sustained_high_days)
+        return self._pack_result(MarketMood.CONFUSED, "PLAN_WATCH", "【观望】等待情绪动量与广度共振。", 62, 38, fp, smooth_score, v1, v2, score_ma5, v1_rate, sustained_high_days)
 
     def _pack_result(self, mood, signal, text, risk, opp, fp, score, v1, v2, score_ma5, v1_rate=0.0, sustained_high_days=0):
         return { 
@@ -1168,7 +1195,7 @@ class SentimentAnalyst:
         target_position = round(float(np.clip(target_position, 0.0, 1.0)), 2)
 
         stop_loss = abs(float(sell_cfg.get("stop_loss", -5.0)))
-        take_profit = abs(float(sell_cfg.get("profit_take", 8.0)))
+        take_profit = abs(float(sell_cfg.get("profit_take", 12.0)))
         if iv_z >= 1.2:
             stop_loss = max(2.5, stop_loss * 0.7)
         if risk_factor >= 80:
@@ -1187,7 +1214,8 @@ class SentimentAnalyst:
             "tranche_count": tranche_count,
             "stop_loss_pct": round(stop_loss, 2),
             "take_profit_pct": round(take_profit, 2),
-            "confidence": confidence
+            "confidence": confidence,
+            "min_hold_days": sell_cfg.get("min_hold_days", 3)  # 新增：最小持仓期
         }
 
     def _save_result(self, trade_date, plan, fingerprint, current_score):
@@ -1434,7 +1462,7 @@ class SentimentAnalyst:
         idx_map = { (d.strftime('%Y-%m-%d') if hasattr(d, 'strftime') else str(d)): round(c, 1) for d, c in zip(df_idx['trade_date'], df_idx['close']) }
         return { "dates": dates, "sentiment": sentiment_data, "index": [idx_map.get(d) for d in dates] }
 
-    def backtest_star50(self, initial_capital=100000, start_date=None, policy=None):
+    def backtest_star50(self, initial_capital=100000, start_date=None, end_date=None, policy=None):
         """
         科创50 ETF 情绪对冲策略回测 - 有状态增强版
         核心改进:
@@ -1465,13 +1493,12 @@ class SentimentAnalyst:
                 logger.warning("Backtest failed: No merged data.")
                 return None
 
-            # 默认回测窗口: 最近一年
+            end_ts = pd.to_datetime(end_date) if end_date is not None else df['trade_date'].max()
             if start_date is None:
-                end_date = df['trade_date'].max()
-                start_ts = end_date - pd.Timedelta(days=365)
+                start_ts = end_ts - pd.Timedelta(days=365)
             else:
                 start_ts = pd.to_datetime(start_date)
-            df = df[df['trade_date'] >= start_ts].reset_index(drop=True)
+            df = df[(df['trade_date'] >= start_ts) & (df['trade_date'] <= end_ts)].reset_index(drop=True)
             if df.empty:
                 logger.warning("Backtest failed: Empty data in selected window.")
                 return None
@@ -1632,32 +1659,44 @@ class SentimentAnalyst:
                     force_exit = False
                     exit_reason = ""
                     
-                    # === 风控层（强制退出）===
-                    # 1. 动态ATR止损
-                    fixed_stop = sell_cfg.get('stop_loss', -4)
-                    atr_mult = sell_cfg.get('atr_stop_multiplier', 1.5)
-                    atr_stop = -(atr_pct * atr_mult)
-                    dynamic_stop = min(fixed_stop, atr_stop)
-                    if profit_pct < dynamic_stop:
-                        force_exit = True
-                        exit_reason = "止损"
-                    
-                    # 2. 移动止盈 (trailing stop)
-                    elif peak_profit >= sell_cfg.get('trailing_profit_floor', 4.0):
-                        pullback = peak_profit - profit_pct
-                        if pullback >= sell_cfg.get('trailing_pullback', 3.5):
+                    # === 最小持仓期限制 ===
+                    min_hold_days = sell_cfg.get('min_hold_days', 3)
+                    if hold_days < min_hold_days:
+                        # 在最小持仓期内，只有硬止损才允许卖出
+                        fixed_stop = sell_cfg.get('stop_loss', -5)
+                        if profit_pct < fixed_stop:
                             force_exit = True
-                            exit_reason = "移动止盈"
-                    
-                    # 3. 固定止盈上限
-                    elif profit_pct >= sell_cfg.get('profit_take', 8) * 1.5:
-                        force_exit = True
-                        exit_reason = "止盈"
-                    
-                    # 4. 最大持仓天数
-                    elif hold_days >= sell_cfg.get('max_hold_days', 20):
-                        force_exit = True
-                        exit_reason = "到期"
+                            exit_reason = "止损"
+                        else:
+                            # 未触发硬止损，强制持有
+                            target_pos = current_pos
+                    else:
+                        # === 风控层（强制退出）===
+                        # 1. 动态ATR止损
+                        fixed_stop = sell_cfg.get('stop_loss', -5)
+                        atr_mult = sell_cfg.get('atr_stop_multiplier', 2.0)
+                        atr_stop = -(atr_pct * atr_mult)
+                        dynamic_stop = min(fixed_stop, atr_stop)
+                        if profit_pct < dynamic_stop:
+                            force_exit = True
+                            exit_reason = "止损"
+                        
+                        # 2. 移动止盈 (trailing stop)
+                        elif peak_profit >= sell_cfg.get('trailing_profit_floor', 6.0):
+                            pullback = peak_profit - profit_pct
+                            if pullback >= sell_cfg.get('trailing_pullback', 4.0):
+                                force_exit = True
+                                exit_reason = "移动止盈"
+                        
+                        # 3. 固定止盈上限
+                        elif profit_pct >= sell_cfg.get('profit_take', 12) * 1.5:
+                            force_exit = True
+                            exit_reason = "止盈"
+                        
+                        # 4. 最大持仓天数
+                        elif hold_days >= sell_cfg.get('max_hold_days', 30):
+                            force_exit = True
+                            exit_reason = "到期"
                     
                     if force_exit:
                         _record_trade(row['trade_date'], current_price, current_pos, exit_reason)
@@ -1665,7 +1704,12 @@ class SentimentAnalyst:
                         _reset_position()
                     else:
                         # === 信号层 + 分数仓位调节 ===
-                        if action == "SELL" and signal != "PLAN_SELL_PARTIAL":
+                        # 最小持仓期内不执行卖出信号
+                        min_hold_days = sell_cfg.get('min_hold_days', 3)
+                        if hold_days < min_hold_days and action == "SELL":
+                            # 在最小持仓期内，忽略卖出信号
+                            target_pos = current_pos
+                        elif action == "SELL" and signal != "PLAN_SELL_PARTIAL":
                             if hold_days >= 2 and (smooth_score < score_half or profit_pct < -2.0):
                                 # SELL信号 + 分数跌破半仓线 或 浮亏超2% → 清仓
                                 _record_trade(row['trade_date'], current_price, current_pos, signal or "SELL")
@@ -1751,6 +1795,27 @@ class SentimentAnalyst:
                 target_pos_list.append(target_pos)
             
             df['target_pos'] = target_pos_list
+            
+            # === 信号确认机制：信号需要持续2天才执行 ===
+            signal_confirm_days = sell_cfg.get('signal_confirm_days', 2)
+            if signal_confirm_days > 1:
+                confirmed_target_pos = []
+                for i in range(len(df)):
+                    if i < signal_confirm_days - 1:
+                        confirmed_target_pos.append(0.0)
+                    else:
+                        # 检查前N天的目标仓位是否一致
+                        recent_positions = target_pos_list[i-signal_confirm_days+1:i+1]
+                        if all(p > 0.5 for p in recent_positions):
+                            # 连续N天都是高仓位，确认买入
+                            confirmed_target_pos.append(target_pos_list[i])
+                        elif all(p < 0.1 for p in recent_positions):
+                            # 连续N天都是低仓位，确认卖出
+                            confirmed_target_pos.append(0.0)
+                        else:
+                            # 信号不一致，保持前一个仓位
+                            confirmed_target_pos.append(confirmed_target_pos[-1] if confirmed_target_pos else 0.0)
+                df['target_pos'] = confirmed_target_pos
             
             bt_cfg = SENTIMENT_CONFIG.get("backtest", {})
             leverage = float((policy or {}).get("leverage", bt_cfg.get("leverage", 1.0)))
@@ -2021,16 +2086,12 @@ class SentimentAnalyst:
                     res = self.backtest_star50(
                         initial_capital=100000,
                         start_date=train_start,
+                        end_date=train_end,
                         policy=policy
                     )
                     if not res:
                         continue
                     m = res.get("metrics", {})
-                    # 只取 train 窗口内的数据
-                    curves = res.get("curves", [])
-                    train_curves = [c for c in curves if c['trade_date'] <= train_end]
-                    if not train_curves:
-                        continue
 
                     total_ret = float(str(m.get("total_return", "0%")).replace("%", "")) / 100.0
                     max_dd = abs(float(str(m.get("max_drawdown", "0%")).replace("%", "")) / 100.0)
@@ -2052,6 +2113,7 @@ class SentimentAnalyst:
             test_res = self.backtest_star50(
                 initial_capital=cumulative_nav,
                 start_date=test_start,
+                end_date=test_end,
                 policy=best_policy
             )
 

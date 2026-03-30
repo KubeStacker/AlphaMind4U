@@ -1,320 +1,293 @@
 <template>
-  <div class="space-y-4 md:space-y-5 max-w-5xl mx-auto pb-8 relative">
+  <div class="space-y-3 md:space-y-5 max-w-5xl mx-auto pb-8 relative">
     <!-- 顶部管理栏 -->
-    <div v-if="!zenMode" class="bg-business-dark p-4 rounded-2xl shadow-lg border border-business-light">
-      <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-        <div>
-          <h2 class="text-sm font-bold text-white tracking-wide">盯盘自选</h2>
-          <p class="text-[11px] text-slate-400 mt-1">
-            交易时段自动刷新。
-          </p>
-        </div>
-        <div class="flex items-center gap-2 text-[11px]">
+    <div v-if="!zenMode" class="bg-business-dark p-3 md:p-4 rounded-xl md:rounded-2xl shadow-lg border border-business-light">
+      <div class="flex items-center justify-between gap-2">
+        <h2 class="text-xs md:text-sm font-bold text-white tracking-wide">盯盘自选</h2>
+        <div class="flex items-center gap-1.5 md:gap-2 text-[10px] md:text-[11px]">
           <span
-            class="px-2 py-0.5 rounded border"
-            :class="isTradingTime ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300' : 'border-slate-600 bg-slate-800 text-slate-300'"
+            class="px-1.5 py-0.5 rounded text-[9px] md:text-[10px]"
+            :class="isTradingTime ? 'border border-emerald-500/40 bg-emerald-500/10 text-emerald-300' : 'border border-slate-600 bg-slate-800 text-slate-300'"
           >
-            {{ isTradingTime ? '交易时段' : '非交易时段' }}
+            {{ isTradingTime ? '交易中' : '非交易' }}
           </span>
-          <button
-            @click="toggleZenMode"
-            class="px-2 py-1 rounded border border-purple-500/40 bg-purple-500/10 text-purple-300 hover:bg-purple-500 hover:text-white transition"
-          >
-            {{ zenMode ? '退出专注' : '专注模式' }}
-          </button>
           <button
             @click="refreshNow(true, true)"
             :disabled="loading"
-            class="px-2 py-1 rounded border border-business-accent/40 bg-business-accent/10 text-business-accent hover:bg-business-accent hover:text-white transition disabled:opacity-50"
+            class="px-1.5 py-0.5 rounded border border-business-accent/40 bg-business-accent/10 text-business-accent hover:bg-business-accent hover:text-white transition disabled:opacity-50"
           >
-            {{ loading ? '刷新中...' : '手动刷新' }}
+            {{ loading ? '...' : '刷新' }}
+          </button>
+          <button
+            @click="toggleZenMode"
+            class="hidden md:inline-block px-2 py-1 rounded border border-purple-500/40 bg-purple-500/10 text-purple-300 hover:bg-purple-500 hover:text-white transition"
+          >
+            专注模式
           </button>
         </div>
       </div>
       
       <!-- 添加自选 -->
-      <div class="mt-3 relative">
-        <div class="flex items-center gap-2">
-          <input
-            v-model="newCode"
-            @input="handleSearchInput"
-            @keyup.enter="handleAdd"
-            @focus="handleSearchInput"
-            @blur="hideSearchResults"
-            class="flex-1 bg-slate-900/80 border border-slate-700 rounded px-3 py-2 text-xs text-slate-100 focus:outline-none focus:ring-1 focus:ring-business-accent"
-            placeholder="输入代码/名称搜索 (例如 600519, 茅台)"
-          />
-        </div>
+      <div class="mt-2 md:mt-3 relative">
+        <input
+          v-model="newCode"
+          @input="handleSearchInput"
+          @keyup.enter="handleAdd"
+          @focus="handleSearchInput"
+          @blur="hideSearchResults"
+          class="w-full bg-slate-900/80 border border-slate-700 rounded-lg px-3 py-1.5 md:py-2 text-xs text-slate-100 focus:outline-none focus:ring-1 focus:ring-business-accent"
+          placeholder="搜索股票 (代码/名称/拼音)"
+        />
         <!-- 搜索结果下拉 -->
         <div
           v-if="showSearchResults"
-          class="absolute z-50 mt-1 w-full bg-slate-800 border border-slate-600 rounded-lg shadow-xl max-h-60 overflow-auto"
+          class="absolute z-50 mt-1 w-full bg-slate-800 border border-slate-600 rounded-lg shadow-xl max-h-48 md:max-h-60 overflow-auto"
         >
           <div
             v-for="stock in searchResults"
             :key="stock.ts_code"
             @mousedown.prevent="selectSearchResult(stock)"
-            class="px-3 py-2 hover:bg-slate-700 cursor-pointer flex justify-between items-center border-b border-slate-700/50 last:border-0 group"
+            class="px-3 py-2 hover:bg-slate-700 cursor-pointer flex justify-between items-center border-b border-slate-700/50 last:border-0"
           >
-            <div class="flex items-center gap-2">
-              <span class="text-slate-200 font-mono text-xs">{{ stock.ts_code }}</span>
-              <span class="text-slate-400 text-xs">{{ stock.name }}</span>
+            <div class="flex items-center gap-2 min-w-0">
+              <span class="text-slate-200 font-mono text-xs shrink-0">{{ stock.ts_code?.replace('.SH','').replace('.SZ','') }}</span>
+              <span class="text-slate-400 text-xs truncate">{{ stock.name }}</span>
             </div>
-            <button
-              @mousedown.prevent.stop="selectSearchResult(stock)"
-              class="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-emerald-500/20 text-emerald-400 hover:text-emerald-300"
-              title="添加到自选"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
-              </svg>
-            </button>
+            <span class="text-emerald-400 text-xs ml-2 shrink-0">+</span>
           </div>
         </div>
       </div>
 
-      <div class="mt-3 flex flex-col gap-2 border-t border-business-light pt-3 md:flex-row md:items-center md:justify-between">
-        <div class="flex flex-wrap items-center gap-2 text-[10px]">
+      <!-- 底部状态栏：移动端隐藏 -->
+      <div class="hidden md:flex mt-3 items-center justify-between border-t border-business-light pt-3">
+        <div class="flex items-center gap-2 text-[10px]">
           <span class="rounded-full border border-business-accent/30 bg-business-accent/10 px-2.5 py-1 font-bold text-business-accent">
             {{ refreshStatusText }}
           </span>
           <span class="rounded-full border border-slate-700 bg-slate-900/70 px-2.5 py-1 font-mono text-slate-300">
             {{ refreshCycleText }}
           </span>
-          <span class="text-slate-500">
-            {{ message || '列表按当前模式自动更新' }}
-          </span>
+          <span class="text-slate-500">{{ message || '列表按当前模式自动更新' }}</span>
         </div>
-        <div class="text-[10px] font-mono text-slate-500">
-          上次刷新 {{ lastRefreshAt || '--:--:--' }}
-        </div>
+        <span class="text-[10px] font-mono text-slate-500">{{ lastRefreshAt || '--:--:--' }}</span>
       </div>
     </div>
 
     <!-- 行情列表 -->
-    <div v-if="!zenMode" class="space-y-4">
+    <div v-if="!zenMode" class="space-y-3 md:space-y-4">
       <div
         v-if="!rows.length && !loading"
-        class="bg-business-dark p-12 rounded-2xl border border-business-light text-center text-slate-500 text-xs"
+        class="bg-business-dark p-8 md:p-12 rounded-xl md:rounded-2xl border border-business-light text-center text-slate-500 text-xs"
       >
         暂无自选股，请先添加
       </div>
 
-      <section class="bg-business-dark rounded-2xl border border-business-light shadow-business overflow-hidden">
-        <div class="px-4 py-4 md:px-5 border-b border-business-light">
-          <div class="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h3 class="text-sm font-bold text-white tracking-wide">持仓跟踪</h3>
-              <p class="mt-1 text-[11px] text-slate-400">保留持仓盈亏和执行信息，列表只显示结论，不再默认展开 10D 历史。</p>
-            </div>
-            <div class="flex flex-wrap items-center gap-2 text-[10px]">
-              <span class="rounded-full border border-business-accent/30 bg-business-accent/10 px-2.5 py-1 font-bold text-business-accent">
-                {{ holdingRows.length }}只持仓
-              </span>
-              <span
-                v-if="totalPortfolioValue > 0"
-                class="rounded-full border border-slate-700 bg-slate-900/70 px-2.5 py-1 font-mono text-slate-300"
-              >
-                总市值 {{ fmt(totalPortfolioValue, 0) }}
-              </span>
-            </div>
+      <!-- 持仓跟踪 -->
+      <section class="bg-business-dark rounded-xl md:rounded-2xl border border-business-light shadow-business overflow-hidden">
+        <div class="px-3 py-2 md:px-4 md:py-2.5 border-b border-business-light flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <h3 class="text-xs md:text-[13px] font-bold text-white">持仓跟踪</h3>
+            <span class="rounded bg-business-accent/10 px-1.5 py-0.5 text-[9px] md:text-[10px] font-bold text-business-accent">{{ holdingRows.length }}</span>
           </div>
-
-          <div v-if="totalPortfolioValue > 0" class="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-slate-400">
-            <span>
-              总成本
-              <span class="ml-1 font-mono text-slate-200">{{ fmt(totalCost, 0) }}</span>
-            </span>
-            <span>
-              总盈亏
-              <span class="ml-1 font-mono" :class="totalPnL >= 0 ? 'text-red-400' : 'text-emerald-400'">
-                {{ totalPnL >= 0 ? '+' : '' }}{{ fmt(totalPnL, 0) }}
-              </span>
-            </span>
-            <span>
-              组合收益率
-              <span class="ml-1 font-mono" :class="totalPnLPct >= 0 ? 'text-red-400' : 'text-emerald-400'">
-                {{ totalPnLPct >= 0 ? '+' : '' }}{{ fmt(totalPnLPct, 2, '%') }}
-              </span>
-            </span>
+          <!-- 移动端：只显示总盈亏 -->
+          <div v-if="totalPortfolioValue > 0" class="flex items-center gap-2 text-[10px]">
+            <span class="md:hidden text-slate-500">盈亏<span class="ml-1 font-mono" :class="totalPnL >= 0 ? 'text-red-400' : 'text-emerald-400'">{{ totalPnL >= 0 ? '+' : '' }}{{ fmt(totalPnLPct, 2, '%') }}</span></span>
+            <span class="hidden md:inline text-slate-500">总市值<span class="ml-1 font-mono text-slate-200">{{ fmt(totalPortfolioValue, 0) }}</span></span>
+            <span class="hidden md:inline text-slate-500">盈亏<span class="ml-1 font-mono" :class="totalPnL >= 0 ? 'text-red-400' : 'text-emerald-400'">{{ totalPnL >= 0 ? '+' : '' }}{{ fmt(totalPnL, 0) }}</span></span>
+            <span class="hidden md:inline text-slate-500">收益率<span class="ml-1 font-mono" :class="totalPnLPct >= 0 ? 'text-red-400' : 'text-emerald-400'">{{ totalPnLPct >= 0 ? '+' : '' }}{{ fmt(totalPnLPct, 2, '%') }}</span></span>
           </div>
         </div>
 
-        <div v-if="holdingRows.length" class="p-3 md:p-4 space-y-3">
+        <div v-if="holdingRows.length" class="p-2 md:p-4 flex flex-col gap-2">
           <div
             v-for="item in holdingRows"
             :key="`holding-${item.ts_code}`"
-            class="rounded-2xl border px-4 py-3 transition-all"
+            class="rounded-lg md:rounded-xl border px-3 md:px-4 py-2 md:py-2.5 transition-all"
             :class="watchCardClass(item, 'holding')"
           >
-            <div class="grid gap-3 md:grid-cols-[minmax(0,1.1fr)_96px_minmax(0,1.7fr)_auto] md:items-center">
-              <div class="min-w-0 flex items-start justify-between gap-3">
-                <button class="min-w-0 text-left" data-kline-trigger="1" @click.stop="toggleKline(item, $event)">
-                  <div class="truncate text-[13px] font-bold text-white hover:text-business-accent transition-colors">
-                    {{ item.name || '-' }}
-                  </div>
-                  <div class="mt-0.5 text-[10px] font-mono text-slate-500">{{ item.ts_code }}</div>
+            <!-- 移动端布局 -->
+            <div class="md:hidden">
+              <div class="flex items-center justify-between">
+                <button class="text-left min-w-0" data-kline-trigger="1" @click.stop="toggleKline(item, $event)">
+                  <span class="truncate text-xs font-bold text-white">{{ item.name || '-' }}</span>
+                  <span class="ml-1 text-[9px] font-mono text-slate-500">{{ item.ts_code?.replace('.SH','').replace('.SZ','') }}</span>
                 </button>
-                <span class="shrink-0 rounded-full border border-business-accent/30 bg-business-accent/10 px-2 py-0.5 text-[10px] font-bold text-business-accent">
-                  持仓
+                <div class="flex items-center gap-1 shrink-0">
+                  <span class="text-xs font-mono font-bold text-white">{{ fmt(item.price, 2) }}</span>
+                  <span class="text-[10px] font-mono font-bold" :class="numColor(item.pct)">{{ item.pct >= 0 ? '+' : '' }}{{ fmt(item.pct, 2, '%') }}</span>
+                </div>
+              </div>
+              <div class="flex items-center justify-between mt-1">
+                <div class="flex items-center gap-1.5 min-w-0">
+                  <span class="rounded px-1 py-0.5 text-[8px] font-bold shrink-0" :class="watchSignalClass(item)">{{ getSignalText(item) }}</span>
+                  <span v-if="getAggressiveLabel(item)" class="rounded px-1 py-0.5 text-[8px] font-bold bg-red-500/15 text-red-300 shrink-0">{{ getAggressiveLabel(item) }}</span>
+                  <p class="text-[9px] text-slate-400 truncate">{{ getRawConclusion(item) }}</p>
+                </div>
+                <div class="flex items-center gap-0.5 shrink-0 ml-1">
+                  <button @click.stop="openDetailModal(item)" class="p-1 text-slate-500 hover:text-slate-300">
+                    <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                  </button>
+                  <button @click.stop="openHoldingModal(item)" class="p-1 text-business-accent hover:text-white">
+                    <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
+                  </button>
+                  <button @click.stop="handleRemove(item.ts_code)" class="p-1 text-rose-400/60 hover:text-rose-300">
+                    <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                  </button>
+                </div>
+              </div>
+              <div v-if="holdings[item.ts_code]?.shares > 0" class="mt-1 text-[9px] text-slate-500">
+                {{ holdings[item.ts_code]?.shares }}股 @ {{ fmt(holdings[item.ts_code]?.avg_cost, 2) }}
+                <span v-if="calcPnL(item)" class="ml-1 font-mono" :class="calcPnL(item)?.pnl >= 0 ? 'text-red-400' : 'text-emerald-400'">
+                  {{ calcPnL(item)?.pnl >= 0 ? '+' : '' }}{{ fmt(calcPnL(item)?.pnlPct, 2, '%') }}
                 </span>
               </div>
+            </div>
 
-              <div class="text-left md:text-right">
-                <div class="text-[13px] font-mono font-bold text-slate-100">{{ fmt(item.price, 2) }}</div>
-                <div class="mt-1 text-[11px] font-mono font-bold" :class="numColor(item.pct)">
-                  {{ item.pct >= 0 ? '+' : '' }}{{ fmt(item.pct, 2, '%') }}
+            <!-- 桌面端布局 -->
+            <div class="hidden md:flex items-center gap-4">
+              <div class="w-[140px] shrink-0">
+                <button class="text-left w-full" data-kline-trigger="1" @click.stop="toggleKline(item, $event)">
+                  <div class="flex items-center gap-1.5">
+                    <span class="truncate text-[13px] font-bold text-white hover:text-business-accent transition-colors">{{ item.name || '-' }}</span>
+                    <span class="text-[10px] font-mono text-slate-500 shrink-0">{{ item.ts_code?.replace('.SH','').replace('.SZ','') }}</span>
+                  </div>
+                </button>
+                <div class="flex items-center gap-2 mt-1">
+                  <span class="text-[13px] font-mono font-bold text-white">{{ fmt(item.price, 2) }}</span>
+                  <span class="text-[11px] font-mono font-bold" :class="numColor(item.pct)">{{ item.pct >= 0 ? '+' : '' }}{{ fmt(item.pct, 2, '%') }}</span>
                 </div>
               </div>
-
-              <div class="min-w-0 space-y-1.5">
-                <div class="flex flex-wrap items-center gap-2">
-                  <span class="rounded-full border px-2 py-0.5 text-[10px] font-bold" :class="watchSignalClass(item)">
-                    {{ getSignalText(item) }}
-                  </span>
-                  <span
-                    v-if="getAggressiveLabel(item)"
-                    class="rounded-full border border-red-500/30 bg-red-500/10 px-2 py-0.5 text-[10px] font-bold text-red-300"
-                  >
-                    {{ getAggressiveLabel(item) }}
-                  </span>
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-1.5 mb-0.5">
+                  <span class="rounded px-1.5 py-0.5 text-[9px] font-bold" :class="watchSignalClass(item)">{{ getSignalText(item) }}</span>
+                  <span v-if="getAggressiveLabel(item)" class="rounded px-1.5 py-0.5 text-[9px] font-bold bg-red-500/15 text-red-300">{{ getAggressiveLabel(item) }}</span>
                 </div>
-                <p class="text-[12px] leading-5" :class="isAggressiveItem(item) ? 'text-red-200' : 'text-slate-300'">
-                  {{ getConclusionText(item) }}
-                </p>
+                <div v-if="getKeyLevels(item).length" class="flex flex-wrap gap-1 mb-1">
+                   <span v-for="level in getKeyLevels(item)" :key="level.label" class="inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[9px] font-mono" :class="level.isSupport ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'">
+                     <span class="text-[8px] opacity-70">{{ level.shortLabel }}</span>{{ level.priceText }}
+                   </span>
+                 </div>
+                 <p class="text-[11px] leading-4 text-slate-400 truncate">{{ getRawConclusion(item) }}</p>
               </div>
-
-              <div class="flex flex-col gap-2 md:items-end">
-                <div class="text-[10px] text-slate-400 md:text-right">
+              <div class="shrink-0 flex items-center gap-3">
+                <div class="text-[10px] text-slate-400 text-right whitespace-nowrap">
                   <div>{{ holdings[item.ts_code]?.shares || 0 }}股 @ {{ fmt(holdings[item.ts_code]?.avg_cost, 2) }}</div>
                   <template v-if="calcPnL(item)">
-                    <div class="mt-1 font-mono" :class="calcPnL(item)?.pnl >= 0 ? 'text-red-400' : 'text-emerald-400'">
-                      {{ calcPnL(item)?.pnl >= 0 ? '+' : '' }}{{ fmt(calcPnL(item)?.pnl, 0) }}
-                      <span>({{ calcPnL(item)?.pnlPct >= 0 ? '+' : '' }}{{ fmt(calcPnL(item)?.pnlPct, 2, '%') }})</span>
-                    </div>
-                    <div v-if="totalPortfolioValue > 0" class="mt-1 text-slate-500">
-                      仓位占比 {{ fmt(calcPnL(item)?.current / totalPortfolioValue * 100, 1, '%') }}
+                    <div class="font-mono" :class="calcPnL(item)?.pnl >= 0 ? 'text-red-400' : 'text-emerald-400'">
+                      {{ calcPnL(item)?.pnl >= 0 ? '+' : '' }}{{ fmt(calcPnL(item)?.pnl, 0) }} ({{ calcPnL(item)?.pnlPct >= 0 ? '+' : '' }}{{ fmt(calcPnL(item)?.pnlPct, 2, '%') }})
                     </div>
                   </template>
-                  <div v-else class="mt-1 text-slate-500">未录成本，暂不计算盈亏</div>
                 </div>
-                <div class="flex flex-wrap gap-2 md:justify-end">
-                  <button @click.stop="openDetailModal(item)" class="rounded-lg border border-slate-700 bg-slate-900/60 px-2.5 py-1 text-[10px] font-bold text-slate-300 hover:border-sky-500/40 hover:text-sky-300">
-                    详情
-                  </button>
-                  <button @click.stop="openHoldingModal(item)" class="rounded-lg border border-business-accent/30 bg-business-accent/10 px-2.5 py-1 text-[10px] font-bold text-business-accent hover:bg-business-accent hover:text-white">
-                    持仓
-                  </button>
-                  <button
-                    @click.stop="analyzeWithAI(item)"
-                    :disabled="analyzingStock === item.ts_code"
-                    class="rounded-lg border border-purple-500/30 bg-purple-500/10 px-2.5 py-1 text-[10px] font-bold text-purple-300 hover:bg-purple-500 hover:text-white disabled:opacity-60"
-                  >
-                    {{ analyzingStock === item.ts_code ? 'AI中' : 'AI' }}
-                  </button>
-                  <button @click.stop="handleRemove(item.ts_code)" class="rounded-lg border border-rose-500/30 bg-rose-500/10 px-2.5 py-1 text-[10px] font-bold text-rose-300 hover:bg-rose-500 hover:text-white">
-                    删除
-                  </button>
+                <div class="flex items-center gap-1.5">
+                  <button @click.stop="openDetailModal(item)" class="rounded px-2 py-1 text-[10px] font-bold border border-slate-700/50 text-slate-400 hover:text-slate-200 hover:border-slate-500">详情</button>
+                  <button @click.stop="openHoldingModal(item)" class="rounded px-2 py-1 text-[10px] font-bold border border-business-accent/30 text-business-accent hover:bg-business-accent/20">持仓</button>
+                  <button @click.stop="analyzeWithAI(item)" :disabled="analyzingStock === item.ts_code" class="rounded px-2 py-1 text-[10px] font-bold border border-purple-500/30 text-purple-300 hover:bg-purple-500/20 disabled:opacity-60">{{ analyzingStock === item.ts_code ? '...' : 'AI' }}</button>
+                  <button @click.stop="handleRemove(item.ts_code)" class="rounded px-1.5 py-1 text-[10px] font-bold text-rose-400/60 hover:text-rose-300">×</button>
                 </div>
               </div>
             </div>
           </div>
         </div>
 
-        <div v-else class="px-4 py-8 text-center text-[11px] text-slate-500">
-          暂无持仓股，录入持仓后会自动归到这里。
+        <div v-else class="px-4 py-6 md:py-8 text-center text-[11px] text-slate-500">
+          暂无持仓股
         </div>
       </section>
 
-      <section class="bg-business-dark rounded-2xl border border-business-light shadow-business overflow-hidden">
-        <div class="px-4 py-4 md:px-5 border-b border-business-light">
-          <div class="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h3 class="text-sm font-bold text-white tracking-wide">观察列表</h3>
-              <p class="mt-1 text-[11px] text-slate-400">非持仓标的只给结论，适合一口气扫几十只；出现“试错 / 主动进攻”会直接标红。</p>
-            </div>
-            <div class="flex flex-wrap items-center gap-2 text-[10px]">
-              <span class="rounded-full border border-slate-700 bg-slate-900/70 px-2.5 py-1 font-bold text-slate-300">
-                {{ observationRows.length }}只观察
-              </span>
-              <span
-                v-if="aggressiveObservationCount > 0"
-                class="rounded-full border border-red-500/30 bg-red-500/10 px-2.5 py-1 font-bold text-red-300"
-              >
-                {{ aggressiveObservationCount }}只红标
-              </span>
-            </div>
+      <!-- 观察列表 -->
+      <section class="bg-business-dark rounded-xl md:rounded-2xl border border-business-light shadow-business overflow-hidden">
+        <div class="px-3 py-2 md:px-4 md:py-2.5 border-b border-business-light flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <h3 class="text-xs md:text-[13px] font-bold text-white">观察列表</h3>
+            <span class="rounded bg-slate-800 px-1.5 py-0.5 text-[9px] md:text-[10px] font-bold text-slate-300">{{ observationRows.length }}</span>
+            <span v-if="aggressiveObservationCount > 0" class="rounded bg-red-500/10 px-1.5 py-0.5 text-[9px] md:text-[10px] font-bold text-red-300">{{ aggressiveObservationCount }}红标</span>
           </div>
+          <span v-if="observationRows.length > 1" class="text-[9px] text-slate-600">拖拽可调整顺序</span>
         </div>
 
-        <div v-if="observationRows.length" class="p-3 md:p-4 space-y-2.5">
+        <div v-if="observationRows.length" class="p-2 md:p-4 grid grid-cols-1 sm:grid-cols-2 gap-2">
           <div
-            v-for="item in observationRows"
+            v-for="(item, index) in observationRows"
             :key="`observation-${item.ts_code}`"
-            class="rounded-2xl border px-4 py-3 transition-all"
-            :class="watchCardClass(item, 'observation')"
+            draggable="true"
+            @dragstart="handleDragStart($event, index)"
+            @dragover="handleDragOver($event, index)"
+            @dragleave="handleDragLeave"
+            @drop="handleDrop($event, index)"
+            @dragend="handleDragEnd"
+            class="rounded-lg border px-3 py-2 transition-all cursor-grab active:cursor-grabbing"
+            :class="[
+              watchCardClass(item, 'observation'),
+              dragOverIndex === index ? 'ring-2 ring-business-accent/50 border-business-accent/40' : ''
+            ]"
           >
-            <div class="grid gap-3 md:grid-cols-[minmax(0,1.1fr)_96px_minmax(0,1.7fr)_auto] md:items-center">
-              <div class="min-w-0 flex items-start justify-between gap-3">
+            <!-- 移动端布局 -->
+            <div class="md:hidden">
+              <div class="flex items-center justify-between">
+                <button class="text-left min-w-0" data-kline-trigger="1" @click.stop="toggleKline(item, $event)">
+                  <span class="truncate text-xs font-bold text-white">{{ item.name || '-' }}</span>
+                  <span class="ml-1 text-[9px] font-mono text-slate-500">{{ item.ts_code?.replace('.SH','').replace('.SZ','') }}</span>
+                </button>
+                <div class="flex items-center gap-1 shrink-0">
+                  <span class="text-xs font-mono font-bold text-white">{{ fmt(item.price, 2) }}</span>
+                  <span class="text-[10px] font-mono font-bold" :class="numColor(item.pct)">{{ item.pct >= 0 ? '+' : '' }}{{ fmt(item.pct, 2, '%') }}</span>
+                </div>
+              </div>
+              <div class="flex items-center justify-between mt-1">
+                 <div class="flex items-center gap-1.5 min-w-0">
+                   <span class="rounded px-1 py-0.5 text-[8px] font-bold shrink-0" :class="watchSignalClass(item)">{{ getSignalText(item) }}</span>
+                   <div v-if="getKeyLevels(item).length" class="flex items-center gap-0.5 shrink-0">
+                     <span v-for="level in getKeyLevels(item)" :key="level.label" class="inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[7px] font-mono" :class="level.isSupport ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'">
+                       <span class="text-[6px] opacity-70">{{ level.shortLabel }}</span>{{ level.priceText }}
+                     </span>
+                   </div>
+                   <p class="text-[9px] truncate" :class="isAggressiveItem(item) ? 'text-red-200' : 'text-slate-400'">{{ getRawConclusion(item) }}</p>
+                 </div>
+                <div class="flex items-center gap-0.5 shrink-0 ml-1">
+                  <button @click.stop="openDetailModal(item)" class="p-1 text-slate-500 hover:text-slate-300">
+                    <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                  </button>
+                  <button @click.stop="openHoldingModal(item)" class="p-1 text-business-accent hover:text-white">
+                    <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" /></svg>
+                  </button>
+                  <button @click.stop="handleRemove(item.ts_code)" class="p-1 text-rose-400/60 hover:text-rose-300">
+                    <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- 桌面端布局 -->
+            <div class="hidden md:block">
+              <div class="flex items-center justify-between gap-2">
                 <button class="min-w-0 text-left" data-kline-trigger="1" @click.stop="toggleKline(item, $event)">
-                  <div class="truncate text-[13px] font-bold text-white hover:text-business-accent transition-colors">
-                    {{ item.name || '-' }}
-                  </div>
-                  <div class="mt-0.5 text-[10px] font-mono text-slate-500">{{ item.ts_code }}</div>
+                  <span class="truncate text-[12px] font-bold text-white hover:text-business-accent transition-colors">{{ item.name || '-' }}</span>
                 </button>
-                <span class="shrink-0 rounded-full border border-slate-700 bg-slate-900/70 px-2 py-0.5 text-[10px] font-bold text-slate-300">
-                  观察
-                </span>
-              </div>
-
-              <div class="text-left md:text-right">
-                <div class="text-[13px] font-mono font-bold text-slate-100">{{ fmt(item.price, 2) }}</div>
-                <div class="mt-1 text-[11px] font-mono font-bold" :class="numColor(item.pct)">
-                  {{ item.pct >= 0 ? '+' : '' }}{{ fmt(item.pct, 2, '%') }}
+                <div class="flex items-center gap-1.5 shrink-0">
+                  <span class="text-[12px] font-mono font-bold text-slate-100">{{ fmt(item.price, 2) }}</span>
+                  <span class="text-[10px] font-mono font-bold" :class="numColor(item.pct)">{{ item.pct >= 0 ? '+' : '' }}{{ fmt(item.pct, 2, '%') }}</span>
                 </div>
               </div>
-
-              <div class="min-w-0 space-y-1.5">
-                <div class="flex flex-wrap items-center gap-2">
-                  <span class="rounded-full border px-2 py-0.5 text-[10px] font-bold" :class="watchSignalClass(item)">
-                    {{ getSignalText(item) }}
-                  </span>
-                  <span
-                    v-if="getAggressiveLabel(item)"
-                    class="rounded-full border border-red-500/30 bg-red-500/10 px-2 py-0.5 text-[10px] font-bold text-red-300"
-                  >
-                    {{ getAggressiveLabel(item) }}
-                  </span>
-                </div>
-                <p class="text-[12px] leading-5" :class="isAggressiveItem(item) ? 'text-red-200' : 'text-slate-300'">
-                  {{ getConclusionText(item) }}
-                </p>
-              </div>
-
-              <div class="flex flex-wrap gap-2 md:justify-end">
-                <button @click.stop="openDetailModal(item)" class="rounded-lg border border-slate-700 bg-slate-900/60 px-2.5 py-1 text-[10px] font-bold text-slate-300 hover:border-sky-500/40 hover:text-sky-300">
-                  详情
-                </button>
-                <button @click.stop="openHoldingModal(item)" class="rounded-lg border border-business-accent/30 bg-business-accent/10 px-2.5 py-1 text-[10px] font-bold text-business-accent hover:bg-business-accent hover:text-white">
-                  +持仓
-                </button>
-                <button
-                  @click.stop="analyzeWithAI(item)"
-                  :disabled="analyzingStock === item.ts_code"
-                  class="rounded-lg border border-purple-500/30 bg-purple-500/10 px-2.5 py-1 text-[10px] font-bold text-purple-300 hover:bg-purple-500 hover:text-white disabled:opacity-60"
-                >
-                  {{ analyzingStock === item.ts_code ? 'AI中' : 'AI' }}
-                </button>
-                <button @click.stop="handleRemove(item.ts_code)" class="rounded-lg border border-rose-500/30 bg-rose-500/10 px-2.5 py-1 text-[10px] font-bold text-rose-300 hover:bg-rose-500 hover:text-white">
-                  删除
-                </button>
+              <div class="mt-1">
+                 <div v-if="getKeyLevels(item).length" class="flex flex-wrap gap-1 mb-0.5">
+                   <span v-for="level in getKeyLevels(item)" :key="level.label" class="inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[8px] font-mono" :class="level.isSupport ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'">
+                     <span class="text-[7px] opacity-70">{{ level.shortLabel }}</span>{{ level.priceText }}
+                   </span>
+                 </div>
+                 <p class="text-[10px] leading-4 truncate" :class="isAggressiveItem(item) ? 'text-red-200' : 'text-slate-400'">{{ getRawConclusion(item) }}</p>
+               </div>
+              <div class="flex items-center justify-end gap-1 mt-1">
+                <button @click.stop="openDetailModal(item)" class="rounded px-1.5 py-0.5 text-[9px] font-bold border border-slate-700/50 text-slate-400 hover:text-slate-200">详情</button>
+                <button @click.stop="openHoldingModal(item)" class="rounded px-1.5 py-0.5 text-[9px] font-bold border border-business-accent/30 text-business-accent hover:bg-business-accent/20">+持仓</button>
+                <button @click.stop="analyzeWithAI(item, false, 'observation')" :disabled="analyzingStock === item.ts_code" class="rounded px-1.5 py-0.5 text-[9px] font-bold border border-purple-500/30 text-purple-300 hover:bg-purple-500/20 disabled:opacity-60">{{ analyzingStock === item.ts_code ? '...' : 'AI' }}</button>
+                <button @click.stop="handleRemove(item.ts_code)" class="rounded px-1.5 py-0.5 text-[9px] font-bold text-rose-400/60 hover:text-rose-300 hover:bg-rose-500/10">×</button>
               </div>
             </div>
           </div>
         </div>
 
-        <div v-else class="px-4 py-8 text-center text-[11px] text-slate-500">
-          暂无观察股，未录入持仓的自选会自动出现在这里。
+        <div v-else class="px-4 py-6 md:py-8 text-center text-[11px] text-slate-500">
+          暂无观察股
         </div>
       </section>
     </div>
@@ -354,45 +327,48 @@
     <div
       ref="klinePopupRef"
       v-if="hoverInfo.visible && !zenMode"
-      class="fixed z-40 left-2 right-2 bottom-14 md:left-auto md:right-4 md:bottom-4 md:w-[70vw] md:max-w-3xl bg-business-dark border border-business-light rounded-2xl p-2.5 md:p-3 shadow-2xl max-h-[78vh] overflow-y-auto"
+      class="fixed z-40 left-0 right-0 bottom-0 md:left-auto md:right-4 md:bottom-4 md:w-[70vw] md:max-w-3xl bg-business-dark border-t md:border border-business-light md:rounded-2xl p-2 md:p-3 shadow-2xl max-h-[70vh] md:max-h-[78vh] overflow-y-auto"
       @click.stop
     >
-      <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
-        <div>
-          <h3 class="text-xs font-bold text-slate-200">K线分析（悬浮预览）</h3>
-          <p class="text-[10px] text-slate-500 mt-1">{{ hoverInfo.stock?.name || '-' }} · {{ hoverInfo.stock?.ts_code || '-' }}</p>
+      <div class="flex items-center justify-between gap-2 mb-2">
+        <div class="min-w-0">
+          <h3 class="text-xs font-bold text-slate-200">K线分析</h3>
+          <p class="text-[10px] text-slate-500 truncate">{{ hoverInfo.stock?.name || '-' }} · {{ hoverInfo.stock?.ts_code || '-' }}</p>
         </div>
+        <button @click="hideKline" class="md:hidden shrink-0 p-1 text-slate-400 hover:text-white">
+          <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+        </button>
       </div>
-      <div v-if="klineLoading" class="h-[220px] sm:h-[280px] md:h-[340px] flex items-center justify-center text-slate-400 text-xs">K线加载中...</div>
+      <div v-if="klineLoading" class="h-[200px] md:h-[340px] flex items-center justify-center text-slate-400 text-xs">加载中...</div>
       <div v-else-if="klineError" class="rounded border border-red-700/40 bg-red-500/10 px-3 py-2 text-xs text-red-300">{{ klineError }}</div>
       <template v-else>
-        <div class="grid grid-cols-3 sm:grid-cols-6 gap-1.5 mb-2 text-[10px]" v-if="latestKlineData">
-          <div class="rounded border border-slate-700/60 bg-slate-900/40 px-2 py-1.5">
-            <span class="text-slate-500">收盘价</span>
+        <div class="grid grid-cols-3 md:grid-cols-6 gap-1 md:gap-1.5 mb-2 text-[9px] md:text-[10px]" v-if="latestKlineData">
+          <div class="rounded border border-slate-700/60 bg-slate-900/40 px-1.5 md:px-2 py-1 md:py-1.5">
+            <span class="text-slate-500">收盘</span>
             <p class="text-slate-200 mt-0.5 font-mono">{{ fmt(latestKlineData.close, 2) }}</p>
           </div>
-          <div class="rounded border border-slate-700/60 bg-slate-900/40 px-2 py-1.5">
-            <span class="text-slate-500">成交量</span>
-            <p class="text-slate-200 mt-0.5 font-mono">{{ fmtVol(latestKlineData.vol) }}</p>
-          </div>
-          <div class="rounded border border-slate-700/60 bg-slate-900/40 px-2 py-1.5">
+          <div class="rounded border border-slate-700/60 bg-slate-900/40 px-1.5 md:px-2 py-1 md:py-1.5">
             <span class="text-slate-500">成交额</span>
             <p class="text-slate-200 mt-0.5 font-mono">{{ fmtAmount(latestKlineData.amount) }}</p>
           </div>
-          <div class="rounded border border-slate-700/60 bg-slate-900/40 px-2 py-1.5">
-            <span class="text-slate-500">主力流入</span>
+          <div class="rounded border border-slate-700/60 bg-slate-900/40 px-1.5 md:px-2 py-1 md:py-1.5">
+            <span class="text-slate-500">主力</span>
             <p class="mt-0.5 font-mono" :class="latestKlineData.net_mf_vol >= 0 ? 'text-cyan-400' : 'text-rose-400'">{{ fmtMf(latestKlineData.net_mf_vol) }}</p>
           </div>
-          <div class="rounded border border-slate-700/60 bg-slate-900/40 px-2 py-1.5">
+          <div class="hidden md:block rounded border border-slate-700/60 bg-slate-900/40 px-2 py-1.5">
+            <span class="text-slate-500">成交量</span>
+            <p class="text-slate-200 mt-0.5 font-mono">{{ fmtVol(latestKlineData.vol) }}</p>
+          </div>
+          <div class="hidden md:block rounded border border-slate-700/60 bg-slate-900/40 px-2 py-1.5">
             <span class="text-slate-500">MA5/10/20</span>
             <p class="text-slate-200 mt-0.5 font-mono text-[9px]">{{ fmt(latestKlineData.ma5, 2) }} / {{ fmt(latestKlineData.ma10, 2) }} / {{ fmt(latestKlineData.ma20, 2) }}</p>
           </div>
-          <div class="rounded border border-slate-700/60 bg-slate-900/40 px-2 py-1.5">
+          <div class="hidden md:block rounded border border-slate-700/60 bg-slate-900/40 px-2 py-1.5">
             <span class="text-slate-500">融资余额</span>
             <p class="text-slate-200 mt-0.5 font-mono">{{ latestKlineData.rzye ? fmtRzye(latestKlineData.rzye) : '-' }}</p>
           </div>
         </div>
-        <div class="h-[220px] sm:h-[280px] md:h-[340px] lg:h-[380px]">
+        <div class="h-[200px] md:h-[340px] lg:h-[380px]">
           <v-chart :option="klineOption" autoresize @updateAxisPointer="handleUpdateAxisPointer" />
         </div>
       </template>
@@ -735,7 +711,7 @@
 
 <script setup>
 import { onBeforeUnmount, onMounted, ref, reactive, computed } from 'vue';
-import { getWatchlistRealtime, getWatchlistAnalysis, addToWatchlist, removeFromWatchlist, getStockKline, getUserHoldings, updateUserHolding, deleteUserHolding, analyzeStockWithAI } from '@/services/api';
+import { getWatchlistRealtime, getWatchlistAnalysis, addToWatchlist, removeFromWatchlist, reorderWatchlist, getStockKline, getUserHoldings, updateUserHolding, deleteUserHolding, analyzeStockWithAI } from '@/services/api';
 import { marked } from 'marked';
 import { useStockSearch } from '@/composables/useStockSearch';
 import { use } from 'echarts/core';
@@ -779,6 +755,74 @@ const holdingForm = reactive({ shares: 0, avg_cost: 0 });
 // AI分析相关
 const aiAnalysisModal = ref({ visible: false, stock: null, loading: false, result: '', fromCache: false });
 const analyzingStock = ref(null);
+
+// 拖拽排序相关
+const dragOverIndex = ref(-1);
+const isDragging = ref(false);
+let dragSrcCode = null;
+
+const handleDragStart = (e, index) => {
+  isDragging.value = true;
+  dragSrcCode = observationRows.value[index]?.ts_code;
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', index);
+};
+
+const handleDragOver = (e, index) => {
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  dragOverIndex.value = index;
+};
+
+const handleDragLeave = () => {
+  dragOverIndex.value = -1;
+};
+
+const handleDrop = async (e, targetIndex) => {
+  e.preventDefault();
+  dragOverIndex.value = -1;
+  isDragging.value = false;
+
+  if (!dragSrcCode) return;
+  const targetCode = observationRows.value[targetIndex]?.ts_code;
+  if (!targetCode || dragSrcCode === targetCode) {
+    dragSrcCode = null;
+    return;
+  }
+
+  // 在 rows 中重排
+  const allCodes = rows.value.map(r => r.ts_code);
+  const srcGlobalIndex = allCodes.indexOf(dragSrcCode);
+  const tgtGlobalIndex = allCodes.indexOf(targetCode);
+  if (srcGlobalIndex < 0 || tgtGlobalIndex < 0) {
+    dragSrcCode = null;
+    return;
+  }
+
+  const [moved] = allCodes.splice(srcGlobalIndex, 1);
+  allCodes.splice(tgtGlobalIndex, 0, moved);
+
+  // 乐观更新 rows 中的顺序
+  const newRows = [...rows.value];
+  const [movedRow] = newRows.splice(srcGlobalIndex, 1);
+  newRows.splice(tgtGlobalIndex, 0, movedRow);
+  rows.value = newRows;
+  dragSrcCode = null;
+
+  // 只提交非持仓（观察列表）的顺序给后端
+  const nonHoldingCodes = allCodes.filter(c => !hasHolding(c));
+  try {
+    await reorderWatchlist(nonHoldingCodes);
+  } catch (err) {
+    // ignore
+  }
+};
+
+const handleDragEnd = () => {
+  isDragging.value = false;
+  dragOverIndex.value = -1;
+  dragSrcCode = null;
+};
 
 const handleUpdateAxisPointer = (event) => {
   const info = event.dataIndex;
@@ -1169,9 +1213,25 @@ const calcPnL = (item) => {
   return { pnl, pnlPct, cost, current };
 };
 
+const getHoldingLossLevel = (item) => {
+  const pnl = calcPnL(item);
+  if (!pnl) return 'none';
+  if (pnl.pnlPct <= -10) return 'critical';  // 亏损超过-10%
+  if (pnl.pnlPct <= -6) return 'warning';     // 亏损超过-6%
+  return 'normal';
+};
+
 const hasHolding = (tsCode) => Number(holdings.value[tsCode]?.shares || 0) > 0;
 
-const holdingRows = computed(() => rows.value.filter(item => hasHolding(item.ts_code)));
+const holdingRows = computed(() => {
+  return rows.value
+    .filter(item => hasHolding(item.ts_code))
+    .sort((a, b) => {
+      const valA = (holdings.value[a.ts_code]?.shares || 0) * (a.price || 0);
+      const valB = (holdings.value[b.ts_code]?.shares || 0) * (b.price || 0);
+      return valB - valA;
+    });
+});
 const observationRows = computed(() => rows.value.filter(item => !hasHolding(item.ts_code)));
 const refreshStatusText = computed(() => {
   if (loading.value) return '刷新中';
@@ -1208,7 +1268,28 @@ const getRawConclusion = (item) => {
   return suggestion ? `建议 ${suggestion}` : '暂无结论';
 };
 
-const getConclusionText = (item) => truncateText(getRawConclusion(item), 70);
+const getConclusionText = (item) => {
+  return truncateText(getRawConclusion(item), 70);
+};
+
+const getKeyLevels = (item) => {
+  const levels = item?.analyze?.detail?.key_levels;
+  if (!Array.isArray(levels) || !levels.length) return [];
+  return levels.map(l => {
+    const price = Number(l.price);
+    if (!Number.isFinite(price)) return null;
+    const label = String(l.label || '');
+    const isSupport = label.includes('支撑');
+    const shortLabel = label.replace('支撑', '支').replace('压力', '压');
+    return {
+      label,
+      shortLabel,
+      price,
+      priceText: price.toFixed(2),
+      isSupport,
+    };
+  }).filter(Boolean);
+};
 
 const getSignalText = (item) => {
   const suggestion = String(item?.analyze?.suggestion || '').trim();
@@ -1218,20 +1299,24 @@ const getSignalText = (item) => {
 };
 
 const getAggressiveLabel = (item) => {
+  const signal = getSignalText(item);
   const combined = `${item?.analyze?.suggestion || ''} ${item?.analyze?.conclusion || ''} ${item?.analyze?.summary || ''}`;
-  if (combined.includes('主动进攻')) return '主动进攻';
-  if (combined.includes('试错')) return '试错';
+  if (combined.includes('主动进攻') && !signal.includes('主动进攻')) return '主动进攻';
+  if (combined.includes('试错') && !signal.includes('试错')) return '试错';
   return '';
 };
 
-const isAggressiveItem = (item) => !!getAggressiveLabel(item);
+const isAggressiveItem = (item) => {
+  const signal = getSignalText(item);
+  if (signal.includes('主动进攻') || signal.includes('试错')) return true;
+  return !!getAggressiveLabel(item);
+};
 
 const aggressiveObservationCount = computed(() => observationRows.value.filter(isAggressiveItem).length);
 
 const watchSignalClass = (item) => {
-  if (isAggressiveItem(item)) return 'border-red-500/30 bg-red-500/10 text-red-300';
-
   const signal = getSignalText(item);
+  if (signal.includes('主动进攻') || signal.includes('试错')) return 'border-red-500/30 bg-red-500/10 text-red-300';
   if (signal.includes('关注')) return 'border-amber-500/30 bg-amber-500/10 text-amber-300';
   if (signal.includes('减仓') || signal.includes('回避') || signal.includes('持币')) {
     return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300';
@@ -1240,13 +1325,41 @@ const watchSignalClass = (item) => {
 };
 
 const watchCardClass = (item, kind = 'observation') => {
-  if (isAggressiveItem(item)) {
-    return 'border-red-500/30 bg-red-500/[0.06] shadow-[0_0_0_1px_rgba(239,68,68,0.06)]';
-  }
+  // 持仓亏损闪烁：优先级最高
   if (kind === 'holding') {
-    return 'border-business-accent/20 bg-business-accent/[0.04]';
+    const lossLevel = getHoldingLossLevel(item);
+    if (lossLevel === 'critical') {
+      // 亏损超过-10%：红色闪烁
+      return 'animate-blink-red';
+    }
+    if (lossLevel === 'warning') {
+      // 亏损超过-6%：橙色闪烁
+      return 'animate-blink-orange';
+    }
   }
-  return 'border-business-light bg-slate-950/20';
+
+  // 激进信号：试错/主动进攻 → 整块红色
+  if (isAggressiveItem(item)) {
+    return 'border-red-500/30 bg-red-500/[0.08] shadow-[inset_0_0_20px_rgba(239,68,68,0.04)]';
+  }
+
+  const signal = getSignalText(item);
+
+  // 关注 → 整块琥珀色
+  if (signal.includes('关注')) {
+    return 'border-amber-500/25 bg-amber-500/[0.06] shadow-[inset_0_0_20px_rgba(245,158,11,0.03)]';
+  }
+
+  // 减仓/持币/回避 → 整块绿色
+  if (signal.includes('减仓') || signal.includes('回避') || signal.includes('持币')) {
+    return 'border-emerald-500/25 bg-emerald-500/[0.06] shadow-[inset_0_0_20px_rgba(16,185,129,0.03)]';
+  }
+
+  // 观望 → 根据持仓/观察区分
+  if (kind === 'holding') {
+    return 'border-slate-700/60 bg-slate-800/30';
+  }
+  return 'border-slate-700/40 bg-slate-900/40';
 };
 
 // 总仓位计算

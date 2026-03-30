@@ -1,5 +1,6 @@
 import logging
 import time
+import arrow
 from etl.utils.factory import get_provider
 from etl.tasks.stock_basic_task import StockBasicTask
 from etl.tasks.daily_market_data_task import DailyMarketDataTask
@@ -7,6 +8,7 @@ from etl.tasks.capital_flow_task import CapitalFlowTask
 from etl.tasks.concepts_task import ConceptsTask
 from etl.tasks.market_index_task import MarketIndexTask
 from etl.tasks.financials_task import FinancialsTask
+from etl.tasks.factor_data_task import FactorDataTask
 from etl.tasks.calendar_task import CalendarTask
 from etl.tasks.margin_trading_task import MarginTradingTask
 from etl.tasks.forex_data_task import ForexDataTask
@@ -29,6 +31,7 @@ class SyncEngine:
         self.concepts_task = ConceptsTask(self.provider)
         self.market_index_task = MarketIndexTask(self.provider)
         self.financials_task = FinancialsTask(self.provider)
+        self.factor_data_task = FactorDataTask(self.provider)
         self.calendar_task = CalendarTask(self.provider)
         self.margin_trading_task = MarginTradingTask(self.provider)
         self.forex_data_task = ForexDataTask(self.provider)
@@ -77,13 +80,39 @@ class SyncEngine:
         """
         self.capital_flow_task.sync_capital_flow(years=years, days=days, force=force)
 
+    def sync_daily_basic(self, years: int = 0, days: int = 3, force: bool = False):
+        """同步日频基础指标。"""
+        self.factor_data_task.sync_daily_basic(years=years, days=days, force=force)
+
+    def sync_index_member_all(self):
+        """同步申万行业层级归属。"""
+        self.factor_data_task.sync_index_member_all()
+
+    def sync_express_data(
+        self,
+        days: int = 120,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ):
+        """同步业绩快报数据。"""
+        self.factor_data_task.sync_express(days=days, start_date=start_date, end_date=end_date)
+
     def perform_daily_data_update(self):
         """执行每日收盘后数据更新任务"""
         logger.info("执行每日收盘数据更新...")
         
         # 1. 行情与资金流 (默认同步最近3天，防止漏数据)
+        self.sync_express_data(days=120)
         self.sync_daily_market_data(years=1)
         self.sync_capital_flow(days=3)
+        self.sync_daily_basic(days=3)
+        try:
+            latest_sync = arrow.get(self._get_latest_trade_date_str())
+            factor_start = latest_sync.shift(days=-5).format("YYYY-MM-DD")
+            factor_end = latest_sync.format("YYYY-MM-DD")
+            self.calculate_technical_factors_batch(factor_start, factor_end)
+        except Exception as e:
+            logger.warning(f"刷新最近因子快照失败: {e}")
         
         # 2. 指数同步（覆盖情绪模型依赖指数）
         self.sync_core_market_indices(years=0, days=5)
@@ -98,6 +127,12 @@ class SyncEngine:
         self.calculate_market_sentiment(days=30)
         
         logger.info("每日收盘数据更新完成")
+
+    def _get_latest_trade_date_str(self) -> str:
+        from etl.calendar import trading_calendar
+
+        latest = trading_calendar.get_latest_sync_date()
+        return latest.strftime("%Y-%m-%d") if hasattr(latest, "strftime") else str(latest)
     
     def _validate_daily_update(self):
         """验证每日更新的数据完整性"""
@@ -173,6 +208,10 @@ class SyncEngine:
             trade_date: 交易日期
         """
         self.factor_calculator.calculate_daily(trade_date)
+
+    def refresh_factor_snapshot(self, trade_date: str):
+        """重建某一交易日的宽表因子快照。"""
+        self.factor_calculator.refresh_factor_snapshot(trade_date)
 
     def calculate_technical_factors_batch(self, start_date_str: str, end_date_str: str):
         """批量计算技术因子
@@ -272,8 +311,20 @@ class SyncEngine:
             ORDER BY trade_date DESC
             """
             dates = con.execute(query).fetchall()
+
+            factor_dates = con.execute(
+                """
+                SELECT DISTINCT trade_date
+                FROM daily_price
+                WHERE trade_date NOT IN (
+                    SELECT DISTINCT trade_date FROM stock_factor_daily
+                )
+                ORDER BY trade_date DESC
+                """
+            ).fetchall()
         
-        dates = [d[0] for d in dates]
+        dates = {d[0] for d in dates} | {d[0] for d in factor_dates}
+        dates = sorted(dates, reverse=True)
         if not dates:
             logger.info("所有行情因子的数据已完整。")
             return

@@ -219,7 +219,11 @@ def _build_watch_analyse(ts_code: str):
             
             recognizer = PatternRecognizer(sub_df)
             patterns = recognizer.recognize()
-            detail = get_professional_commentary_detailed(sub_df, patterns)
+            detail = get_professional_commentary_detailed(
+                sub_df,
+                patterns,
+                context={"ts_code": ts_code},
+            )
             
             # 简单的信号推导逻辑
             suggestion = "观望"
@@ -255,7 +259,11 @@ def _build_watch_analyse(ts_code: str):
         # 最新一天的完整分析
         latest_recognizer = PatternRecognizer(df)
         latest_patterns = latest_recognizer.recognize()
-        latest_detail = get_professional_commentary_detailed(df, latest_patterns)
+        latest_detail = get_professional_commentary_detailed(
+            df,
+            latest_patterns,
+            context={"ts_code": ts_code},
+        )
         
         return {
             "summary": latest_detail.get("summary", ""),
@@ -360,7 +368,7 @@ def _run_sentiment_task(task_id, params):
     days = params.get("days", 365)
     sync_index = params.get("sync_index", True)
     if sync_index:
-        sync_engine.sync_core_indices(years=0, days=max(int(days), 30))
+        sync_engine.sync_core_market_indices(years=0, days=max(int(days), 30))
     sync_engine.calculate_market_sentiment(days=days)
 
 def _run_kline_train_task(task_id, params):
@@ -611,10 +619,10 @@ def get_day_data_status(date: str):
         status = {"date": date, "is_trading_day": is_trading, "tables": {}}
         
         day_queries = {
-            "daily_price": {"label": "日线行情", "expected_min": 1000},
-            "stock_moneyflow": {"label": "资金流向", "expected_min": 1000},
+            "daily_price": {"label": "日线行情", "expected_min": 4000},
+            "stock_moneyflow": {"label": "资金流向", "expected_min": 4000},
             "market_index": {"label": "市场指数", "expected_min": 1},
-            "stock_margin": {"label": "融资融券", "expected_min": 1000},
+            "stock_margin": {"label": "融资融券", "expected_min": 4000},
         }
         
         for table, config in day_queries.items():
@@ -2075,7 +2083,7 @@ def search_stocks(q: str = "", limit: int = 10):
             limit = int(limit)
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="limit 必须为整数")
-        limit = max(1, min(limit, 5000))
+        limit = max(1, min(limit, 10000))
 
         # 空查询：返回所有股票（用于前端缓存）
         if not q:
@@ -2352,4 +2360,3 @@ def get_watchlist_realtime(codes: Optional[str] = None, src: str = "sina", inclu
         "message": "实时刷新中" if is_trading else "非交易时段，已展示最近收盘数据",
         "data": rows,
     }
-

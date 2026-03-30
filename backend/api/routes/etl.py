@@ -17,7 +17,13 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["ETL"])
 
 class SyncTaskParams(BaseModel):
-    task: str = Field(..., description="任务类型: basic, concepts, calendar, price, index, moneyflow, financials, margin, fx, factors")
+    task: str = Field(
+        ...,
+        description=(
+            "任务类型: basic, concepts, calendar, price, index, moneyflow, "
+            "daily_basic, index_members, express, financials, margin, fx, factors"
+        ),
+    )
     years: int = 0
     days: int = 3
     ts_code: Optional[str] = None
@@ -139,6 +145,27 @@ def _build_sync_task(p: SyncTaskParams):
             days_back = (arrow.now() - target_date).days + 1
             return "资金流向同步", (sync_engine.sync_capital_flow, {"years": 0, "days": max(days_back, 1), "force": p.force})
         return "资金流向同步", (sync_engine.sync_capital_flow, {"years": p.years, "days": p.days, "force": p.force})
+    elif task == "daily_basic":
+        if p.start_date:
+            target_date = arrow.get(p.start_date)
+            days_back = (arrow.now() - target_date).days + 1
+            return "日频基础指标同步", (
+                sync_engine.sync_daily_basic,
+                {"years": 0, "days": max(days_back, 1), "force": p.force},
+            )
+        return "日频基础指标同步", (
+            sync_engine.sync_daily_basic,
+            {"years": p.years, "days": p.days, "force": p.force},
+        )
+    elif task == "index_members":
+        return "申万行业归属同步", sync_engine.sync_index_member_all
+    elif task == "express":
+        kwargs = {
+            "days": p.days if p.days > 0 else 120,
+            "start_date": p.start_date,
+            "end_date": p.end_date,
+        }
+        return "业绩快报同步", (sync_engine.sync_express_data, kwargs)
     elif task == "financials":
         return "财务数据同步", sync_engine.sync_financial_statements
     elif task == "fina_indicator":
@@ -154,6 +181,11 @@ def _build_sync_task(p: SyncTaskParams):
     elif task == "fx":
         return "外汇数据同步", sync_engine.sync_forex_data
     elif task == "factors":
+        if p.start_date and p.end_date:
+            return "因子宽表重建", (
+                sync_engine.calculate_technical_factors_batch,
+                {"start_date_str": p.start_date, "end_date_str": p.end_date},
+            )
         return "因子数据计算", sync_engine.fill_missing_technical_factors
     else:
         raise ValueError(f"不支持的任务类型: {p.task}")
@@ -171,7 +203,7 @@ def _run_sentiment_task(task_id, params):
     days = params.get("days", 365)
     sync_index = params.get("sync_index", True)
     if sync_index:
-        sync_engine.sync_core_indices(years=0, days=max(int(days), 30))
+        sync_engine.sync_core_market_indices(years=0, days=max(int(days), 30))
     sync_engine.calculate_market_sentiment(days=days)
 
 def _run_kline_train_task(task_id, params):
@@ -383,15 +415,19 @@ def get_data_dashboard():
         table_queries = {
             "stock_basic": {"date_col": "list_date", "label": "股票基础信息"},
             "daily_price": {"date_col": "trade_date", "label": "日线行情数据"},
+            "stock_daily_basic": {"date_col": "trade_date", "label": "日频基础指标"},
             "stock_moneyflow": {"date_col": "trade_date", "label": "资金流向数据"},
             "market_index": {"date_col": "trade_date", "label": "市场指数数据"},
             "stock_margin": {"date_col": "trade_date", "label": "融资融券数据"},
             "stock_concepts": {"date_col": None, "label": "概念分类"},
             "stock_concept_details": {"date_col": None, "label": "概念明细"},
+            "stock_index_member_all": {"date_col": "in_date", "label": "申万行业归属"},
+            "stock_express": {"date_col": "ann_date", "label": "业绩快报"},
             "market_sentiment": {"date_col": "trade_date", "label": "市场情绪指标"},
             "mainline_scores": {"date_col": "trade_date", "label": "主线评分"},
             "stock_fina_indicator": {"date_col": "end_date", "label": "财务指标"},
             "stock_income": {"date_col": "end_date", "label": "季度利润表"},
+            "stock_factor_daily": {"date_col": "trade_date", "label": "股票因子宽表"},
         }
         
         for table, config in table_queries.items():
@@ -433,10 +469,11 @@ def get_day_data_status(date: str):
         status = {"date": date, "is_trading_day": is_trading, "tables": {}}
         
         day_queries = {
-            "daily_price": {"label": "日线行情", "expected_min": 1000},
-            "stock_moneyflow": {"label": "资金流向", "expected_min": 1000},
+            "daily_price": {"label": "日线行情", "expected_min": 4000},
+            "stock_daily_basic": {"label": "日频基础指标", "expected_min": 4000},
+            "stock_moneyflow": {"label": "资金流向", "expected_min": 4000},
             "market_index": {"label": "市场指数", "expected_min": 1},
-            "stock_margin": {"label": "融资融券", "expected_min": 1000},
+            "stock_margin": {"label": "融资融券", "expected_min": 4000},
         }
         
         for table, config in day_queries.items():
