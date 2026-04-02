@@ -6,20 +6,31 @@
     <transition name="slide">
       <div v-if="open"
         class="fixed top-0 right-0 bottom-0 z-[70] bg-business-dark border-l border-business-light shadow-2xl flex flex-col"
-        :class="isMobile ? 'w-full' : 'w-[700px]'">
+        :class="isMobile ? 'w-full' : 'w-[800px]'">
         <!-- Header -->
         <div class="flex items-center justify-between px-4 py-3 border-b border-business-light shrink-0">
           <div class="flex items-center space-x-2">
             <div class="w-1.5 h-4 bg-business-accent rounded-full"></div>
             <h2 class="text-sm font-bold text-slate-200">在线文档</h2>
-            <span class="text-[10px] text-slate-500 bg-slate-800 px-1.5 py-0.5 rounded">{{ docs.length }}</span>
+            <span class="text-[10px] text-slate-500 bg-slate-800 px-1.5 py-0.5 rounded">{{ allDocs.length }}</span>
           </div>
           <button @click="$emit('close')" class="p-1 rounded hover:bg-slate-700 text-slate-400 hover:text-white transition">
             <XMarkIcon class="w-5 h-5" />
           </button>
         </div>
 
-        <!-- Category Filter -->
+        <!-- Source + Category Filter -->
+        <div class="flex gap-1 px-4 py-2 border-b border-slate-800 shrink-0 overflow-x-auto">
+          <button
+            v-for="src in sources" :key="src.id"
+            @click="selectedSource = src.id"
+            class="px-2.5 py-1 rounded text-[10px] font-bold transition-all border whitespace-nowrap"
+            :class="selectedSource === src.id
+              ? 'bg-business-accent text-white border-business-accent'
+              : 'bg-slate-800/50 text-slate-400 border-slate-700 hover:text-white'">
+            {{ src.label }}
+          </button>
+        </div>
         <div class="flex gap-1 px-4 py-2 border-b border-slate-800 shrink-0 overflow-x-auto">
           <button
             v-for="cat in categories" :key="cat.id"
@@ -36,7 +47,7 @@
         <!-- Body: desktop side-by-side, mobile stacked -->
         <div class="flex-1 overflow-hidden flex" :class="isMobile ? 'flex-col' : 'flex-row'">
           <!-- Doc List -->
-          <div :class="isMobile ? 'flex-1 overflow-y-auto' : 'w-[280px] border-r border-slate-800 overflow-y-auto shrink-0'"
+          <div :class="isMobile ? 'flex-1 overflow-y-auto' : 'w-[300px] border-r border-slate-800 overflow-y-auto shrink-0'"
                v-show="isMobile ? !selectedDoc : true">
             <div v-if="loading" class="flex items-center justify-center h-40">
               <div class="w-6 h-6 border-2 border-business-accent border-t-transparent rounded-full animate-spin"></div>
@@ -50,7 +61,10 @@
                 @click="selectDoc(doc)"
                 class="w-full text-left px-3 py-2.5 border-b border-slate-800/50 hover:bg-slate-800/40 transition-colors"
                 :class="selectedDoc?.id === doc.id ? 'bg-business-accent/10 border-l-2 border-l-business-accent' : ''">
-                <div class="text-xs font-bold text-slate-200 truncate">{{ doc.title }}</div>
+                <div class="text-xs font-bold text-slate-200 truncate flex items-center gap-1">
+                  <span v-if="doc.is_published" class="text-[8px] px-1 py-0.5 rounded bg-green-900/30 text-green-400">已发布</span>
+                  {{ doc.title }}
+                </div>
                 <div class="text-[10px] text-slate-500 mt-0.5 line-clamp-2">{{ doc.summary }}</div>
                 <div class="flex items-center gap-1 mt-1">
                   <span class="text-[9px] px-1 py-0.5 rounded bg-slate-800 text-slate-400">{{ getCategoryLabel(doc.category) }}</span>
@@ -66,7 +80,7 @@
             <div v-if="!selectedDoc" class="flex items-center justify-center h-full text-slate-500 text-xs">
               选择一篇文档
             </div>
-            <div v-else>
+            <div v-else class="flex flex-col h-full">
               <!-- Mobile back -->
               <button v-if="isMobile" @click="selectedDoc = null; docContent = ''"
                 class="flex items-center gap-1 px-4 py-2 text-[10px] text-slate-400 hover:text-white border-b border-slate-800 w-full">
@@ -76,7 +90,10 @@
               <div class="px-4 py-3 border-b border-slate-800 sticky top-0 bg-business-dark/95 backdrop-blur-sm z-10">
                 <div class="flex items-start justify-between">
                   <div>
-                    <h3 class="text-sm font-bold text-white">{{ selectedDoc.title }}</h3>
+                    <h3 class="text-sm font-bold text-white flex items-center gap-1">
+                      <span v-if="selectedDoc.is_published" class="text-[9px] px-1.5 py-0.5 rounded bg-green-900/30 text-green-400">已发布</span>
+                      {{ selectedDoc.title }}
+                    </h3>
                     <p v-if="selectedDoc.summary" class="text-[11px] text-slate-400 mt-0.5">{{ selectedDoc.summary }}</p>
                   </div>
                 </div>
@@ -84,17 +101,27 @@
                   <span class="text-[9px] px-1.5 py-0.5 rounded bg-business-accent/20 text-business-accent">
                     {{ getCategoryLabel(selectedDoc.category) }}
                   </span>
-                  <span v-for="tag in (selectedDoc.tags || [])" :key="tag"
-                    class="text-[9px] px-1 py-0.5 rounded bg-slate-800 text-slate-400">{{ tag }}</span>
+                  <span v-for="tag in selectedDocTags" :key="tag.id"
+                    class="text-[9px] px-1 py-0.5 rounded bg-slate-800 text-slate-400"
+                    :style="{ borderLeft: `2px solid ${tag.color}` }">
+                    {{ tag.tag_name }}
+                  </span>
                 </div>
               </div>
               <!-- Body -->
-              <div class="p-4">
-                <div v-if="loadingContent" class="flex items-center justify-center py-8">
-                  <div class="w-6 h-6 border-2 border-business-accent border-t-transparent rounded-full animate-spin"></div>
+              <div ref="contentRef" class="flex-1 p-4 overflow-y-auto doc-content" v-html="renderedContent" @scroll="onScroll"></div>
+              <!-- Notes Section -->
+              <div v-if="docNotes.length > 0" class="px-4 py-3 border-t border-slate-800 shrink-0">
+                <div class="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">📝 笔记 ({{ docNotes.length }})</div>
+                <div class="space-y-2 max-h-32 overflow-y-auto">
+                  <div v-for="note in docNotes" :key="note.id" class="p-2 bg-slate-800/50 rounded text-xs">
+                    <div class="flex items-center justify-between">
+                      <span v-if="note.line_number > 0" class="text-[9px] px-1 py-0.5 rounded bg-blue-900/30 text-blue-400">行 {{ note.line_number }}</span>
+                      <span class="text-[9px] text-slate-600">{{ formatDate(note.created_at) }}</span>
+                    </div>
+                    <div class="text-slate-300 mt-1">{{ note.note_content }}</div>
+                  </div>
                 </div>
-                <div v-else-if="contentError" class="text-center py-8 text-red-400 text-xs">{{ contentError }}</div>
-                <div v-else class="prose prose-invert prose-sm max-w-none doc-content" v-html="renderedContent"></div>
               </div>
             </div>
           </div>
@@ -113,41 +140,53 @@
 </template>
 
 <script setup>
-import { ref, computed, watch } from 'vue';
-import { getDocsList, getDocContent } from '@/services/api';
+import { ref, computed, watch, nextTick } from 'vue';
+import { getDocsList, getDocContent, getDocProgress, updateDocProgress, getDocTags, getDocNotes } from '@/services/api';
 import { XMarkIcon, ArrowLeftIcon } from '@heroicons/vue/20/solid';
 
 const props = defineProps({ open: Boolean });
 const emit = defineEmits(['close']);
 
 const loading = ref(false);
-const loadingContent = ref(false);
-const contentError = ref('');
-const docs = ref([]);
+const allDocs = ref([]);
 const selectedDoc = ref(null);
 const docContent = ref('');
+const selectedSource = ref('all');
 const selectedCategory = ref('all');
-const isMobile = ref(window.innerWidth < 768);
+const contentRef = ref(null);
+const selectedDocTags = ref([]);
+const docNotes = ref([]);
 
+const isMobile = ref(window.innerWidth < 768);
 window.addEventListener('resize', () => { isMobile.value = window.innerWidth < 768; });
+
+const sources = computed(() => [
+  { id: 'all', label: '全部' },
+  { id: 'published', label: '已发布' },
+  { id: 'custom', label: '我的文档' },
+]);
 
 const categories = computed(() => {
   const cats = [
-    { id: 'all', label: '全部', count: docs.value.length },
+    { id: 'all', label: '全部', count: 0 },
     { id: 'trading-system', label: '交易系统', count: 0 },
     { id: 'research', label: '研究报告', count: 0 },
     { id: 'portfolio', label: '持仓管理', count: 0 },
     { id: 'training', label: '训练记录', count: 0 },
     { id: 'emotion', label: '情绪管理', count: 0 },
+    { id: 'daily-log', label: '每日记录', count: 0 },
     { id: 'other', label: '其他', count: 0 },
   ];
-  docs.value.forEach(d => { const c = cats.find(x => x.id === d.category); if (c) c.count++; });
+  filteredDocs.value.forEach(d => { const c = cats.find(x => x.id === d.category); if (c) c.count++; });
   return cats;
 });
 
 const filteredDocs = computed(() => {
-  if (selectedCategory.value === 'all') return docs.value;
-  return docs.value.filter(d => d.category === selectedCategory.value);
+  let docs = allDocs.value;
+  if (selectedSource.value === 'published') docs = docs.filter(d => d.is_published);
+  else if (selectedSource.value === 'custom') docs = docs.filter(d => !d.is_published);
+  if (selectedCategory.value !== 'all') docs = docs.filter(d => d.category === selectedCategory.value);
+  return docs;
 });
 
 const renderedContent = computed(() => {
@@ -159,12 +198,14 @@ const getCategoryLabel = (id) => categories.value.find(c => c.id === id)?.label 
 const formatDate = (iso) => iso ? iso.slice(0, 10) : '-';
 
 const simpleMarkdown = (md) => {
-  // Split into lines for better block handling
   const lines = md.split('\n');
   let html = '';
   let inList = false;
+  let inCode = false;
   for (const line of lines) {
     let l = line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    if (l.match(/^```.*$/)) { if (!inCode) { html += '<pre>'; inCode = true; } else { html += '</pre>'; inCode = false; } continue; }
+    if (inCode) { html += l + '\n'; continue; }
     if (l.match(/^### (.+)$/)) { if (inList) { html += '</ul>'; inList = false; } html += `<h3>${l.slice(4)}</h3>`; }
     else if (l.match(/^## (.+)$/)) { if (inList) { html += '</ul>'; inList = false; } html += `<h2>${l.slice(3)}</h2>`; }
     else if (l.match(/^# (.+)$/)) { if (inList) { html += '</ul>'; inList = false; } html += `<h1>${l.slice(2)}</h1>`; }
@@ -177,7 +218,7 @@ const simpleMarkdown = (md) => {
     else if (l.trim() === '') { if (inList) { html += '</ul>'; inList = false; } }
     else {
       if (inList) { html += '</ul>'; inList = false; }
-      l = l.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/`{3}[\s\S]*?`{3}/g, (m) => `<pre>${m.slice(3,-3)}</pre>`).replace(/`(.+?)`/g, '<code>$1</code>');
+      l = l.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/`(.+?)`/g, '<code>$1</code>');
       html += `<p>${l}</p>`;
     }
   }
@@ -187,20 +228,47 @@ const simpleMarkdown = (md) => {
 
 const loadDocs = async () => {
   loading.value = true;
-  try { const res = await getDocsList(); docs.value = res.data.docs || []; }
-  catch (e) { console.error(e); }
+  try {
+    const res = await getDocsList({ include_published: true });
+    allDocs.value = res.data.docs || [];
+  } catch (e) { console.error(e); }
   finally { loading.value = false; }
 };
 
 const selectDoc = async (doc) => {
   selectedDoc.value = doc;
-  loadingContent.value = true; contentError.value = ''; docContent.value = '';
-  try { const res = await getDocContent(doc.id); docContent.value = res.data.content || ''; }
-  catch (e) { contentError.value = '加载失败'; }
-  finally { loadingContent.value = false; }
+  docContent.value = '';
+  docNotes.value = [];
+  selectedDocTags.value = [];
+  try {
+    const res = await getDocContent(doc.id);
+    docContent.value = res.data.content || '';
+    
+    const progress = await getDocProgress(doc.id);
+    if (progress.data.last_line > 0 && contentRef.value) {
+      nextTick(() => { contentRef.value.scrollTop = progress.data.last_line * 20; });
+    }
+    
+    const notesRes = await getDocNotes(doc.id);
+    docNotes.value = notesRes.data.notes || [];
+    
+    const tagsRes = await getDocTags(doc.id);
+    selectedDocTags.value = tagsRes.data.tags || [];
+  } catch (e) { console.error(e); }
 };
 
-watch(() => props.open, (v) => { if (v && docs.value.length === 0) loadDocs(); });
+const onScroll = async () => {
+  if (!selectedDoc.value || !contentRef.value) return;
+  const lineNumber = Math.floor(contentRef.value.scrollTop / 20);
+  if (lineNumber > 0) {
+    try { await updateDocProgress(selectedDoc.value.id, { scroll_position: contentRef.value.scrollTop, last_line: lineNumber }); }
+    catch (e) { console.error(e); }
+  }
+};
+
+watch(() => props.open, async (v) => {
+  if (v && allDocs.value.length === 0) await loadDocs();
+});
 </script>
 
 <style scoped>

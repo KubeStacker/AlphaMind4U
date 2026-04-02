@@ -186,6 +186,16 @@ curl -X POST "http://localhost:8000/admin/etl/sentiment?days=365&sync_index=fals
 | `/watchlist/realtime` | GET | 当前登录用户的实时关注数据（支持 `analysis_depth=compact|full`，交易日优先展示当日快照，高频轮询推荐 `compact`） |
 | `/watchlist/{ts_code}/analysis` | GET | 当前登录用户自选内单只股票的深度分析（详情弹窗按需加载，返回 `classification` / `level_methodology` / `key_levels[*].note`） |
 | `/watchlist/{ts_code}` | DELETE | 删除当前登录用户的关注 |
+| `/docs/list` | GET | 获取文档列表（支持include_published筛选published目录文档） |
+| `/docs/published/list` | GET | 获取published目录下文档列表 |
+| `/docs/{doc_id}` | GET | 获取文档内容 |
+| `/docs/{doc_id}/progress` | GET/POST | 获取/更新文档阅读进度（记忆功能） |
+| `/docs/tags` | GET/POST | 获取/创建用户自定义标签 |
+| `/docs/tags/{tag_id}` | PUT/DELETE | 更新/删除用户自定义标签 |
+| `/docs/{doc_id}/tags` | GET/POST | 获取/设置文档关联的标签 |
+| `/docs/{doc_id}/notes` | GET/POST | 获取/创建文档笔记 |
+| `/docs/notes/{note_id}` | PUT/DELETE | 更新/删除文档笔记 |
+| `/docs/notes/all` | GET | 获取所有笔记汇总（支持按日期范围筛选） |
 
 ## 代码风格指南
 
@@ -308,6 +318,10 @@ curl -X POST "http://localhost:8000/admin/etl/sentiment?days=365&sync_index=fals
 - `user_holdings`
 - `ai_analysis_cache`
 - `etl_tasks`
+- `doc_reading_progress`（用户文档阅读位置记忆）
+- `doc_user_tags`（用户自定义文档标签）
+- `doc_notes`（文档笔记/点评）
+- `doc_tag_mapping`（文档标签关联表）
 
 ## 注意事项
 
@@ -358,3 +372,18 @@ curl -X POST "http://localhost:8000/admin/etl/sentiment?days=365&sync_index=fals
 **看跌形态**：上吊线、流星线、看跌吞没、乌云盖顶、黄昏星、三黑鸦、下降三法、背离
 
 **中性形态**：十字星、极度缩量
+
+## 开发经验总结
+
+### 数据展示问题处理原则
+
+当用户要求修改前端展示内容时（例如删除特定文本），应遵循以下原则：
+
+1. **优先在数据源头修改**：首先考虑在后端数据生成逻辑中修改，而不是在前端进行字符串匹配、替换或过滤。
+2. **避免前端硬编码处理**：前端应尽量保持简洁，只负责展示后端提供的数据。复杂的字符串处理（如正则匹配删除）会增加维护成本，且可能因后端格式变化而失效。
+3. **修改需彻底**：如果决定修改，应确保所有相关的地方都得到更新，避免遗漏。
+
+**案例：删除 watchlist 中的“定位 通信网络”**
+- **错误做法**：在前端 `Watchlist.vue` 中添加正则表达式，匹配并删除“定位 [标签]；”字符串。
+- **正确做法**：直接在后端 `kline_patterns.py` 的 `get_professional_commentary_detailed` 函数中，移除生成 `decision_summary` 和 `observation_points` 时添加的定位信息。
+- **原因**：前端处理是“治标不治本”，增加了代码复杂度，且当后端数据格式变化时容易失效。后端修改是根本解决方案，能保证所有使用该数据的地方都保持一致。

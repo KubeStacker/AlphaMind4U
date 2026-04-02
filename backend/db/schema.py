@@ -508,6 +508,55 @@ CREATE TABLE IF NOT EXISTS etl_tasks (
 );
 """
 
+# -- 文档阅读进度表 (doc_reading_progress) --
+CREATE_DOC_READING_PROGRESS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS doc_reading_progress (
+    user_id         INTEGER NOT NULL,
+    doc_id          VARCHAR(100) NOT NULL,
+    scroll_position INTEGER DEFAULT 0,
+    last_line       INTEGER DEFAULT 0,
+    updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, doc_id)
+);
+"""
+
+# -- 用户自定义文档标签表 (doc_user_tags) --
+CREATE_DOC_USER_TAGS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS doc_user_tags (
+    id              INTEGER PRIMARY KEY,
+    user_id         INTEGER NOT NULL,
+    tag_name        VARCHAR(50) NOT NULL,
+    color           VARCHAR(20) DEFAULT '#64748b',
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, tag_name)
+);
+"""
+
+# -- 文档笔记/点评表 (doc_notes) --
+CREATE_DOC_NOTES_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS doc_notes (
+    id              INTEGER PRIMARY KEY,
+    user_id         INTEGER NOT NULL,
+    doc_id          VARCHAR(100) NOT NULL,
+    note_content    TEXT NOT NULL,
+    note_type       VARCHAR(20) DEFAULT 'note',
+    line_number     INTEGER DEFAULT 0,
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+# -- 文档标签关联表 (doc_tag_mapping) --
+CREATE_DOC_TAG_MAPPING_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS doc_tag_mapping (
+    user_id         INTEGER NOT NULL,
+    doc_id          VARCHAR(100) NOT NULL,
+    tag_id          INTEGER NOT NULL,
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, doc_id, tag_id)
+);
+"""
+
 ALL_TABLES_SQL = [
     "CREATE SEQUENCE IF NOT EXISTS users_id_seq START 1;",
     CREATE_USERS_TABLE_SQL,
@@ -545,4 +594,10 @@ ALL_TABLES_SQL = [
     "CREATE INDEX IF NOT EXISTS idx_stock_factor_daily_date ON stock_factor_daily (trade_date);",
     "CREATE INDEX IF NOT EXISTS idx_stock_factor_daily_tscode ON stock_factor_daily (ts_code);",
     "CREATE INDEX IF NOT EXISTS idx_ai_analysis_cache_user_tscode ON ai_analysis_cache (user_id, ts_code);",
+    CREATE_DOC_READING_PROGRESS_TABLE_SQL,
+    CREATE_DOC_USER_TAGS_TABLE_SQL,
+    CREATE_DOC_NOTES_TABLE_SQL,
+    CREATE_DOC_TAG_MAPPING_TABLE_SQL,
+    "CREATE INDEX IF NOT EXISTS idx_doc_notes_user_doc ON doc_notes (user_id, doc_id);",
+    "CREATE INDEX IF NOT EXISTS idx_doc_tag_mapping_user_doc ON doc_tag_mapping (user_id, doc_id);",
 ]

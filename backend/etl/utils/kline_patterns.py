@@ -2596,11 +2596,8 @@ def get_professional_commentary_detailed(
 
     risk_brief = risk_alert[0]["title"] if risk_alert else ("量能不足" if vol_ratio_20 < 0.8 else "等待确认")
 
-    classification_text = ""
-    if classification.get("primary_label"):
-        classification_text = f"定位 {classification['primary_label']}；"
     decision_summary = (
-        f"{classification_text}{bias}，当前以{style}为主，建议 {action}。"
+        f"{bias}，当前以{style}为主，建议 {action}。"
         f"支撑 {fmt_level(support_1)}、压力 {fmt_level(resistance_1)}。"
     )
 
@@ -2611,10 +2608,6 @@ def get_professional_commentary_detailed(
     ]
 
     observation_points = []
-    if classification.get("primary_label"):
-        observation_points.append(
-            f"定位：{classification['primary_label']}。{classification.get('reason', '')}".strip()
-        )
     observation_points.extend(level_methodology)
     if institution_view:
         observation_points.append(institution_view[0]["desc"])

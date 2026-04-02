@@ -155,6 +155,26 @@ export const getStockIndicators = (tsCode, limit = 100) => apiClient.get(`/admin
 
 // --- 文档管理 ---
 export const getDocsList = (params = {}) => apiClient.get('/admin/docs/list', { params });
+export const getPublishedDocsList = (params = {}) => apiClient.get('/admin/docs/published/list', { params });
 export const getDocContent = (docId) => apiClient.get(`/admin/docs/${docId}`);
 export const publishDoc = (doc) => apiClient.post('/admin/docs/publish', doc);
 export const deleteDoc = (docId) => apiClient.delete(`/admin/docs/${docId}`);
+
+// --- 阅读位置记忆 ---
+export const getDocProgress = (docId) => apiClient.get(`/admin/docs/${docId}/progress`);
+export const updateDocProgress = (docId, data) => apiClient.post(`/admin/docs/${docId}/progress`, data);
+
+// --- 用户自定义标签 ---
+export const getUserTags = () => apiClient.get('/admin/docs/tags');
+export const createUserTag = (tag) => apiClient.post('/admin/docs/tags', tag);
+export const updateUserTag = (tagId, tag) => apiClient.put(`/admin/docs/tags/${tagId}`, tag);
+export const deleteUserTag = (tagId) => apiClient.delete(`/admin/docs/tags/${tagId}`);
+export const getDocTags = (docId) => apiClient.get(`/admin/docs/${docId}/tags`);
+export const setDocTags = (docId, tagIds) => apiClient.post(`/admin/docs/${docId}/tags`, { tag_ids: tagIds });
+
+// --- 文档笔记/点评 ---
+export const getDocNotes = (docId) => apiClient.get(`/admin/docs/${docId}/notes`);
+export const createDocNote = (docId, note) => apiClient.post(`/admin/docs/${docId}/notes`, note);
+export const updateDocNote = (noteId, note) => apiClient.put(`/admin/docs/notes/${noteId}`, note);
+export const deleteDocNote = (noteId) => apiClient.delete(`/admin/docs/notes/${noteId}`);
+export const getAllNotes = (params = {}) => apiClient.get('/admin/docs/notes/all', { params });

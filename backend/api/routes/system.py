@@ -11,6 +11,10 @@ from db.schema import (
     CREATE_STOCK_FACTOR_DAILY_TABLE_SQL,
     CREATE_STOCK_INCOME_TABLE_SQL,
     CREATE_STOCK_INDEX_MEMBER_ALL_TABLE_SQL,
+    CREATE_DOC_READING_PROGRESS_TABLE_SQL,
+    CREATE_DOC_USER_TAGS_TABLE_SQL,
+    CREATE_DOC_NOTES_TABLE_SQL,
+    CREATE_DOC_TAG_MAPPING_TABLE_SQL,
 )
 from etl.sync import sync_engine
 from etl.calendar import trading_calendar
@@ -35,6 +39,10 @@ def create_missing_tables():
             ("stock_index_member_all", CREATE_STOCK_INDEX_MEMBER_ALL_TABLE_SQL),
             ("stock_express", CREATE_STOCK_EXPRESS_TABLE_SQL),
             ("stock_factor_daily", CREATE_STOCK_FACTOR_DAILY_TABLE_SQL),
+            ("doc_reading_progress", CREATE_DOC_READING_PROGRESS_TABLE_SQL),
+            ("doc_user_tags", CREATE_DOC_USER_TAGS_TABLE_SQL),
+            ("doc_notes", CREATE_DOC_NOTES_TABLE_SQL),
+            ("doc_tag_mapping", CREATE_DOC_TAG_MAPPING_TABLE_SQL),
         ):
             try:
                 con.execute(table_sql)

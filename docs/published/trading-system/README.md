@@ -411,21 +411,6 @@ curl -X POST "http://localhost:8000/admin/stock/analyze" \
 - `/admin/stock/analyze` 默认不再注入关联个股推荐段，自定义模板建议优先使用 `{stock_snapshot}`、`{capital_flow_snapshot}`、`{market_context}`、`{holding_context}`、`{commentary_snapshot}`、`{analysis_snapshot}`
 - 策略优化目标是「提高盈亏比 + 降低回撤」，无法承诺单日或单阶段绝对盈利
 
-## 开发经验总结
-
-### 数据展示问题处理原则
-
-当用户要求修改前端展示内容时（例如删除特定文本），应遵循以下原则：
-
-1. **优先在数据源头修改**：首先考虑在后端数据生成逻辑中修改，而不是在前端进行字符串匹配、替换或过滤。
-2. **避免前端硬编码处理**：前端应尽量保持简洁，只负责展示后端提供的数据。复杂的字符串处理（如正则匹配删除）会增加维护成本，且可能因后端格式变化而失效。
-3. **修改需彻底**：如果决定修改，应确保所有相关的地方都得到更新，避免遗漏。
-
-**案例：删除 watchlist 中的“定位 通信网络”**
-- **错误做法**：在前端 `Watchlist.vue` 中添加正则表达式，匹配并删除“定位 [标签]；”字符串。
-- **正确做法**：直接在后端 `kline_patterns.py` 的 `get_professional_commentary_detailed` 函数中，移除生成 `decision_summary` 和 `observation_points` 时添加的定位信息。
-- **原因**：前端处理是“治标不治本”，增加了代码复杂度，且当后端数据格式变化时容易失效。后端修改是根本解决方案，能保证所有使用该数据的地方都保持一致。
-
 ---
 
 ## 深度专业点评与高胜率演进建议

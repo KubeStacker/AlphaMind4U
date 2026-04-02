@@ -326,9 +326,6 @@ def _build_commentary_snapshot(detail: dict) -> str:
         f"{item.get('label')} {_fmt_price(item.get('price'))}" for item in levels[:3] if item.get("price") is not None
     )
     parts = []
-    if classification.get("primary_label"):
-        reason = str(classification.get("reason") or "").strip()
-        parts.append(f"- 定位：{classification['primary_label']}。{reason}" if reason else f"- 定位：{classification['primary_label']}")
     if decision.get("summary"):
         parts.append(f"- 结论：{decision['summary']}")
     if trade_plan.get("entry"):
