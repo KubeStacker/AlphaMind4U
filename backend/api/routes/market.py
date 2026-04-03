@@ -289,12 +289,9 @@ def get_sentiment_preview(
     src: str = "dc"
 ):
     """
-    盘中情绪预估（建议 14:50 调用）：
-    - 若未显式传入涨跌幅，则尝试通过 Tushare realtime_quote 获取
-    - 结果仅用于预估，不写入 market_sentiment
+    盘中情绪预估（建议 14:50 调用）
+    当前版本：基于最新EOD情绪 + 指数涨跌幅线性估算
     """
-    from strategy.sentiment import sentiment_analyst
-
     realtime_debug = {}
     try:
         if index_pct_chg is None or star50_pct_chg is None:
@@ -319,124 +316,79 @@ def get_sentiment_preview(
             detail="无法获取 index_pct_chg。请手动传参 index_pct_chg，例如 -0.35"
         )
 
-    try:
-        result = sentiment_analyst.preview_next_day(
-            index_pct_chg=index_pct_chg,
-            star50_pct_chg=star50_pct_chg
-        )
-        result["source"] = {
-            "index_ts_code": index_ts_code,
-            "star50_ts_code": star50_ts_code,
-            "src": src,
-            "realtime_debug": realtime_debug
-        }
-        return {"status": "success", "data": result}
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error(f"盘中预估失败: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"盘中预估失败: {e}")
+    latest = fetch_df("SELECT trade_date, score, label, details FROM market_sentiment ORDER BY trade_date DESC LIMIT 1")
+    if latest.empty:
+        return {"status": "error", "message": "暂无历史情绪数据"}
 
-@router.get("/backtest_result")
-def get_backtest_result(optimize: bool = True):
-    """获取情绪策略回测结果（用于前端弹窗展示）"""
-    try:
-        from strategy.sentiment import sentiment_analyst
-        import datetime
+    base_score = float(latest.iloc[0]["score"])
+    base_label = str(latest.iloc[0]["label"])
+    base_date = str(latest.iloc[0]["trade_date"])
 
-        if optimize:
-            result, best_policy = sentiment_analyst.optimize_backtest_policy()
-        else:
-            result = sentiment_analyst.backtest_star50()
-            best_policy = result.get('policy') if result else {}
+    adjustment = 0.0
+    if index_pct_chg is not None:
+        adjustment += index_pct_chg * 5.0
+    if star50_pct_chg is not None:
+        adjustment += star50_pct_chg * 3.0
 
-        if not result:
-            return {"status": "error", "message": "暂无可用回测结果"}
+    estimated_score = max(0, min(100, base_score + adjustment))
 
-        return {
-            "status": "success",
-            "data": {
-                "metrics": result.get("metrics", {}),
-                "attribution": result.get("attribution", {}),
-                "trades": result.get("trades", []),
-                "policy": best_policy or result.get("policy", {}),
-                "generated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if estimated_score >= 85:
+        est_label = "沸腾"
+    elif estimated_score >= 70:
+        est_label = "高热"
+    elif estimated_score >= 55:
+        est_label = "修复"
+    elif estimated_score >= 42:
+        est_label = "拉锯"
+    elif estimated_score >= 25:
+        est_label = "低温"
+    else:
+        est_label = "冰点"
+
+    return {
+        "status": "success",
+        "data": {
+            "base_date": base_date,
+            "base_score": base_score,
+            "base_label": base_label,
+            "index_pct_chg": index_pct_chg,
+            "star50_pct_chg": star50_pct_chg,
+            "estimated_score": round(estimated_score, 1),
+            "estimated_label": est_label,
+            "adjustment": round(adjustment, 1),
+            "note": "当前为线性估算，非完整情绪计算",
+            "source": {
+                "index_ts_code": index_ts_code,
+                "star50_ts_code": star50_ts_code,
+                "src": src,
+                "realtime_debug": realtime_debug
             }
         }
-    except Exception as e:
-        logger.error(f"获取回测结果失败: {e}")
-        return {"status": "error", "message": str(e)}
+    }
+
+@router.get("/backtest_result")
+def get_backtest_result():
+    """情绪策略回测结果 — 当前未实现"""
+    return {
+        "status": "unavailable",
+        "message": "回测功能开发中，当前不可用"
+    }
 
 @router.get("/backtest_grid")
 def get_backtest_grid():
-    """诊断：对每个leverage+floor组合跑回测，返回metrics对比"""
-    try:
-        from strategy.sentiment import sentiment_analyst
-        from strategy.sentiment.config import SENTIMENT_CONFIG
-        bt_cfg = SENTIMENT_CONFIG.get("backtest", {})
-        opt_cfg = bt_cfg.get("optimizer", {})
-        leverage_grid = opt_cfg.get("leverage_grid", [1.0, 1.2, 1.5, 2.0])
-        trend_floor_grid = opt_cfg.get("trend_floor_grid", [0.0])
-        max_dd_limit = float(opt_cfg.get("max_drawdown_limit", 0.35))
-
-        results = []
-        for lev in leverage_grid:
-            for floor in trend_floor_grid:
-                policy = {
-                    "leverage": float(lev),
-                    "trend_floor_enabled": True,
-                    "trend_floor_pos": float(floor),
-                    "fee_rate": float(bt_cfg.get("fee_rate", 0.0015)),
-                    "ma_window": int(bt_cfg.get("ma_window", 20))
-                }
-                res = sentiment_analyst.backtest_star50(initial_capital=100000, policy=policy)
-                if not res:
-                    continue
-                m = res.get("metrics", {})
-                total_ret = float(str(m.get("total_return", "0%")).replace("%", "")) / 100.0
-                max_dd = abs(float(str(m.get("max_drawdown", "0%")).replace("%", "")) / 100.0)
-                sharpe = float(m.get("sharpe", 0))
-                score = total_ret * 1.0 + sharpe * 0.5 - max_dd * 2.0
-                if total_ret >= float(opt_cfg.get("target_total_return", 1.0)):
-                    score += 2.0
-                passed = max_dd <= max_dd_limit
-                results.append({
-                    "leverage": lev, "floor": floor,
-                    "return": f"{total_ret*100:.2f}%",
-                    "max_dd": f"{max_dd*100:.2f}%",
-                    "sharpe": round(sharpe, 2),
-                    "score": round(score, 4),
-                    "dd_passed": passed,
-                    "trades": m.get("total_trades"),
-                    "win_rate": m.get("win_rate"),
-                })
-        return {"status": "success", "dd_limit": f"{max_dd_limit*100:.0f}%", "grid": results}
-    except Exception as e:
-        logger.error(f"回测网格诊断失败: {e}")
-        import traceback; traceback.print_exc()
-        return {"status": "error", "message": str(e)}
+    """回测网格诊断 — 当前未实现"""
+    return {
+        "status": "unavailable",
+        "message": "回测网格功能开发中，当前不可用"
+    }
 
 @router.get("/backtest_walkforward")
 def get_walkforward_result(train_days: int = 120, test_days: int = 40):
-    """Walk-Forward 回测：滚动窗口训练+验证，消除过拟合"""
-    try:
-        from strategy.sentiment import sentiment_analyst
-        import datetime
-
-        result = sentiment_analyst.walk_forward_backtest(
-            train_days=train_days, test_days=test_days
-        )
-        if not result:
-            return {"status": "error", "message": "数据不足，无法执行 walk-forward 回测"}
-
-        return {
-            "status": "success",
-            "data": result,
-            "generated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        }
-    except Exception as e:
-        logger.error(f"Walk-forward 回测失败: {e}", exc_info=True)
-        return {"status": "error", "message": str(e)}
+    """Walk-Forward 回测 — 当前未实现"""
+    return {
+        "status": "unavailable",
+        "message": "Walk-Forward 回测功能开发中，当前不可用"
+    }
 
 @router.get("/mainline_history")
 def get_mainline_history(days: int = 30):
@@ -476,9 +428,37 @@ def get_market_suggestion(
             q_star = sync_engine.provider.realtime_quote(ts_code="000688.SH", src=src)
             star50_pct_chg = _extract_pct_from_quote(q_star)
 
-        sent = sentiment_analyst.preview_next_day(index_pct_chg=index_pct_chg, star50_pct_chg=star50_pct_chg)
+        latest = fetch_df("SELECT trade_date, score, label, details FROM market_sentiment ORDER BY trade_date DESC LIMIT 1")
+        if latest.empty:
+            sent_score = 50.0
+            sent_label = "拉锯"
+        else:
+            sent_score = float(latest.iloc[0]["score"])
+            sent_label = str(latest.iloc[0]["label"])
+
+        adjustment = 0.0
+        if index_pct_chg is not None:
+            adjustment += index_pct_chg * 5.0
+        if star50_pct_chg is not None:
+            adjustment += star50_pct_chg * 3.0
+        sent_score = max(0, min(100, sent_score + adjustment))
+
+        if sent_score >= 85:
+            sent_label = "沸腾"
+        elif sent_score >= 70:
+            sent_label = "高热"
+        elif sent_score >= 55:
+            sent_label = "修复"
+        elif sent_score >= 42:
+            sent_label = "拉锯"
+        elif sent_score >= 25:
+            sent_label = "低温"
+        else:
+            sent_label = "冰点"
+
+        sent = {"score": round(sent_score, 1), "label": sent_label}
         main = mainline_analyst.preview_intraday(provider=sync_engine.provider, limit=3, leaders_per_mainline=8, src=src)
-        sent_exec = sent.get("plan", {}).get("execution", {})
+        sent_exec = {}
     else:
         latest_df = fetch_df("SELECT trade_date, score, label, details FROM market_sentiment ORDER BY trade_date DESC LIMIT 1")
         if latest_df.empty:
@@ -521,9 +501,14 @@ def get_market_suggestion(
     top_line_score = float(top_line.get("score", 0.0)) if top_line else 0.0
     top_line_name = top_line.get("name", "混沌") if top_line else "混沌"
 
-    action = sent_exec.get("action") or ("BUY" if "BUY" in str(sent.get("plan", {}).get("signal", "")) else "WATCH")
-    target_position = float(sent_exec.get("target_position", 0.0))
-    confidence = float(sent_exec.get("confidence", 50.0))
+    if use_preview:
+        action = "BUY" if sent.get("score", 50) >= 55 else "WATCH"
+        target_position = 0.5 if action == "BUY" else 0.0
+        confidence = sent.get("score", 50.0)
+    else:
+        action = sent_exec.get("action") or ("BUY" if "BUY" in str(sent.get("plan", {}).get("signal", "")) else "WATCH")
+        target_position = float(sent_exec.get("target_position", 0.0))
+        confidence = float(sent_exec.get("confidence", 50.0))
 
     # 主线校验：主线太弱时降仓，避免"有情绪无主线"硬做
     if action == "BUY" and top_line_score < 12:
@@ -545,9 +530,9 @@ def get_market_suggestion(
             "tranche_count": sent_exec.get("tranche_count", 1)
         },
         "rationale": {
-            "sentiment_signal": sent.get("plan", {}).get("signal"),
-            "sentiment_strategy": sent.get("plan", {}).get("next_day_strategy"),
-            "sentiment_score": sent.get("projected_score"),
+            "sentiment_signal": sent_exec.get("signal") if sent_exec else ("BUY" if sent.get("score", 50) >= 55 else "WATCH"),
+            "sentiment_strategy": sent_exec.get("strategy") if sent_exec else None,
+            "sentiment_score": sent.get("projected_score") if not use_preview else sent.get("score"),
             "top_mainline": top_line_name,
             "top_mainline_score": round(top_line_score, 2)
         },
