@@ -12,7 +12,7 @@ import httpx
 import pandas as pd
 
 from etl.calendar import trading_calendar
-from strategy.sentiment.config import SENTIMENT_CONFIG
+from strategy.sentiment.config import SENTIMENT_CONFIG, score_to_label
 
 logger = logging.getLogger(__name__)
 
@@ -556,17 +556,7 @@ class LiveSentimentMonitor:
         return round(weighted / total, 3)
 
     def _score_to_label(self, score: float) -> str:
-        if score >= 85:
-            return "沸腾"
-        if score >= 70:
-            return "高热"
-        if score >= 55:
-            return "修复"
-        if score >= 42:
-            return "拉锯"
-        if score >= 25:
-            return "低温"
-        return "冰点"
+        return score_to_label(score)
 
     def _normalize_ts_code(self, code: Any) -> str:
         raw = str(code or "").strip().upper()

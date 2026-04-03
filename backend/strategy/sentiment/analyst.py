@@ -8,7 +8,7 @@ import numpy as np
 import arrow
 
 from db.connection import get_db_connection, fetch_df
-from strategy.sentiment.config import SENTIMENT_CONFIG
+from strategy.sentiment.config import SENTIMENT_CONFIG, score_to_label
 
 logger = logging.getLogger(__name__)
 
@@ -73,18 +73,8 @@ class SentimentAnalyst:
             return None
 
     def _score_to_label(self, score: float) -> str:
-        """将分数转换为情绪标签"""
-        if score >= 85:
-            return "沸腾"
-        if score >= 70:
-            return "高热"
-        if score >= 55:
-            return "修复"
-        if score >= 42:
-            return "拉锯"
-        if score >= 25:
-            return "低温"
-        return "冰点"
+        """将分数转换为情绪标签（使用统一配置）"""
+        return score_to_label(score)
 
     def _get_daily_data(self, date_str):
         return fetch_df(f"SELECT ts_code, open, high, low, close, pre_close, pct_chg, amount, vol FROM daily_price WHERE trade_date = '{date_str}' AND vol > 0")
