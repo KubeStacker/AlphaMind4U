@@ -157,10 +157,10 @@ curl -X POST "http://localhost:8000/admin/etl/sentiment?days=365&sync_index=fals
 | `/mainline_history` | GET | 主线历史记录（聚焦近10日主线演变、当前最强/连续主线及Top5个股摘要，并返回 `display_name` / `focus_tags` / `driver_summary` 等细分驱动字段） |
 | `/mainline/leaders` | GET | 主线及主线下龙头（支持前端按Top5展示，优先近10日持续性方向，剔除北交所，并按趋势先行/资金追踪/热度/题材命中综合评分，返回 `display_sector` / `focus_tags` / `driver_summary`） |
 | `/market/suggestion` | GET | 市场建议 |
-| `/market_sentiment` | GET | 市场情绪 |
+| `/market_sentiment` | GET | 市场情绪历史 + 交易日实时叠加（盘中指数、10Y/Pizza 风险、自动刷新提示；涨停/跌停按 `daily_price` 实时回填） |
 | `/portfolio/recommendation` | GET | 组合建议（regime + theme + stock rank + position sizing） |
 | `/sentiment/preview` | GET | 情绪预览 |
-| `/stock/analyze` | POST | 个股AI分析（摘要驱动、结论优先、返回更短，并带入定位与关键点位定义） |
+| `/stock/analyze` | POST | 个股AI分析（摘要驱动、结论优先、返回更短，并带入主线/市场配合、定位与关键点位定义） |
 | `/stock/search` | GET | 股票搜索（支持拼音首字母） |
 | `/stock/{ts_code}/kline` | GET | 股票K线数据（交易日且日线未落库时会补当日临时 bar） |
 | `/stock/{ts_code}/mainline_analysis` | GET | 个股主线归属分析（返回 `mapped_sector` / `is_mainline` 等） |
@@ -171,6 +171,8 @@ curl -X POST "http://localhost:8000/admin/etl/sentiment?days=365&sync_index=fals
 | `/users/me/ai-config` | GET | 获取AI配置 |
 | `/users/me/ai-config` | PUT | 更新AI配置 |
 | `/users/me/holdings` | GET | 获取持仓 |
+| `/users/me/holdings/batch` | POST | 批量更新持仓（支持同步到自选、可选按提交结果替换旧持仓） |
+| `/users/me/holdings/parse-image` | POST | 识别持仓截图并返回可预览、可应用的结构化结果 |
 | `/users/me/holdings/{ts_code}` | PUT | 更新持仓 |
 | `/users/me/holdings/{ts_code}` | DELETE | 删除持仓 |
 | `/users/me/prompt-templates` | GET | 获取提示模板 |
@@ -183,8 +185,8 @@ curl -X POST "http://localhost:8000/admin/etl/sentiment?days=365&sync_index=fals
 | `/users/{user_id}` | DELETE | 删除用户 |
 | `/watchlist` | GET | 当前登录用户的关注列表 |
 | `/watchlist` | POST | 为当前登录用户添加关注 |
-| `/watchlist/realtime` | GET | 当前登录用户的实时关注数据（支持 `analysis_depth=compact|full`，交易日优先展示当日快照，高频轮询推荐 `compact`） |
-| `/watchlist/{ts_code}/analysis` | GET | 当前登录用户自选内单只股票的深度分析（详情弹窗按需加载，返回 `classification` / `level_methodology` / `key_levels[*].note`） |
+| `/watchlist/realtime` | GET | 当前登录用户的实时关注数据（支持 `analysis_depth=compact|full`，交易日优先展示当日快照；`compact` 也会返回 `action_signal` / `signal_reasons` / `key_levels` / `technical.volume_ratio`，并额外直出行级 `volume_ratio` / `turnover_rate`，供列表首屏直接展示） |
+| `/watchlist/{ts_code}/analysis` | GET | 当前登录用户自选内单只股票的深度分析（详情弹窗按需加载，返回 `action_signal` / `signal_reasons` / `intraday_context` / `classification` / `level_methodology` / `key_levels[*].note`） |
 | `/watchlist/{ts_code}` | DELETE | 删除当前登录用户的关注 |
 | `/docs/list` | GET | 获取文档列表（支持include_published筛选published目录文档） |
 | `/docs/published/list` | GET | 获取published目录下文档列表 |
@@ -331,16 +333,19 @@ curl -X POST "http://localhost:8000/admin/etl/sentiment?days=365&sync_index=fals
 - 主线龙头评分当前会剔除北交所标的，不再按单日涨幅直接排队；更强调近10日趋势先行、持续资金跟踪、成交热度和细分题材命中度
 - 通信链当前已拆分为 `光通信` / `通信网络` / `算力基建`，避免把 `中际旭创`、`烽火通信` 这类不同子方向压成同一主线
 - Dashboard 首页当前拆成“情绪驾驶舱 + 主线作战板”，并与 Watchlist 保持同一套克制风格：情绪区头部直接输出结论，不再拆单独标题，也不重复展示日期/分区标签，只负责节奏、仓位、进攻方式和风控；“预测情绪”改为按钮触发弹窗参考，不在首页固定占位；主线区只负责方向优先级和龙头观察，主体最多展示 3 条主线，顶部只保留轮动正文，Top5 龙头改为在左侧方向卡片内按点击懒加载展开，避免右侧信息堆叠和首屏重复计算
+- Dashboard 情绪区当前会按接口返回的 `dashboard_refresh_seconds` 自动刷新，并叠加交易时段指数快照、10Y/Pizza 外部风险提示；若容器环境无法访问海外站点，`/admin/market_sentiment` 的宏观字段会返回 unavailable，前端应展示降级态而不是假定有值
 - Dashboard 内按钮触发的新内容需要使用固定宽度、固定分栏和占位容器，避免回测弹窗、诊断结果或异步内容加载时出现挤压、拉伸或表格畸形
 - Dashboard 配色当前采用低饱和冷暖分区：情绪区偏暖色、主线区偏冷色，只做轻微层次变化，不使用高饱和装饰色块
-- Watchlist 当前拆成“持仓跟踪 + 观察列表”两段：非持仓自选自动归入观察列表，列表默认只展示结论不展示 10D 历史，顶部不再单独放汇总卡；出现“试错 / 主动进攻”时需标红浮出，专注模式只展示持仓股
+- Watchlist 当前拆成“持仓跟踪 + 观察列表”两段：非持仓自选自动归入观察列表，列表默认只展示结论不展示 10D 历史，顶部不再单独放汇总卡；出现“试错 / 主动进攻”时需标红浮出，专注模式只展示持仓股；观察列表默认折叠，折叠状态下自动刷新优先只更新持仓，观察价格改为手动展开后按需刷新；页面刷新时优先恢复本地快照并后台并行更新自选与持仓，减少空白等待
+- Watchlist / Dashboard 的首屏 UI 只保留直接决策信息，不额外增加“汇总卡 / 统计概览 / 解释性摘要”这类弱信息层；支撑 / 压力 / 触发 / 失效等目标点位必须在卡片首屏直出，不能被摘要文案替代，也不能默认藏到二级弹窗
 - 当前 `concepts_task` 已支持“`short token` 优先同花顺、失败回退 Tushare concept/concept_detail”；若库内 `stock_concepts.src` 只有 `ts`，说明目前并未拿到同花顺概念成分
 - 概念同步当前采用 staging + 原子发布：先写入 `stock_concepts__staging` / `stock_concept_details__staging`，校验通过后再一次性覆盖正式表，避免刷新过程中主线/龙头接口读到半成品
 - 因子层当前新增 `stock_daily_basic` / `stock_index_member_all` / `stock_express` / `stock_factor_daily`：`/admin/etl/sync` 支持 `daily_basic` / `index_members` / `express` / `factors`，并把换手率、量比、估值、资金和综合分回写到 `daily_price.factors`
-- 高频盯盘列表请优先调用 `/admin/watchlist/realtime?analysis_depth=compact`，详情再单独请求 `/admin/watchlist/{ts_code}/analysis`；若今日日线尚未 ETL 入库，接口仍会优先返回当日实时/收盘后快照，`/admin/stock/{ts_code}/kline` 也会补一根当日临时 bar
+- 高频盯盘列表请优先调用 `/admin/watchlist/realtime?analysis_depth=compact`，详情再单独请求 `/admin/watchlist/{ts_code}/analysis`；`compact` 必须保持批量轻分析路径，只返回列表首屏所需的动作信号/量比/换手/关键位，不要在列表接口里逐股跑完整形态与深度点评；若今日日线尚未 ETL 入库，接口仍会优先返回当日实时/收盘后快照，`/admin/stock/{ts_code}/kline` 也会补一根当日临时 bar
 - 自选盯盘接口现按当前登录用户隔离，调用 `/admin/watchlist*` 时需携带 `Authorization: Bearer <token>`
 - 新增自选仅允许 `stock_basic` 中存在的代码；遗留无效代码会以空占位返回，便于前端清理，不再阻塞其他股票刷新
-- `/admin/stock/analyze` 默认使用压缩后的行情/资金/市场摘要构造提示词，不再注入关联个股推荐段；`{commentary_snapshot}` 会带入个股定位、支撑/压力定义与关键位，自定义模板优先使用 `{stock_snapshot}`、`{capital_flow_snapshot}`、`{market_context}`、`{holding_context}`、`{commentary_snapshot}`、`{analysis_snapshot}`
+- Watchlist 点位与动作信号当前以趋势、量价、主力资金、因子分和 realtime 位置主导，K 线形态仅作辅助参考；颜色语义统一为红色偏买入、绿色偏卖出、白色偏观望
+- `/admin/stock/analyze` 默认使用压缩后的行情、因子、资金、主线映射、市场环境摘要构造提示词，不再注入关联个股推荐段；`{commentary_snapshot}` 会带入个股定位、支撑/压力定义、动作参考与关键位，`{sector_context}` 会补充最相关主线及后续观察，自定义模板优先使用 `{stock_snapshot}`、`{capital_flow_snapshot}`、`{sector_context}`、`{market_context}`、`{holding_context}`、`{commentary_snapshot}`、`{analysis_snapshot}`
 - `/admin/etl/sentiment?sync_index=true` 当前复用 `sync_core_market_indices`，`/admin/system/trigger_daily_sync` 复用 `perform_daily_data_update`，不要再调用旧的 `sync_core_indices` / `sync_daily_update`
 - `stock_income` / `stock_fina_indicator` 已纳入 `db/schema.py` 初始化；`/admin/data/day_status` 与 `/admin/integrity` 对 `daily_price` / `stock_moneyflow` / `stock_margin` 统一使用 4000 条阈值判定交易日数据完整性
 - `/admin/factor/diagnostics` 提供 `factor_score` / `trend_score` / `quality_score` 等因子的 IC、RankIC 和分层收益；`/admin/portfolio/recommendation` 则把情绪仓位、主线方向、横截面因子和相关性约束收口成组合建议
@@ -382,6 +387,15 @@ curl -X POST "http://localhost:8000/admin/etl/sentiment?days=365&sync_index=fals
 1. **优先在数据源头修改**：首先考虑在后端数据生成逻辑中修改，而不是在前端进行字符串匹配、替换或过滤。
 2. **避免前端硬编码处理**：前端应尽量保持简洁，只负责展示后端提供的数据。复杂的字符串处理（如正则匹配删除）会增加维护成本，且可能因后端格式变化而失效。
 3. **修改需彻底**：如果决定修改，应确保所有相关的地方都得到更新，避免遗漏。
+
+### UI精简原则
+
+当用户要求优化 Watchlist、Dashboard 等交易界面时，应优先遵循以下原则：
+
+1. **首屏只放决策信息**：先展示信号、目标点位、触发条件、失效条件，再考虑解释性文案。
+2. **不为“看起来完整”增加汇总层**：若汇总卡、统计条、概览区不直接帮助交易决策，应默认不加。
+3. **点位优先于摘要**：支撑、压力、目标位等关键价位必须直接可见，不能被抽象总结替代。
+4. **少一层就是更好**：能在原卡片内解决，不新增额外容器、概览区或折叠层。
 
 **案例：删除 watchlist 中的“定位 通信网络”**
 - **错误做法**：在前端 `Watchlist.vue` 中添加正则表达式，匹配并删除“定位 [标签]；”字符串。

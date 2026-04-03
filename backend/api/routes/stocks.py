@@ -1,5 +1,6 @@
 # /backend/api/routes/stocks.py
 
+import base64
 import json
 import logging
 import math
@@ -11,8 +12,9 @@ from datetime import date, datetime
 from typing import Any, Dict, Optional
 
 import arrow
+import httpx
 import pandas as pd
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 from db.connection import get_db_connection, fetch_df
 from etl.calendar import trading_calendar
@@ -414,7 +416,13 @@ def _merge_live_snapshot_into_df(df: pd.DataFrame, snapshot: Optional[Dict[str, 
         base[col] = pd.to_numeric(base[col], errors="coerce")
 
     last_close = _safe_float(base.iloc[-1].get("close")) if not base.empty else None
-    snapshot_row = {col: None for col in base.columns}
+    existing_same_day = None
+    if "trade_date" in base.columns:
+        same_day = base.loc[base["trade_date"] == snapshot["trade_date"]]
+        if not same_day.empty:
+            existing_same_day = same_day.iloc[-1].to_dict()
+
+    snapshot_row = dict(existing_same_day or {col: None for col in base.columns})
     snapshot_row.update({
         "trade_date": snapshot["trade_date"],
         "open": snapshot.get("open", last_close),
@@ -465,11 +473,31 @@ def _extract_watch_conclusion(payload: Dict[str, Any]) -> str:
 
 
 def _compact_watch_analysis(payload: Dict[str, Any]) -> Dict[str, Any]:
+    detail = payload.get("detail") or {}
     return {
         "conclusion": _extract_watch_conclusion(payload),
         "summary": payload.get("summary", ""),
         "suggestion": payload.get("suggestion", "观望"),
+        "detail": {
+            "_compact": True,
+            "decision": detail.get("decision") or {},
+            "trade_plan": detail.get("trade_plan") or {},
+            "key_levels": (detail.get("key_levels") or [])[:4],
+            "action_signal": detail.get("action_signal") or {},
+            "signal_reasons": (detail.get("signal_reasons") or [])[:3],
+            "intraday_context": detail.get("intraday_context") or {},
+            "technical": detail.get("technical") or {},
+        },
     }
+
+
+def _extract_watch_technical_metric(payload: Dict[str, Any], key: str, digits: int = 2) -> Optional[float]:
+    detail = payload.get("detail") or {}
+    technical = detail.get("technical") or {}
+    value = _safe_float(technical.get(key))
+    if value is None:
+        return None
+    return round(float(value), digits)
 
 def _empty_watch_analysis(include_detail: bool = False) -> Dict[str, Any]:
     payload: Dict[str, Any] = {
@@ -496,6 +524,447 @@ def _prepare_watch_df(df: pd.DataFrame) -> pd.DataFrame:
     else:
         work["volume_ma5"] = 0.0
     return work
+
+
+def _parse_factor_payload(value: Any) -> Dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return {}
+        try:
+            parsed = json.loads(text)
+            return parsed if isinstance(parsed, dict) else {}
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+
+def _expand_watch_factor_columns(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty or "factors" not in df.columns:
+        return df
+
+    work = df.copy()
+    factor_rows = work["factors"].apply(_parse_factor_payload)
+    factor_fields = (
+        "ma5",
+        "ma10",
+        "ma20",
+        "ma60",
+        "vol_ma5",
+        "turnover_rate",
+        "turnover_rate_f",
+        "volume_ratio",
+        "trend_score",
+        "flow_score",
+        "factor_score",
+        "quality_score",
+        "value_score",
+        "event_score",
+        "big_order_ratio",
+        "net_mf_ratio",
+        "rps_20",
+        "rps_50",
+        "rps_120",
+        "rps_250",
+    )
+
+    for field in factor_fields:
+        values = factor_rows.apply(lambda item: _safe_float(item.get(field)) if isinstance(item, dict) else None)
+        if field in work.columns:
+            existing = pd.to_numeric(work[field], errors="coerce")
+            work[field] = existing.where(existing.notna(), values)
+        else:
+            work[field] = values
+
+    if "volume_ma5" not in work.columns or work["volume_ma5"].isna().all():
+        work["volume_ma5"] = pd.to_numeric(work.get("vol_ma5"), errors="coerce")
+    else:
+        current = pd.to_numeric(work["volume_ma5"], errors="coerce")
+        fallback = pd.to_numeric(work.get("vol_ma5"), errors="coerce")
+        work["volume_ma5"] = current.where(current.notna(), fallback)
+
+    return work
+
+
+def _fetch_watch_context_map(ts_codes: list[str]) -> dict[str, dict[str, Any]]:
+    codes = [_normalize_ts_code(code) for code in (ts_codes or []) if _normalize_ts_code(code)]
+    if not codes:
+        return {}
+
+    placeholders = ",".join(["?"] * len(codes))
+    df = fetch_df(
+        f"""
+        SELECT
+            d.ts_code,
+            d.trade_date,
+            d.open,
+            d.high,
+            d.low,
+            d.close,
+            d.pre_close,
+            d.vol,
+            d.amount,
+            d.pct_chg,
+            d.factors,
+            COALESCE(m.net_mf_amount, 0) AS net_mf_amount,
+            m.net_mf_ratio
+        FROM daily_price d
+        LEFT JOIN stock_moneyflow m
+          ON d.ts_code = m.ts_code AND d.trade_date = m.trade_date
+        WHERE (d.ts_code, d.trade_date) IN (
+            SELECT ts_code, MAX(trade_date)
+            FROM daily_price
+            WHERE ts_code IN ({placeholders})
+            GROUP BY ts_code
+        )
+        """,
+        tuple(codes),
+    )
+    if df.empty:
+        return {}
+
+    df = _expand_watch_factor_columns(df)
+    context_map: dict[str, dict[str, Any]] = {}
+    for _, row in df.iterrows():
+        ts_code = _normalize_ts_code(row.get("ts_code"))
+        if not ts_code:
+            continue
+        context_map[ts_code] = _sanitize_json_value(row.to_dict())
+    return context_map
+
+
+def _merge_compact_snapshot_row(
+    context_row: Optional[Dict[str, Any]],
+    realtime_snapshot: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    merged = dict(context_row or {})
+    if realtime_snapshot:
+        merged.update({
+            "trade_date": realtime_snapshot.get("trade_date") or merged.get("trade_date"),
+            "open": realtime_snapshot.get("open", merged.get("open")),
+            "high": realtime_snapshot.get("high", merged.get("high")),
+            "low": realtime_snapshot.get("low", merged.get("low")),
+            "close": realtime_snapshot.get("close", merged.get("close")),
+            "pre_close": realtime_snapshot.get("pre_close", merged.get("pre_close") or merged.get("close")),
+            "pct_chg": realtime_snapshot.get("pct", merged.get("pct_chg")),
+            "vol": realtime_snapshot.get("vol_lot", merged.get("vol")),
+            "amount": realtime_snapshot.get("amount_k", merged.get("amount")),
+            "quote_time": realtime_snapshot.get("quote_time"),
+        })
+    return merged
+
+
+def _nearest_levels(
+    close: Optional[float],
+    candidates: list[tuple[str, Optional[float]]],
+) -> tuple[list[tuple[str, float]], list[tuple[str, float]]]:
+    price = _safe_float(close)
+    if price is None or price <= 0:
+        return ([], [])
+
+    support_raw: list[tuple[str, float]] = []
+    resistance_raw: list[tuple[str, float]] = []
+    seen_support: set[tuple[str, float]] = set()
+    seen_resistance: set[tuple[str, float]] = set()
+
+    for label, raw_value in candidates:
+        value = _safe_float(raw_value)
+        if value is None or value <= 0:
+            continue
+        rounded = round(float(value), 2)
+        if rounded <= price:
+            key = (label, rounded)
+            if key not in seen_support:
+                support_raw.append((label, rounded))
+                seen_support.add(key)
+        if rounded >= price:
+            key = (label, rounded)
+            if key not in seen_resistance:
+                resistance_raw.append((label, rounded))
+                seen_resistance.add(key)
+
+    support = sorted(support_raw, key=lambda item: (-(item[1]), item[0]))[:2]
+    resistance = sorted(resistance_raw, key=lambda item: (item[1], item[0]))[:2]
+    return support, resistance
+
+
+def _build_compact_watch_analysis(
+    ts_code: str,
+    context_row: Optional[Dict[str, Any]],
+    realtime_snapshot: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    merged = _merge_compact_snapshot_row(context_row, realtime_snapshot=realtime_snapshot)
+    close = _safe_float(merged.get("close"))
+    if close is None or close <= 0:
+        return _compact_watch_analysis(_empty_watch_analysis(include_detail=False))
+
+    open_price = _safe_float(merged.get("open"), close) or close
+    high_price = _safe_float(merged.get("high"), max(open_price, close)) or max(open_price, close)
+    low_price = _safe_float(merged.get("low"), min(open_price, close)) or min(open_price, close)
+    pre_close = _safe_float(merged.get("pre_close"), close) or close
+    pct_today = _safe_float(merged.get("pct_chg"))
+    if pct_today is None and pre_close:
+        pct_today = (close - pre_close) / pre_close * 100.0
+    pct_today = pct_today or 0.0
+
+    volume = _safe_float(merged.get("vol"), 0.0) or 0.0
+    amount = _safe_float(merged.get("amount"), 0.0) or 0.0
+    ma5 = _safe_float(merged.get("ma5"), close) or close
+    ma10 = _safe_float(merged.get("ma10"), close) or close
+    ma20 = _safe_float(merged.get("ma20"), close) or close
+    ma60 = _safe_float(merged.get("ma60"), close) or close
+    volume_ma5 = _safe_float(merged.get("volume_ma5") or merged.get("vol_ma5"), 0.0) or 0.0
+    volume_ratio = _safe_float(merged.get("volume_ratio"))
+    if volume_ratio is None and volume_ma5 > 0 and volume > 0:
+        volume_ratio = volume / volume_ma5
+    if volume_ratio is None:
+        volume_ratio = 1.0
+    turnover = _safe_float(merged.get("turnover_rate") or merged.get("turnover_rate_f"))
+    net_mf_amount = _safe_float(merged.get("net_mf_amount"), 0.0) or 0.0
+    net_mf_ratio = _safe_float(merged.get("net_mf_ratio"))
+    factor_score = _safe_float(merged.get("factor_score"))
+    trend_factor = _safe_float(merged.get("trend_score"))
+    flow_factor = _safe_float(merged.get("flow_score"))
+    quality_factor = _safe_float(merged.get("quality_score"))
+    big_order_ratio = _safe_float(merged.get("big_order_ratio"))
+
+    support_candidates = [
+        ("昨收", pre_close),
+        ("开盘", open_price),
+        ("日低", low_price),
+        ("MA5", ma5),
+        ("MA10", ma10),
+        ("MA20", ma20),
+        ("MA60", ma60),
+    ]
+    resistance_candidates = [
+        ("昨收", pre_close),
+        ("开盘", open_price),
+        ("日高", high_price),
+        ("MA5", ma5),
+        ("MA10", ma10),
+        ("MA20", ma20),
+        ("MA60", ma60),
+    ]
+    support_levels, resistance_levels = _nearest_levels(close, support_candidates + resistance_candidates)
+
+    support_1 = support_levels[0][1] if support_levels else round(close * 0.985, 2)
+    support_2 = support_levels[1][1] if len(support_levels) > 1 else round(support_1 * 0.985, 2)
+    resistance_1 = resistance_levels[0][1] if resistance_levels else round(close * 1.015, 2)
+    resistance_2 = resistance_levels[1][1] if len(resistance_levels) > 1 else round(resistance_1 * 1.015, 2)
+
+    dist_support = round(max(0.0, (close - support_1) / close * 100.0), 2) if close else None
+    dist_resistance = round(max(0.0, (resistance_1 - close) / close * 100.0), 2) if close else None
+    near_support = dist_support is not None and dist_support <= 1.2
+    near_resistance = dist_resistance is not None and dist_resistance <= 1.2
+    if near_support:
+        zone_label = "支撑附近"
+    elif near_resistance:
+        zone_label = "压力附近"
+    else:
+        zone_label = "区间中段"
+
+    score = 50.0
+    if close >= ma20:
+        score += 8
+    else:
+        score -= 8
+    if close >= ma60:
+        score += 6
+    else:
+        score -= 4
+    if close >= ma5:
+        score += 4
+    else:
+        score -= 4
+    if pct_today >= 2:
+        score += 6
+    elif pct_today <= -2:
+        score -= 8
+    if volume_ratio >= 1.5:
+        score += 8
+    elif volume_ratio <= 0.85:
+        score -= 5
+    if turnover is not None:
+        if turnover >= 8:
+            score += 4
+        elif turnover <= 2:
+            score -= 2
+    if net_mf_amount > 0:
+        score += 6
+    elif net_mf_amount < 0:
+        score -= 6
+    if factor_score is not None:
+        if factor_score >= 65:
+            score += 8
+        elif factor_score <= 40:
+            score -= 8
+    if near_support:
+        score += 3
+    if near_resistance:
+        score -= 3
+    score = max(8.0, min(92.0, score))
+
+    if score >= 78 and volume_ratio >= 1.5 and pct_today >= 2 and net_mf_amount > 0:
+        action = "主动进攻"
+        signal_color = "buy"
+        signal_label = "红色买入"
+    elif score >= 64:
+        action = "试错" if near_support else "关注"
+        signal_color = "buy"
+        signal_label = "红色买入"
+    elif score <= 38 or (close < ma20 and net_mf_amount < 0):
+        action = "减仓"
+        signal_color = "sell"
+        signal_label = "绿色卖出"
+    else:
+        action = "观望"
+        signal_color = "watch"
+        signal_label = "白色观望"
+
+    signal_reasons: list[dict[str, Any]] = []
+
+    def add_reason(kind: str, title: str, desc: str, weight: int) -> None:
+        text = str(desc or "").strip()
+        if not text:
+            return
+        signal_reasons.append({
+            "kind": kind,
+            "title": title,
+            "desc": text,
+            "weight": weight,
+        })
+
+    if close > ma20 > ma60:
+        add_reason("buy", "趋势结构偏强", f"现价站上 MA20/MA60，上行结构还在。", 10)
+    elif close < ma20 < ma60:
+        add_reason("sell", "趋势结构偏弱", f"现价位于 MA20/MA60 下方，中期结构仍弱。", 10)
+    else:
+        add_reason("watch", "趋势仍待确认", "价格与中期均线未形成同向共振。", 6)
+
+    if volume_ratio >= 1.5:
+        add_reason("buy", "量比明显放大", f"当前量比 {volume_ratio:.2f}，增量资金活跃度更高。", 9)
+    elif volume_ratio <= 0.85:
+        add_reason("watch", "量能偏弱", f"当前量比 {volume_ratio:.2f}，突破确认度不足。", 7)
+
+    if net_mf_amount > 0:
+        add_reason("buy", "主力承接偏强", f"主力净流入 {net_mf_amount:.2f} 万元。", 8)
+    elif net_mf_amount < 0:
+        add_reason("sell", "主力承接偏弱", f"主力净流出 {abs(net_mf_amount):.2f} 万元。", 8)
+
+    if factor_score is not None:
+        if factor_score >= 65:
+            add_reason("buy", "综合因子占优", f"综合因子分 {factor_score:.1f}。", 7)
+        elif factor_score <= 40:
+            add_reason("sell", "综合因子偏弱", f"综合因子分 {factor_score:.1f}。", 7)
+
+    if near_support:
+        add_reason("watch" if signal_color == "watch" else signal_color, "位置靠近支撑", f"现价距支撑1 {support_1:.2f} 仅 {dist_support:.2f}%。", 7)
+    elif near_resistance:
+        add_reason("sell" if signal_color == "sell" else "watch", "位置逼近压力", f"现价距压力1 {resistance_1:.2f} 仅 {dist_resistance:.2f}%。", 7)
+    else:
+        add_reason("watch", "位置处于中段", f"当前处于支撑 {support_1:.2f} 与压力 {resistance_1:.2f} 之间。", 5)
+
+    signal_reasons = sorted(signal_reasons, key=lambda item: (-item["weight"], item["title"]))
+    signal_reasons = [{k: v for k, v in item.items() if k != "weight"} for item in signal_reasons[:3]]
+
+    snapshot_text = (
+        f"{merged.get('trade_date') or _today_trade_date()} {merged.get('quote_time') or ''}".strip()
+        if realtime_snapshot else
+        f"{merged.get('trade_date') or '-'} 收盘快照"
+    )
+    if signal_color == "buy":
+        current_action_text = f"{action}：优先盯支撑承接，只有放量确认再执行。"
+        entry_text = f"回踩 {support_1:.2f} 不破可跟踪；或放量站上 {resistance_1:.2f} 再确认。"
+        invalid_text = f"跌破 {support_1:.2f} 且承接不足，买点失效。"
+        reduce_text = f"逼近 {resistance_1:.2f} 仍无放量时，不追高。"
+    elif signal_color == "sell":
+        current_action_text = f"{action}：先收缩仓位，等重新站稳关键位再看。"
+        entry_text = f"只有重新放量站回 {resistance_1:.2f} 上方，才考虑撤销防守。"
+        invalid_text = f"继续跌破 {support_1:.2f}，弱势延续。"
+        reduce_text = f"靠近 {resistance_1:.2f} 但不能突破时，优先减仓。"
+    else:
+        current_action_text = "观望：先等更优位置或量能确认。"
+        entry_text = f"靠近 {support_1:.2f} 看承接，或放量突破 {resistance_1:.2f} 再跟。"
+        invalid_text = f"若跌破 {support_1:.2f}，则转为防守；若冲高不过 {resistance_1:.2f}，继续等。"
+        reduce_text = f"未放量前靠近 {resistance_1:.2f} 不追价。"
+
+    key_levels = [
+        {"label": "支撑1", "price": support_1, "note": f"首要防守位，跌破则先看弱。", "trigger": f"回踩 {support_1:.2f} 不破再看承接。"},
+        {"label": "支撑2", "price": support_2, "note": f"次级缓冲位，失守说明结构继续转弱。", "trigger": f"仅在 {support_2:.2f} 附近止跌时考虑二次观察。"},
+        {"label": "压力1", "price": resistance_1, "note": f"首个突破确认位，放量站上才算有效。", "trigger": f"放量站上 {resistance_1:.2f} 才算压力化解。"},
+        {"label": "压力2", "price": resistance_2, "note": f"上方第二道抛压位。", "trigger": f"逼近 {resistance_2:.2f} 时看是否继续放量。"},
+    ]
+
+    detail = {
+        "_compact": True,
+        "decision": {
+            "score": round(score, 1),
+            "bias": "bullish" if signal_color == "buy" else "bearish" if signal_color == "sell" else "neutral",
+            "action": action,
+            "confidence": "high" if score >= 72 or score <= 32 else "medium",
+            "style": "realtime_compact",
+            "summary": f"{action}，当前更适合围绕关键位执行，不适合在中段随意追单。 ",
+        },
+        "trade_plan": {
+            "current": current_action_text,
+            "entry": entry_text,
+            "add": f"只有站稳 {resistance_1:.2f} 且量比维持在 1.2 以上，再考虑加仓。",
+            "reduce": reduce_text,
+            "invalid": invalid_text,
+            "position": "轻仓试探" if signal_color == "buy" else "控制仓位" if signal_color == "sell" else "维持观察",
+        },
+        "action_signal": {
+            "color": signal_color,
+            "label": signal_label,
+            "headline": current_action_text,
+            "zone": zone_label,
+            "trigger": entry_text,
+            "fallback": invalid_text,
+            "snapshot": snapshot_text,
+        },
+        "signal_reasons": signal_reasons,
+        "intraday_context": {
+            "mode": "realtime" if realtime_snapshot else "static",
+            "quote_time": merged.get("quote_time"),
+            "snapshot": snapshot_text,
+            "zone": zone_label,
+            "distance_to_support_1": dist_support,
+            "distance_to_resistance_1": dist_resistance,
+            "status": current_action_text,
+        },
+        "key_levels": key_levels,
+        "technical": {
+            "close": round(close, 2),
+            "open": round(open_price, 2),
+            "pre_close": round(pre_close, 2),
+            "pct_today": round(pct_today, 2),
+            "volume": volume,
+            "volume_ratio": round(volume_ratio, 2),
+            "turnover": round(turnover, 2) if turnover is not None else None,
+            "amount": amount,
+            "net_mf_amount": round(net_mf_amount, 2),
+            "net_mf_ratio": round(net_mf_ratio, 2) if net_mf_ratio is not None else None,
+            "big_order_ratio": round(big_order_ratio, 2) if big_order_ratio is not None else None,
+            "ma5": round(ma5, 2),
+            "ma10": round(ma10, 2),
+            "ma20": round(ma20, 2),
+            "ma60": round(ma60, 2),
+            "factor_score": round(factor_score, 1) if factor_score is not None else None,
+            "trend_factor": round(trend_factor, 1) if trend_factor is not None else None,
+            "flow_factor": round(flow_factor, 1) if flow_factor is not None else None,
+            "quality_factor": round(quality_factor, 1) if quality_factor is not None else None,
+        },
+    }
+
+    return {
+        "conclusion": detail["decision"]["summary"].strip(),
+        "summary": f"【结论】{detail['decision']['summary'].strip()} | 【动作】{current_action_text}",
+        "suggestion": action,
+        "detail": detail,
+    }
 
 def _derive_watch_suggestion(row: pd.Series) -> str:
     pct_today = _safe_float(row.get("pct_chg"), 0.0) or 0.0
@@ -554,10 +1023,19 @@ def _build_watch_analysis(
     try:
         df = fetch_df(
             """
-            SELECT trade_date, open, high, low, close, vol, amount, pct_chg
-            FROM daily_price
-            WHERE ts_code = ?
-            ORDER BY trade_date DESC
+            SELECT d.trade_date, d.open, d.high, d.low, d.close, d.vol, d.amount, d.pct_chg, d.factors,
+                   COALESCE(m.net_mf_amount, 0) AS net_mf_amount,
+                   m.net_mf_ratio,
+                   g.rzye,
+                   g.rzmre,
+                   g.rzche
+            FROM daily_price d
+            LEFT JOIN stock_moneyflow m
+              ON d.ts_code = m.ts_code AND d.trade_date = m.trade_date
+            LEFT JOIN stock_margin g
+              ON d.ts_code = g.ts_code AND d.trade_date = g.trade_date
+            WHERE d.ts_code = ?
+            ORDER BY d.trade_date DESC
             LIMIT 75
             """,
             (ts_code,),
@@ -566,6 +1044,7 @@ def _build_watch_analysis(
             return _empty_watch_analysis(include_detail=True)
 
         df = df.iloc[::-1].reset_index(drop=True)
+        df = _expand_watch_factor_columns(df)
         latest_trade_date = df.iloc[-1]["trade_date"] if not df.empty else None
         live_snapshot = realtime_snapshot or _fetch_live_snapshot(ts_code, latest_trade_date=latest_trade_date)
         if live_snapshot:
@@ -583,7 +1062,7 @@ def _build_watch_analysis(
         latest_detail = get_professional_commentary_detailed(
             df,
             latest_patterns,
-            context={"ts_code": ts_code},
+            context={"ts_code": ts_code, "realtime_snapshot": live_snapshot},
         )
 
         history = _build_watch_history(df)
@@ -622,8 +1101,16 @@ def _get_watch_analysis(
     snapshot_trade_date = _normalize_trade_date(
         live_snapshot.get("trade_date") if live_snapshot else None
     )
+    cache_ttl = _ANALYSIS_CACHE_TTL_SECONDS
     if snapshot_trade_date:
         cache_key = f"{ts_code}@{snapshot_trade_date}"
+        cache_ttl = 45
+        quote_time = str(live_snapshot.get("quote_time") or "").strip() if live_snapshot else ""
+        live_price = _safe_float(live_snapshot.get("close")) if live_snapshot else None
+        if quote_time:
+            cache_key = f"{cache_key}@{quote_time}"
+        elif live_price is not None:
+            cache_key = f"{cache_key}@{live_price:.2f}"
 
     now = time.time()
 
@@ -632,7 +1119,7 @@ def _get_watch_analysis(
         if (
             cached
             and not force_refresh
-            and now - cached[0] < _ANALYSIS_CACHE_TTL_SECONDS
+            and now - cached[0] < cache_ttl
         ):
             _ANALYSIS_CACHE.move_to_end(cache_key)
             return cached[1]
@@ -657,6 +1144,19 @@ class WatchlistStock(BaseModel):
 class HoldingUpdate(BaseModel):
     shares: float
     avg_cost: Optional[float] = None
+
+
+class HoldingBatchItem(BaseModel):
+    ts_code: str
+    shares: float = Field(gt=0)
+    avg_cost: Optional[float] = Field(default=None, ge=0)
+    name: Optional[str] = None
+
+
+class HoldingsBatchUpdateRequest(BaseModel):
+    items: list[HoldingBatchItem] = Field(default_factory=list)
+    replace_missing: bool = False
+    sync_watchlist: bool = True
 
 # ========== 自选股管理 ==========
 
@@ -695,6 +1195,163 @@ def _ensure_watchlist_membership(user_id: int, ts_code: str) -> None:
         ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="当前用户自选中不存在该股票")
+
+
+def _load_user_ai_config(user_id: int) -> tuple[str, Optional[str], Optional[str], Optional[str], Optional[int]]:
+    with get_db_connection() as con:
+        row = con.execute(
+            """
+            SELECT model_provider, model_name, api_key, base_url, max_tokens
+            FROM user_ai_config
+            WHERE user_id = ?
+            """,
+            (user_id,),
+        ).fetchone()
+    if not row or not row[2]:
+        raise HTTPException(status_code=400, detail="请先在设置中配置可用的 AI API Key")
+    return row[0] or "openai", row[1], row[2], row[3], row[4]
+
+
+def _extract_json_payload(raw_text: str) -> Any:
+    text = str(raw_text or "").strip()
+    if not text:
+        raise HTTPException(status_code=502, detail="图片识别返回为空")
+
+    fenced = re.search(r"```(?:json)?\s*(.*?)```", text, re.S | re.I)
+    candidates = [fenced.group(1).strip()] if fenced else []
+    candidates.append(text)
+
+    object_match = re.search(r"\{.*\}", text, re.S)
+    if object_match:
+        candidates.append(object_match.group(0).strip())
+
+    for candidate in candidates:
+        if not candidate:
+            continue
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+
+    raise HTTPException(status_code=502, detail="图片识别结果不是有效 JSON")
+
+
+def _resolve_stock_identity(raw_code: Any = None, raw_name: Any = None) -> tuple[Optional[str], Optional[str], str]:
+    code_text = str(raw_code or "").strip().upper()
+    code_text = code_text.replace("SH", "").replace("SZ", "").replace("BJ", "").replace(".", "")
+    norm_code = _normalize_ts_code(code_text) if code_text else ""
+
+    if norm_code:
+        by_ts_code = fetch_df(
+            "SELECT ts_code, name FROM stock_basic WHERE ts_code = ? LIMIT 1",
+            (norm_code,),
+        )
+        if not by_ts_code.empty:
+            record = by_ts_code.iloc[0]
+            return str(record["ts_code"]), str(record["name"]), "ts_code"
+
+        symbol = code_text[:6]
+        if symbol:
+            by_symbol = fetch_df(
+                "SELECT ts_code, name FROM stock_basic WHERE symbol = ? LIMIT 1",
+                (symbol,),
+            )
+            if not by_symbol.empty:
+                record = by_symbol.iloc[0]
+                return str(record["ts_code"]), str(record["name"]), "symbol"
+
+    name_text = str(raw_name or "").strip()
+    if name_text:
+        by_name = fetch_df(
+            "SELECT ts_code, name FROM stock_basic WHERE name = ? LIMIT 1",
+            (name_text,),
+        )
+        if not by_name.empty:
+            record = by_name.iloc[0]
+            return str(record["ts_code"]), str(record["name"]), "name"
+
+    return None, name_text or None, "unmatched"
+
+
+def _prepare_imported_holding_rows(raw_holdings: Any, raw_notes: Any = None) -> tuple[list[dict[str, Any]], list[str]]:
+    items = raw_holdings if isinstance(raw_holdings, list) else []
+    notes = [str(note).strip() for note in (raw_notes or []) if str(note).strip()]
+    prepared_rows: list[dict[str, Any]] = []
+
+    for idx, raw_item in enumerate(items):
+        if not isinstance(raw_item, dict):
+            notes.append(f"第 {idx + 1} 项不是有效对象，已跳过。")
+            continue
+
+        shares = _safe_float(raw_item.get("shares"), None)
+        avg_cost = _safe_float(raw_item.get("avg_cost"), None)
+        source_code = str(raw_item.get("ts_code") or raw_item.get("code") or raw_item.get("symbol") or "").strip()
+        source_name = str(raw_item.get("name") or raw_item.get("stock_name") or "").strip()
+
+        if shares is None or shares <= 0:
+            notes.append(f"{source_name or source_code or f'第 {idx + 1} 项'} 持仓数量无效，已跳过。")
+            continue
+
+        ts_code, resolved_name, matched_by = _resolve_stock_identity(source_code, source_name)
+        status = "matched" if ts_code else "unmatched"
+        warning = None
+        if avg_cost is not None and avg_cost < 0:
+            avg_cost = None
+            warning = "成本价无效，已清空。"
+        if status != "matched":
+            warning = warning or "未能匹配到 stock_basic，应用前请手工确认。"
+
+        prepared_rows.append({
+            "ts_code": ts_code,
+            "name": resolved_name or source_name or source_code or f"第 {idx + 1} 项",
+            "shares": int(round(shares)),
+            "avg_cost": round(float(avg_cost), 4) if avg_cost is not None else None,
+            "source_code": source_code or None,
+            "source_name": source_name or None,
+            "matched_by": matched_by,
+            "status": status,
+            "warning": warning,
+        })
+
+    return prepared_rows, notes
+
+
+def _sync_watchlist_entries(
+    con,
+    user_id: int,
+    items: list[dict[str, Any]],
+) -> int:
+    valid_items = [item for item in items if item.get("ts_code")]
+    if not valid_items:
+        return 0
+
+    existing_rows = con.execute(
+        "SELECT ts_code FROM watchlist WHERE user_id = ?",
+        (user_id,),
+    ).fetchall()
+    existing_codes = {str(row[0]) for row in existing_rows}
+    current_max_sort = con.execute(
+        "SELECT COALESCE(MAX(sort_order), 0) FROM watchlist WHERE user_id = ?",
+        (user_id,),
+    ).fetchone()[0] or 0
+
+    inserted = 0
+    for item in valid_items:
+        ts_code = str(item["ts_code"])
+        if ts_code in existing_codes:
+            continue
+        current_max_sort += 1
+        con.execute(
+            """
+            INSERT INTO watchlist (user_id, ts_code, name, remark, sort_order)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (user_id, ts_code, item.get("name") or ts_code, "持仓同步", current_max_sort),
+        )
+        existing_codes.add(ts_code)
+        inserted += 1
+
+    return inserted
 
 
 @router.get("/watchlist")
@@ -837,6 +1494,7 @@ async def get_watchlist_realtime(
 
     quote_candidate_codes = [c for c in norm_codes if c in tradable_codes]
     display_name_map = {**watchlist_name_map, **basic_name_map}
+    context_map = _fetch_watch_context_map(norm_codes) if analysis_depth == "compact" else {}
 
     is_trading = trading_calendar.is_trading_time()
     live_quote_day = trading_calendar.is_trading_day(arrow.now("Asia/Shanghai").date())
@@ -858,16 +1516,19 @@ async def get_watchlist_realtime(
 
                 analyze_result = {}
                 if include_analysis:
-                    full_analysis = _get_watch_analysis(
-                        ts_code,
-                        realtime_snapshot=snapshot,
-                        allow_live_fetch=False,
-                    )
-                    analyze_result = (
-                        full_analysis
-                        if analysis_depth == "full"
-                        else _compact_watch_analysis(full_analysis)
-                    )
+                    if analysis_depth == "compact":
+                        analyze_result = _build_compact_watch_analysis(
+                            ts_code,
+                            context_map.get(ts_code),
+                            realtime_snapshot=snapshot,
+                        )
+                    else:
+                        full_analysis = _get_watch_analysis(
+                            ts_code,
+                            realtime_snapshot=snapshot,
+                            allow_live_fetch=False,
+                        )
+                        analyze_result = full_analysis
 
                 if snapshot.get("quote_time"):
                     snapshot_time = max(snapshot_time or snapshot["quote_time"], snapshot["quote_time"])
@@ -882,13 +1543,38 @@ async def get_watchlist_realtime(
                     "pct": snapshot.get("pct"),
                     "vol": snapshot.get("volume_shares"),
                     "amount": snapshot.get("amount_yuan"),
+                    "volume_ratio": _extract_watch_technical_metric(analyze_result, "volume_ratio"),
+                    "turnover_rate": _extract_watch_technical_metric(analyze_result, "turnover"),
                     "analyze": analyze_result
                 }))
     
     processed_codes = {r['ts_code'] for r in rows}
-    remaining_codes = [c for c in quote_candidate_codes if c not in processed_codes]
+    remaining_codes = [c for c in norm_codes if c not in processed_codes]
 
-    if remaining_codes:
+    if remaining_codes and analysis_depth == "compact":
+        for tc in remaining_codes:
+            context_row = context_map.get(tc)
+            if not context_row:
+                continue
+            analyze_result = (
+                _build_compact_watch_analysis(tc, context_row, realtime_snapshot=None)
+                if include_analysis else {}
+            )
+            rows.append(_sanitize_json_value({
+                "ts_code": tc,
+                "name": display_name_map.get(tc, tc),
+                "trade_date": _normalize_trade_date(context_row.get("trade_date")),
+                "quote_time": None,
+                "price": context_row.get("close"),
+                "pre_close": context_row.get("pre_close"),
+                "pct": context_row.get("pct_chg"),
+                "vol": context_row.get("vol"),
+                "amount": context_row.get("amount"),
+                "volume_ratio": _extract_watch_technical_metric(analyze_result, "volume_ratio"),
+                "turnover_rate": _extract_watch_technical_metric(analyze_result, "turnover"),
+                "analyze": analyze_result
+            }))
+    elif remaining_codes:
         placeholders = ",".join(["?"] * len(remaining_codes))
         static_df = fetch_df(f"""
             SELECT ts_code, close as price, pre_close, pct_chg as pct, vol, amount, trade_date
@@ -927,6 +1613,8 @@ async def get_watchlist_realtime(
                 "pct": row['pct'],
                 "vol": row['vol'],
                 "amount": row['amount'],
+                "volume_ratio": _extract_watch_technical_metric(analyze_result, "volume_ratio"),
+                "turnover_rate": _extract_watch_technical_metric(analyze_result, "turnover"),
                 "analyze": analyze_result
             }))
 
@@ -951,6 +1639,8 @@ async def get_watchlist_realtime(
             "pct": None,
             "vol": None,
             "amount": None,
+            "volume_ratio": _extract_watch_technical_metric(analyze_result, "volume_ratio"),
+            "turnover_rate": _extract_watch_technical_metric(analyze_result, "turnover"),
             "analyze": analyze_result,
         }))
 
@@ -1191,6 +1881,235 @@ def get_stock_kline(ts_code: str, limit: int = 200):
         raise HTTPException(status_code=500, detail=str(e))
 
 # ========== 持仓管理 ==========
+
+@router.post("/users/me/holdings/parse-image")
+async def parse_holdings_from_image(
+    request: Request,
+    file: UploadFile = File(...),
+):
+    """识别持仓截图，返回可供预览和批量应用的结构化结果。"""
+    user_id = await get_current_user_id(request)
+
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="仅支持上传图片文件")
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="图片内容为空")
+    if len(content) > 8 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="图片过大，请控制在 8MB 以内")
+
+    model_provider, model_name, api_key, base_url, max_tokens = _load_user_ai_config(user_id)
+    if str(model_provider).lower() == "deepseek":
+        raise HTTPException(
+            status_code=400,
+            detail="图片识别持仓当前仅支持 OpenAI 兼容多模态模型，请在设置中切换 provider。",
+        )
+
+    if not base_url:
+        base_url = "https://api.openai.com/v1"
+    base_url = str(base_url).rstrip("/")
+    model = model_name or "gpt-4.1-mini"
+    data_uri = f"data:{file.content_type};base64,{base64.b64encode(content).decode('utf-8')}"
+    prompt = (
+        "请识别这张券商持仓截图里的 A 股持仓明细，只返回 JSON 对象，不要输出 Markdown 或解释。\n"
+        "格式固定为：\n"
+        "{\n"
+        '  "holdings": [\n'
+        '    {"ts_code": "600519", "name": "贵州茅台", "shares": 100, "avg_cost": 1688.88}\n'
+        "  ],\n"
+        '  "notes": ["无法确认的内容"]\n'
+        "}\n"
+        "要求：\n"
+        "1. 只保留当前持仓股票，不要包含总资产、可用资金、盈亏汇总、现金、基金或港美股。\n"
+        "2. ts_code 尽量输出 6 位数字；如果看不到代码，可仅填 name。\n"
+        "3. shares 必须是数字股数；avg_cost 看不清可填 null。\n"
+        "4. 无法确认的行不要猜，写入 notes。\n"
+        "5. 如果图片不是持仓页，返回空 holdings，并在 notes 里说明。"
+    )
+
+    payload = {
+        "model": model,
+        "messages": [
+            {
+                "role": "system",
+                "content": "你是 A 股券商持仓截图结构化助手，只输出严格 JSON。",
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": data_uri}},
+                ],
+            },
+        ],
+        "max_tokens": max(500, min(int(max_tokens or 1200), 1200)),
+        "temperature": 0,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            resp = await client.post(
+                f"{base_url}/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json=payload,
+            )
+        if resp.status_code != 200:
+            logger.error("持仓图片识别失败: %s", resp.text)
+            raise HTTPException(status_code=502, detail=f"图片识别调用失败: {resp.text}")
+
+        result = resp.json()
+        raw_content = (
+            result.get("choices", [{}])[0]
+            .get("message", {})
+            .get("content", "")
+        )
+        parsed = _extract_json_payload(raw_content)
+        prepared_rows, notes = _prepare_imported_holding_rows(
+            parsed.get("holdings") if isinstance(parsed, dict) else [],
+            parsed.get("notes") if isinstance(parsed, dict) else None,
+        )
+
+        matched_rows = [item for item in prepared_rows if item.get("status") == "matched"]
+        unmatched_rows = [item for item in prepared_rows if item.get("status") != "matched"]
+
+        return {
+            "status": "success",
+            "data": {
+                "items": prepared_rows,
+                "matched_items": matched_rows,
+                "unmatched_items": unmatched_rows,
+                "notes": notes,
+                "summary": {
+                    "total_items": len(prepared_rows),
+                    "matched_count": len(matched_rows),
+                    "unmatched_count": len(unmatched_rows),
+                },
+            },
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("识别持仓截图失败")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/users/me/holdings/batch")
+async def batch_update_holdings(request: Request, body: HoldingsBatchUpdateRequest):
+    """批量更新当前用户持仓，并可自动同步到自选。"""
+    user_id = await get_current_user_id(request)
+
+    if not body.items:
+        raise HTTPException(status_code=400, detail="至少需要一条持仓记录")
+
+    deduped: dict[str, dict[str, Any]] = {}
+    for item in body.items:
+        norm_code = _normalize_ts_code(item.ts_code)
+        if not norm_code:
+            raise HTTPException(status_code=400, detail=f"无效股票代码: {item.ts_code}")
+        deduped[norm_code] = {
+            "ts_code": norm_code,
+            "name": item.name,
+            "shares": int(round(float(item.shares))),
+            "avg_cost": round(float(item.avg_cost or 0), 4),
+        }
+
+    codes = list(deduped.keys())
+    placeholders = ",".join(["?"] * len(codes))
+    valid_df = fetch_df(
+        f"SELECT ts_code, name FROM stock_basic WHERE ts_code IN ({placeholders})",
+        tuple(codes),
+    )
+    valid_map = {
+        str(row["ts_code"]): str(row["name"])
+        for _, row in valid_df.iterrows()
+    } if not valid_df.empty else {}
+
+    missing_codes = [code for code in codes if code not in valid_map]
+    if missing_codes:
+        raise HTTPException(status_code=400, detail=f"以下代码不在 stock_basic 中: {', '.join(missing_codes)}")
+
+    applied_items = []
+    for code, item in deduped.items():
+        applied_items.append({
+            "ts_code": code,
+            "name": valid_map.get(code) or item.get("name") or code,
+            "shares": item["shares"],
+            "avg_cost": item["avg_cost"],
+        })
+
+    deleted_count = 0
+    watchlist_added = 0
+    try:
+        with get_db_connection() as con:
+            existing_codes = {
+                str(row[0])
+                for row in con.execute(
+                    "SELECT ts_code FROM user_holdings WHERE user_id = ?",
+                    (user_id,),
+                ).fetchall()
+            }
+
+            if body.replace_missing:
+                keep_codes = tuple(codes)
+                deleted_count = len(existing_codes - set(keep_codes))
+                if keep_codes:
+                    keep_placeholders = ",".join(["?"] * len(keep_codes))
+                    delete_sql = (
+                        f"DELETE FROM user_holdings WHERE user_id = ? "
+                        f"AND ts_code NOT IN ({keep_placeholders})"
+                    )
+                    con.execute(delete_sql, (user_id, *keep_codes))
+                else:
+                    con.execute("DELETE FROM user_holdings WHERE user_id = ?", (user_id,))
+                    deleted_count = len(existing_codes)
+
+            for item in applied_items:
+                ts_code = item["ts_code"]
+                row = con.execute(
+                    "SELECT 1 FROM user_holdings WHERE user_id = ? AND ts_code = ?",
+                    (user_id, ts_code),
+                ).fetchone()
+                if row:
+                    con.execute(
+                        """
+                        UPDATE user_holdings
+                        SET shares = ?, avg_cost = ?, updated_at = CURRENT_TIMESTAMP
+                        WHERE user_id = ? AND ts_code = ?
+                        """,
+                        (item["shares"], item["avg_cost"], user_id, ts_code),
+                    )
+                else:
+                    con.execute(
+                        """
+                        INSERT INTO user_holdings (user_id, ts_code, shares, avg_cost)
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        (user_id, ts_code, item["shares"], item["avg_cost"]),
+                    )
+
+            if body.sync_watchlist:
+                watchlist_added = _sync_watchlist_entries(con, user_id, applied_items)
+
+        return {
+            "status": "success",
+            "message": "持仓已批量更新",
+            "data": {
+                "items": applied_items,
+                "summary": {
+                    "updated_count": len(applied_items),
+                    "deleted_count": deleted_count,
+                    "watchlist_added": watchlist_added,
+                    "replace_missing": body.replace_missing,
+                    "sync_watchlist": body.sync_watchlist,
+                },
+            },
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("批量更新持仓失败")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/users/me/holdings")
 async def get_holdings(request: Request):

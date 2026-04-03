@@ -1,12 +1,12 @@
 # /backend/strategy/sentiment/config.py
 
 """
-Market Sentiment Strategy Configurations (V33)
-包含情绪分值计算、多维动能阈值以及不同市场环境下的交易指令参数。
+Market Sentiment Strategy Configurations - 简化版
+只保留情绪分值计算权重。
 """
 
 SENTIMENT_CONFIG = {
-    # --- 评分因子权重 (Continuous Score Weights) ---
+    # --- 评分因子权重 ---
     "weights": {
         "limit_diff": 0.25,     
         "promotion": 75.0,      # 高赚钱效应权重
@@ -21,104 +21,16 @@ SENTIMENT_CONFIG = {
         "board_height": 2.0,    # 连板高度
         "iv_proxy": 5.5         # 波动恐慌代理 (指数历史波动z)
     },
-
-    # --- 环境感知阈值 (Market Context) ---
-    "context": {
-        "ma_short": 5,
-        "ma_mid": 10,           
-        "ma_long": 25           
+    "live_monitor": {
+        "dashboard_refresh_seconds": 60,
+        "closed_refresh_seconds": 300,
+        "live_cache_seconds": 45,
+        "macro_refresh_seconds": 600,
+        "cnbc_ten_year_warn_high": 4.38,
+        "cnbc_ten_year_risk_high": 4.40,
+        "cnbc_ten_year_warn_low": 4.33,
+        "cnbc_ten_year_support_low": 4.30,
+        "pizza_spike_warn": 150.0,
+        "pizza_spike_risk": 300.0,
     },
-
-    # --- 风控参数 (Risk Control) ---
-    "risk": {
-        "crash_exp_ret_threshold": -1.0,  
-        "panic_v1_threshold": -10.0       
-    },
-
-    # --- 简化版买入信号参数 (更宽松) ---
-    "buy": {
-        "ice_point_max_score": 35,          # 冰点买入阈值(提高)
-        "ice_point_v1_threshold": 0,        # 降低要求
-        "normal_buy_min_score": 25,        # 正常买入最低分
-        "rebound_v2_threshold": 1.0,       # 冰点反转需要加速度转正
-        "breakout_score": 58,              # 趋势突破分数阈值
-        "momentum_v1_threshold": 5.0,      # 动量买入一阶导阈值
-        "momentum_v2_threshold": 0.5,      # 动量买入二阶导阈值
-    },
-
-    # --- 卖出信号参数 ---
-    "sell": {
-        "euphoria_threshold": 85,          # 人声鼎沸
-        "profit_take": 12.0,               # 止盈线(放宽到12%，让利润奔跑)
-        "stop_loss": -5.0,                 # 固定止损底线(放宽到-5%，减少噪音止损)
-        "cooldown_score_drop": 30,         # 情绪回落多少分就卖(提高到30，减少频繁卖出)
-        "cooldown_min_hold": 3,            # 退潮信号最少持仓天数
-        "cooldown_velocity": -10.0,        # 退潮需要分数3日速度低于此值(加严到-10)
-        "max_hold_days": 30,               # 最大持仓天数(放宽到30，让赢家跑更久)
-        "min_hold_days": 3,                # 新增：最小持仓天数，防止买后立即卖
-        "consecutive_loss_limit": 2,       # 连续亏损N笔后降仓
-        "consecutive_loss_scale": 0.5,     # 连亏后仓位缩放系数
-        "drawdown_circuit_breaker": -15.0, # 组合回撤超此值暂停开仓(%, 去杠杆仓位加权)
-        "drawdown_resume": -8.0,           # 回撤恢复到此值才恢复开仓(%)
-        "momentum_reversal_v1": -5.0,      # 动量反转触发减仓/离场(放宽到-5)
-        "momentum_reversal_v2": -2.0,      # 加速度恶化阈值(放宽到-2)
-        "trailing_profit_floor": 6.0,      # 浮盈保护启动阈值(%)(提高到6%)
-        "trailing_pullback": 4.0,          # 从峰值回撤超过该值离场(%)(放宽到4%)
-        "atr_stop_multiplier": 2.0,        # ATR止损倍数(放宽到2.0)
-        "score_zero_cooldown": 3,          # 分数低于清仓线需连续N天才真正清仓(防whipsaw)
-        "signal_confirm_days": 2,          # 新增：信号确认期，信号需持续N天才执行
-    },
-
-    # --- 牛市模式参数 ---
-    "bull": {
-        "buy_min_score": 20,              # 牛市买入门槛更低
-        "buy_min_v1": -2.0,               # 牛市允许轻微回撤时继续参与
-    },
-
-    # --- 震荡/熊市模式参数 ---
-    "chop": {
-        "buy_min_score": 25,
-        "range_high_score": 62,           # 震荡上沿分数
-        "range_low_score": 32,            # 震荡下沿分数
-    },
-
-    # --- 情绪动量控制参数 ---
-    "momentum": {
-        "buy_score_above_ma5": True,      # 买入需站上情绪MA5
-        "buy_min_breadth": 0.45,          # 买入时最小上涨家数占比
-        "buy_neglect_days": 1,            # 连续低迷天数(无人问津)阈值
-        "buy_neglect_score": 42,          # 无人问津分数上限
-        "buy_neglect_breadth_max": 0.45,  # 无人问津期市场广度上限
-        "sell_divergence_score": 78,      # 背离卖出触发分数
-        "sell_high_days_warning": 4,      # 高位持续天数预警
-        "sell_euphoria_persist_days": 4,  # 持续鼎沸天数阈值
-        "sell_euphoria_score": 82,        # 鼎沸分数阈值
-        "avoid_chase_score": 92,          # 禁止追高阈值
-        "score_z_top": 1.2,               # 情绪Z分数高位阈值
-    },
-
-    # --- 分数驱动仓位参数 (Score-Driven Position Sizing) ---
-    "score_position": {
-        "full_pos_score": 72,       # 满仓分数线 (从80降到72, 更早满仓)
-        "half_pos_score": 58,       # 半仓分数线 (从65降到58, 更早半仓)
-        "zero_pos_score": 45,       # 清仓分数线 (从50降到45, 更宽容)
-    },
-
-    # --- 回测与优化参数 ---
-    "backtest": {
-        "default_days": 365,
-        "fee_rate": 0.0015,
-        "leverage": 1.0,
-        "trend_floor_enabled": True,      # 趋势上行时维持底仓
-        "trend_floor_pos": 0.35,          # 趋势底仓
-        "ma_window": 20,                  # 趋势判定均线
-        "optimizer": {
-            "enabled": True,
-            "target_total_return": 0.8,    # 80% (降低目标，优先控制风险)
-            "leverage_grid": [1.0, 1.2, 1.5, 2.0, 2.5, 3.0],
-            "trend_floor_grid": [0.0, 0.35, 0.5, 0.7, 0.85],
-            "fee_rate_grid": [0.0015],
-            "max_drawdown_limit": 0.22     # 22% (放宽到22%让2.0x杠杆通过)
-        }
-    }
 }

@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from typing import Optional
 from db.connection import fetch_df
 from etl.sync import sync_engine
+from strategy.sentiment.live_monitor import live_sentiment_monitor
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Market"])
@@ -164,36 +165,80 @@ def _select_low_correlation_candidates(candidates: pd.DataFrame, trade_date: str
     return selected.sort_values(["selection_order", "composite_score"], ascending=[True, False]).head(top_n)
 
 @router.get("/market_sentiment")
-def get_market_sentiment(days: int = 365):
-    """获取市场情绪历史数据 - 返回从旧到新的时间序列"""
+def get_market_sentiment(days: int = 365, force_macro_refresh: bool = False):
+    """获取市场情绪历史数据，并叠加交易日实时情绪看板。"""
     try:
         # 先获取最近 N 天的数据（按日期倒序），然后反转成正序
         df = fetch_df(f"SELECT trade_date, score, label, details FROM market_sentiment ORDER BY trade_date DESC LIMIT {days}")
         if df.empty:
-            return {"status": "success", "data": {"dates": [], "sentiment": [], "index": []}}
+            live_payload = live_sentiment_monitor.build_live_overlay(
+                latest_trade_date=None,
+                latest_sentiment=None,
+                force_macro_refresh=force_macro_refresh,
+            )
+            return {
+                "status": "success",
+                "data": {
+                    "dates": [],
+                    "sentiment": [],
+                    "index": [],
+                    "live": live_payload,
+                    "automation": live_payload.get("automation") or {},
+                },
+            }
         
         # 反转数据顺序，实现从旧到新
         records = df.iloc[::-1].to_dict('records')
         dates = [str(r['trade_date'])[:10] for r in records]
+        min_date = dates[0]
+        max_date = dates[-1]
+
+        daily_stats_df = fetch_df(
+            """
+            SELECT
+                trade_date,
+                COUNT(*) FILTER (WHERE pct_chg >= 9.5) AS limit_up_count,
+                COUNT(*) FILTER (WHERE pct_chg <= -9.5) AS limit_down_count,
+                COUNT(*) FILTER (WHERE high >= pre_close * 1.095 AND pct_chg < 9.5) AS broken_count
+            FROM daily_price
+            WHERE trade_date BETWEEN ? AND ?
+            GROUP BY trade_date
+            ORDER BY trade_date
+            """,
+            (min_date, max_date),
+        )
+        daily_stats_map = {}
+        if not daily_stats_df.empty:
+            for _, row in daily_stats_df.iterrows():
+                daily_stats_map[str(row["trade_date"])[:10]] = {
+                    "limit": int(row.get("limit_up_count") or 0),
+                    "limit_down": int(row.get("limit_down_count") or 0),
+                    "failure": int(row.get("broken_count") or 0),
+                }
+
         sentiment = []
         for r in records:
+            trade_date = str(r['trade_date'])[:10]
             details = r.get('details')
             if isinstance(details, str):
                 try:
                     details = json.loads(details)
                 except Exception:
                     details = {}
+            details = details or {}
+            factors = details.setdefault("factors", {})
+            stats_row = daily_stats_map.get(trade_date)
+            if stats_row:
+                factors.update(stats_row)
             details = _sanitize_json_value(details)
             sentiment.append({
-                'trade_date': str(r['trade_date'])[:10],
+                'trade_date': trade_date,
                 'value': _sanitize_json_value(r['score']),
                 'label': r['label'] or "观望",
                 'details': details
             })
         
         # 获取上证指数数据（指数数据在 market_index 表）
-        min_date = dates[0]
-        max_date = dates[-1]
         index_df = fetch_df(
             """
             SELECT trade_date, close
@@ -215,7 +260,23 @@ def get_market_sentiment(days: int = 365):
             last_index = iv
             index.append(iv)
         
-        return {"status": "success", "data": {"dates": dates, "sentiment": sentiment, "index": index}}
+        latest_sentiment = sentiment[-1] if sentiment else None
+        live_payload = live_sentiment_monitor.build_live_overlay(
+            latest_trade_date=max_date,
+            latest_sentiment=latest_sentiment,
+            force_macro_refresh=force_macro_refresh,
+        )
+
+        return {
+            "status": "success",
+            "data": {
+                "dates": dates,
+                "sentiment": sentiment,
+                "index": index,
+                "live": live_payload,
+                "automation": live_payload.get("automation") or {},
+            },
+        }
     except Exception as e:
         return {"status": "error", "message": str(e)}
 

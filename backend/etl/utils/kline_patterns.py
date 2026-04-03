@@ -1813,6 +1813,14 @@ def _build_level_candidate(
         basis = f"{window}日均线"
         definition = f"近{window}个交易日平均成本线"
         breach_rule = "收盘跌破说明均线支撑削弱" if level_type == "support" else "放量站上才算均线压力化解"
+    elif source == "PRE_CLOSE":
+        basis = "昨收价"
+        definition = "上一交易日收盘价，代表短线多空分界线"
+        breach_rule = "跌回昨收下方说明隔夜优势消失" if level_type == "support" else "站回昨收上方才算修复日内弱势"
+    elif source == "OPEN":
+        basis = "开盘价"
+        definition = "当日开盘成本区，适合作为盘中强弱分界"
+        breach_rule = "跌破开盘价说明日内承接转弱" if level_type == "support" else "重新站上开盘价才算日内回稳"
     elif source.startswith("LOW_"):
         window = source.replace("LOW_", "")
         basis = f"近{window}日最低价"
@@ -1961,11 +1969,17 @@ def get_professional_commentary_detailed(
     ma20 = last.get('ma20', None)
     ma60 = last.get('ma60', None)
 
+    prev_close = _safe_number(df.iloc[-2]["close"] if len(df) >= 2 else close, close) or close
+
     # 量能分析
-    vol_5_avg = last_5[vol_col].mean()
-    vol_20_avg = last_20[vol_col].mean() if len(last_20) >= 20 else vol_5_avg
-    vol_ratio_5 = (vol_today / vol_5_avg - 1) if vol_5_avg > 0 else 0
-    vol_ratio_20 = (vol_today / vol_20_avg - 1) if vol_20_avg > 0 else 0
+    vol_5_avg = _safe_number(last_5[vol_col].mean(), 0.0) or 0.0
+    vol_20_avg = _safe_number(last_20[vol_col].mean() if len(last_20) >= 20 else vol_5_avg, 0.0) or 0.0
+    volume_ratio = _safe_number(last.get("volume_ratio"))
+    if volume_ratio is None or volume_ratio <= 0:
+        volume_ratio = round(vol_today / vol_5_avg, 2) if vol_5_avg > 0 else None
+    volume_ratio_20 = round(vol_today / vol_20_avg, 2) if vol_20_avg > 0 else None
+    vol_ratio_5 = ((volume_ratio or 1.0) - 1.0) if volume_ratio is not None else 0.0
+    vol_ratio_20 = ((volume_ratio_20 or 1.0) - 1.0) if volume_ratio_20 is not None else 0.0
 
     # 涨跌幅统计
     pct_5_avg = last_5[pct_col].mean() if pct_col and len(last_5) >= 5 else 0
@@ -1981,16 +1995,39 @@ def get_professional_commentary_detailed(
         amplitude_5_avg = 0
 
     # 换手率（如果有）
-    turnover = last.get('turnover_rate', None)
+    turnover = _safe_number(last.get('turnover_rate'))
 
     # 融资数据（如果有）
-    rzye = last.get('rzye', None)
-    rzmre = last.get('rzmre', None)
-    rzche = last.get('rzche', None)
+    rzye = _safe_number(last.get('rzye'))
+    rzmre = _safe_number(last.get('rzmre'))
+    rzche = _safe_number(last.get('rzche'))
 
     # 资金流向
-    amount_today = last.get('amount', None)
-    amount_5_avg = last_5['amount'].mean() if 'amount' in last_5.columns else None
+    amount_today = _safe_number(last.get('amount'))
+    amount_5_avg = _safe_number(last_5['amount'].mean(), 0.0) if 'amount' in last_5.columns else 0.0
+    amount_ratio = ((amount_today / amount_5_avg) - 1.0) if amount_today and amount_5_avg else 0.0
+    net_mf_amount = _safe_number(last.get("net_mf_amount"), 0.0) or 0.0
+    net_mf_ratio = _safe_number(last.get("net_mf_ratio"))
+    big_order_ratio = _safe_number(last.get("big_order_ratio"))
+    factor_score = _safe_number(last.get("factor_score"))
+    trend_factor = _safe_number(last.get("trend_score"))
+    flow_factor = _safe_number(last.get("flow_score"))
+    quality_factor = _safe_number(last.get("quality_score"))
+    value_factor = _safe_number(last.get("value_score"))
+    event_factor = _safe_number(last.get("event_score"))
+    rps_20 = _safe_number(last.get("rps_20"))
+    rps_50 = _safe_number(last.get("rps_50"))
+    rps_120 = _safe_number(last.get("rps_120"))
+    recent_net_flows = [
+        _safe_number(item, 0.0) or 0.0
+        for item in (last_5["net_mf_amount"].tolist() if "net_mf_amount" in last_5.columns else [])
+    ]
+    flow_3_sum = float(sum(recent_net_flows[-3:])) if recent_net_flows else 0.0
+    positive_flow_days_3 = int(sum(1 for item in recent_net_flows[-3:] if item > 0))
+    negative_flow_days_3 = int(sum(1 for item in recent_net_flows[-3:] if item < 0))
+    latest_snapshot = commentary_context.get("realtime_snapshot") or {}
+    quote_time = str(latest_snapshot.get("quote_time") or "").strip()
+    quote_mode = "realtime" if quote_time else "close"
 
     institution_view = []
     hotmoney_view = []
@@ -2328,6 +2365,8 @@ def get_professional_commentary_detailed(
         })
 
     # 日内分型（上下影线）
+    up_shadow = 0.0
+    down_shadow = 0.0
     if high > low:
         up_shadow = (high - max(close, open_price)) / (high - low) * 100 if high > low else 0
         down_shadow = (min(close, open_price) - low) / (high - low) * 100 if high > low else 0
@@ -2474,8 +2513,8 @@ def get_professional_commentary_detailed(
                 "desc": "放量滞涨信号，注意风险"
             })
 
-    # === 4. 决策层：给出更清晰的交易执行建议 ===
-    trend_score = 0
+    # === 4. 决策层：趋势/量价/资金/实时位置主导，形态仅作辅助参考 ===
+    trend_score = 0.0
     if ma20 is not None and ma60 is not None and not (pd.isna(ma20) or pd.isna(ma60)):
         if close > ma20 > ma60:
             trend_score += 18
@@ -2490,57 +2529,105 @@ def get_professional_commentary_detailed(
             trend_score += 10
         elif close < ma5 < ma10:
             trend_score -= 10
+    if trend_factor is not None:
+        trend_score += float(np.clip((trend_factor - 50.0) * 0.24, -12.0, 12.0))
 
-    momentum_score = 0
+    momentum_score = 0.0
     if pct_today >= 7:
-        momentum_score += 14
+        momentum_score += 12
     elif pct_today >= 3:
-        momentum_score += 8
+        momentum_score += 7
     elif pct_today <= -7:
-        momentum_score -= 14
+        momentum_score -= 12
     elif pct_today <= -3:
-        momentum_score -= 8
+        momentum_score -= 7
 
     if pct_10_sum >= 18:
-        momentum_score += 10
+        momentum_score += 8
     elif pct_10_sum >= 8:
-        momentum_score += 5
+        momentum_score += 4
     elif pct_10_sum <= -18:
-        momentum_score -= 10
+        momentum_score -= 8
     elif pct_10_sum <= -8:
-        momentum_score -= 5
+        momentum_score -= 4
 
-    volume_score = 0
-    if vol_ratio_20 > 1.0 and pct_today >= 0:
-        volume_score += 10
-    elif vol_ratio_20 > 0.3:
-        volume_score += 5
-    elif vol_ratio_20 < -0.4:
-        volume_score -= 6
+    if rps_20 is not None:
+        if rps_20 >= 85:
+            momentum_score += 6
+        elif rps_20 >= 70:
+            momentum_score += 3
+        elif rps_20 <= 20:
+            momentum_score -= 6
+        elif rps_20 <= 35:
+            momentum_score -= 3
+    if rps_50 is not None:
+        if rps_50 >= 80:
+            momentum_score += 3
+        elif rps_50 <= 25:
+            momentum_score -= 3
 
-    if vol_ratio_5 > 1.5 and pct_today > 2:
-        volume_score += 6
-    elif vol_ratio_5 > 1.0 and pct_today < -3:
-        volume_score -= 8
+    volume_score = 0.0
+    if volume_ratio is not None:
+        if volume_ratio >= 1.6 and pct_today >= 0:
+            volume_score += 8
+        elif volume_ratio >= 1.2 and pct_today >= 0:
+            volume_score += 4
+        elif volume_ratio <= 0.8 and abs(pct_today) < 1.5:
+            volume_score -= 2
+    if volume_ratio_20 is not None:
+        if volume_ratio_20 >= 1.8 and pct_today >= 0:
+            volume_score += 5
+        elif volume_ratio_20 <= 0.75:
+            volume_score -= 4
+    if turnover is not None:
+        if turnover >= 10 and pct_today >= 0:
+            volume_score += 4
+        elif turnover <= 2 and close < (ma20 or close):
+            volume_score -= 3
+    if amount_ratio >= 0.5 and pct_today >= 0:
+        volume_score += 3
 
-    pattern_score = 0
+    capital_score = 0.0
+    if flow_factor is not None:
+        capital_score += float(np.clip((flow_factor - 50.0) * 0.18, -8.0, 8.0))
+    if factor_score is not None:
+        capital_score += float(np.clip((factor_score - 50.0) * 0.16, -8.0, 8.0))
+    if net_mf_amount > 0:
+        capital_score += 6 if positive_flow_days_3 >= 2 else 3
+    elif net_mf_amount < 0:
+        capital_score -= 6 if negative_flow_days_3 >= 2 else 3
+    if big_order_ratio is not None:
+        if big_order_ratio >= 0.2:
+            capital_score += 2
+        elif big_order_ratio <= -0.2:
+            capital_score -= 2
+
+    pattern_score = 0.0
     for item in pattern_view:
         p_type = str(item.get("type", ""))
-        level = str(item.get("level", "neutral"))
         if p_type in {"bullish", "reversal_bull"}:
-            pattern_score += 8 if level in {"strong", "medium"} else 4
+            pattern_score += 0.8
         elif p_type in {"reversal_bear", "warning"}:
-            pattern_score -= 8 if level in {"warning", "strong"} else 4
-        elif p_type == "special":
-            pattern_score += 1
+            pattern_score -= 0.8
+    pattern_score = float(np.clip(pattern_score, -2.0, 2.0))
 
-    risk_penalty = 0
+    risk_penalty = 0.0
     for item in risk_alert:
         risk_penalty += {"high": 12, "medium": 8, "low": 4}.get(str(item.get("level", "low")), 4)
     if amplitude_today > 5 and amplitude_today > amplitude_5_avg * 1.5:
         risk_penalty += 4
+    if up_shadow > 55 and pct_today > 2:
+        risk_penalty += 3
+    if close < (ma20 or close) and net_mf_amount < 0 and (volume_ratio or 1.0) >= 1.2:
+        risk_penalty += 4
 
-    score = int(np.clip(50 + trend_score + momentum_score + volume_score + pattern_score - risk_penalty, 0, 100))
+    score = int(
+        np.clip(
+            50 + trend_score + momentum_score + volume_score + capital_score + pattern_score - risk_penalty,
+            0,
+            100,
+        )
+    )
     bias, action, confidence, style = _decision_bucket(score)
 
     high_5 = _safe_number(last_5["high"].max() if "high" in last_5.columns else None)
@@ -2551,19 +2638,23 @@ def get_professional_commentary_detailed(
     low_20 = _safe_number(last_20["low"].min() if "low" in last_20.columns else None)
 
     support_candidates = [
+        _build_level_candidate("support", "PRE_CLOSE", prev_close, close, 0.98),
+        _build_level_candidate("support", "OPEN", open_price, close, 0.96),
         _build_level_candidate("support", "MA5", ma5, close, 0.95),
-        _build_level_candidate("support", "MA10", ma10, close, 1.05),
-        _build_level_candidate("support", "MA20", ma20, close, 1.2),
+        _build_level_candidate("support", "MA10", ma10, close, 1.08),
+        _build_level_candidate("support", "MA20", ma20, close, 1.22),
         _build_level_candidate("support", "MA60", ma60, close, 1.25),
-        _build_level_candidate("support", "LOW_5", low_5, close, 0.92),
-        _build_level_candidate("support", "LOW_10", low_10, close, 1.08),
-        _build_level_candidate("support", "LOW_20", low_20, close, 1.22),
+        _build_level_candidate("support", "LOW_5", low_5, close, 0.94),
+        _build_level_candidate("support", "LOW_10", low_10, close, 1.1),
+        _build_level_candidate("support", "LOW_20", low_20, close, 1.24),
     ]
     resistance_candidates = [
-        _build_level_candidate("resistance", "HIGH_5", high_5, close, 0.94),
-        _build_level_candidate("resistance", "HIGH_10", high_10, close, 1.06),
-        _build_level_candidate("resistance", "HIGH_20", high_20, close, 1.2),
-        _build_level_candidate("resistance", "MA60", ma60, close, 1.12),
+        _build_level_candidate("resistance", "PRE_CLOSE", prev_close, close, 0.98),
+        _build_level_candidate("resistance", "OPEN", open_price, close, 0.96),
+        _build_level_candidate("resistance", "HIGH_5", high_5, close, 0.95),
+        _build_level_candidate("resistance", "HIGH_10", high_10, close, 1.08),
+        _build_level_candidate("resistance", "HIGH_20", high_20, close, 1.22),
+        _build_level_candidate("resistance", "MA60", ma60, close, 1.15),
     ]
     support_levels = _select_key_levels(close, [item for item in support_candidates if item], "support")
     resistance_levels = _select_key_levels(close, [item for item in resistance_candidates if item], "resistance")
@@ -2572,29 +2663,110 @@ def get_professional_commentary_detailed(
     support_2 = support_levels[1]["price"] if len(support_levels) > 1 else None
     resistance_1 = resistance_levels[0]["price"] if resistance_levels else None
     resistance_2 = resistance_levels[1]["price"] if len(resistance_levels) > 1 else None
-    stop_level = support_2 or support_1 or low_20 or ma20
+    stop_level = support_2 or support_1 or low_20 or ma20 or prev_close
 
-    fmt_level = lambda value: f"{value:.2f}" if value is not None else "待确认"
+    def fmt_level(value: float | None) -> str:
+        return f"{value:.2f}" if value is not None else "待确认"
+
+    def distance_pct(level: float | None) -> float | None:
+        if level is None or close <= 0:
+            return None
+        return round(abs(close - level) / close * 100, 2)
+
+    dist_support = distance_pct(support_1)
+    dist_resistance = distance_pct(resistance_1)
+    near_support = dist_support is not None and dist_support <= 1.8
+    near_resistance = dist_resistance is not None and dist_resistance <= 1.8
+
+    if near_support and near_resistance:
+        zone_label = "窄区间"
+    elif near_support:
+        zone_label = "贴近支撑"
+    elif near_resistance:
+        zone_label = "逼近压力"
+    else:
+        zone_label = "区间中段"
 
     if action in {"关注", "试错"}:
-        entry_text = (
-            f"优先看回踩 {fmt_level(support_1)} 一带能否企稳；若放量突破 {fmt_level(resistance_1)}，可顺势跟进。"
-        )
-        add_text = f"只有站稳 {fmt_level(resistance_1)} 且量能继续放大，才考虑加仓。"
-        reduce_text = f"若跌破 {fmt_level(support_1)} 或出现量价背离，先减仓锁定主动权。"
-        invalid_text = f"若收盘有效跌破 {fmt_level(stop_level)}，本轮转强逻辑失效。"
+        signal_color = "buy"
+        signal_label = "买入"
+    elif action in {"减仓", "回避", "持币"}:
+        signal_color = "sell"
+        signal_label = "卖出"
+    else:
+        signal_color = "watch"
+        signal_label = "观望"
+
+    volume_trigger = 1.2 if score >= 60 else 1.3
+    snapshot_text = f"基于 {quote_time} 最新快照" if quote_mode == "realtime" else "基于最近收盘数据"
+
+    if action in {"关注", "试错"}:
+        if near_support:
+            current_action_text = (
+                f"现价贴近支撑1 {fmt_level(support_1)}，优先等回踩不破再试错，不追离支撑过远的拉升。"
+            )
+            entry_text = (
+                f"回踩 {fmt_level(support_1)} 附近不破，且量比回到 {volume_trigger:.1f} 以上，可先小仓试错。"
+            )
+        elif near_resistance:
+            current_action_text = (
+                f"现价逼近压力1 {fmt_level(resistance_1)}，此处不追高，只有放量站上后才考虑跟进。"
+            )
+            entry_text = (
+                f"只有放量站上 {fmt_level(resistance_1)}，并维持在该位上方，才把观察升级为跟进。"
+            )
+        else:
+            current_action_text = (
+                f"现价位于支撑 {fmt_level(support_1)} 与压力 {fmt_level(resistance_1)} 之间，优先等回踩支撑或突破压力再动作。"
+            )
+            entry_text = (
+                f"回踩 {fmt_level(support_1)} 不破可试错；若放量站上 {fmt_level(resistance_1)}，可顺势跟进。"
+            )
+        add_text = f"加仓只在站稳 {fmt_level(resistance_1)} 且资金没有重新转弱时执行。"
+        reduce_text = f"若跌破 {fmt_level(support_1)} 或主力重新转净流出，先把仓位降下来。"
+        invalid_text = f"若收盘有效跌破 {fmt_level(stop_level)}，当前转强逻辑失效。"
     elif action == "观望":
+        if near_support:
+            current_action_text = (
+                f"现价靠近支撑1 {fmt_level(support_1)}，但趋势和资金还没完全共振，先看是否止跌企稳。"
+            )
+        elif near_resistance:
+            current_action_text = (
+                f"现价靠近压力1 {fmt_level(resistance_1)}，未放量前按反弹看待，暂不追价。"
+            )
+        else:
+            current_action_text = (
+                f"现价位于区间中部，盈亏比一般，等靠近支撑或突破压力后再决策。"
+            )
         entry_text = f"等待放量站稳 {fmt_level(resistance_1)}，或回踩 {fmt_level(support_1)} 后再确认。"
-        add_text = "确认前不主动加仓，避免在震荡区间内追价。"
-        reduce_text = f"若再度失守 {fmt_level(stop_level)}，偏弱结构会进一步强化。"
+        add_text = "确认前不主动加仓，避免在区间中部来回追价。"
+        reduce_text = f"若再次失守 {fmt_level(stop_level)}，偏弱结构会进一步强化。"
         invalid_text = f"未收复 {fmt_level(resistance_1)} 前，不把反弹视为趋势反转。"
     else:
-        entry_text = "不主动开新仓，反弹优先处理风险和仓位。"
-        add_text = "暂不考虑加仓，先看弱势结构是否修复。"
-        reduce_text = f"接近 {fmt_level(resistance_1)} 但量能跟不上，可继续减仓。"
-        invalid_text = f"只有重新站稳 {fmt_level(resistance_1)} 并放量，弱势判断才可能修复。"
+        if near_resistance:
+            current_action_text = (
+                f"反抽已接近压力1 {fmt_level(resistance_1)}，更适合借反弹减仓，而不是去抢修复。"
+            )
+        elif near_support:
+            current_action_text = (
+                f"现价贴近支撑1 {fmt_level(support_1)} 但承接仍弱，支撑若失守要优先执行风控。"
+            )
+        else:
+            current_action_text = "趋势和资金仍偏弱，当前以防守处理为主，不做主动开仓。"
+        entry_text = "不主动开新仓，先把风险和仓位顺序放在前面。"
+        add_text = "未重新转强前不考虑加仓。"
+        reduce_text = f"若反抽 {fmt_level(resistance_1)} 仍无量，优先继续减仓。"
+        invalid_text = (
+            f"只有重新站稳 {fmt_level(resistance_1)} 且量比回到 {volume_trigger:.1f} 以上，弱势判断才算修复。"
+        )
 
-    risk_brief = risk_alert[0]["title"] if risk_alert else ("量能不足" if vol_ratio_20 < 0.8 else "等待确认")
+    risk_brief = "等待确认"
+    if risk_alert:
+        risk_brief = risk_alert[0]["title"]
+    elif net_mf_amount < 0:
+        risk_brief = "资金承接偏弱"
+    elif volume_ratio is not None and volume_ratio < 0.9:
+        risk_brief = "量能不足"
 
     decision_summary = (
         f"{bias}，当前以{style}为主，建议 {action}。"
@@ -2602,26 +2774,120 @@ def get_professional_commentary_detailed(
     )
 
     key_levels = [*support_levels, *resistance_levels]
+    for item in key_levels:
+        if item.get("type") == "support":
+            item["trigger"] = (
+                f"回踩 {fmt_level(item.get('price'))} 不破且量比不低于 {volume_trigger:.1f}，才考虑承接；跌破则防守失败。"
+            )
+            item["note"] = f"{item['note']} 操作：{item['trigger']}"
+        else:
+            item["trigger"] = (
+                f"只有放量站上 {fmt_level(item.get('price'))} 并维持住，才算压力化解；无量靠近更适合减仓或继续观望。"
+            )
+            item["note"] = f"{item['note']} 操作：{item['trigger']}"
+
     level_methodology = [
-        "支撑位定义：从现价下方的 MA5/10/20/60 与近 5/10/20 日低点中筛选，优先选择距离更近、周期更长、且多来源重合的价位。",
-        "压力位定义：从现价上方的近 5/10/20 日高点及 MA60 中筛选，优先选择距离更近、历史抛压更明确、且需要量能确认的价位。",
+        "支撑位定义：优先从 MA10/20/60、昨收价、开盘价与近 5/10/20 日低点里找离现价最近且有多来源共振的防守位。",
+        "压力位定义：优先从昨收价、开盘价、近 5/10/20 日高点及 MA60 里找上方最先遇到的抛压/突破确认位。",
+        "信号定义：交易结论以趋势、量价、主力资金、量比/换手和实时位置主导，K 线形态只做辅助参考。",
     ]
 
-    observation_points = []
-    observation_points.extend(level_methodology)
-    if institution_view:
-        observation_points.append(institution_view[0]["desc"])
-    if hotmoney_view:
-        observation_points.append(hotmoney_view[0]["desc"])
-    if pattern_view:
-        observation_points.append(f"{pattern_view[0]['pattern']}：{pattern_view[0]['desc']}")
+    signal_reasons: list[dict[str, Any]] = []
+
+    def add_reason(kind: str, title: str, desc: str, weight: int) -> None:
+        text = str(desc or "").strip()
+        if not text:
+            return
+        signal_reasons.append({
+            "kind": kind,
+            "title": title,
+            "desc": text,
+            "weight": abs(int(weight)),
+        })
+
+    if ma20 is not None and ma60 is not None and not (pd.isna(ma20) or pd.isna(ma60)):
+        if close > ma20 > ma60:
+            add_reason("buy", "趋势结构偏强", f"现价站上 MA20/MA60，趋势评分 {trend_factor:.1f}。" if trend_factor is not None else "现价站上 MA20/MA60，中期趋势偏强。", 10)
+        elif close < ma20 < ma60:
+            add_reason("sell", "趋势结构偏弱", f"现价位于 MA20/MA60 下方，趋势评分 {trend_factor:.1f}。" if trend_factor is not None else "现价位于 MA20/MA60 下方，主趋势仍偏弱。", 10)
+        else:
+            add_reason("watch", "趋势仍待确认", "价格虽然出现修复，但均线尚未形成顺向共振。", 6)
+
+    if volume_ratio is not None:
+        if volume_ratio >= 1.5 and pct_today >= 0:
+            add_reason("buy", "量比有效放大", f"量比 {volume_ratio:.2f}，说明跟风盘和承接同时在放大。", 8)
+        elif volume_ratio <= 0.85 and abs(pct_today) < 1.5:
+            add_reason("watch", "量能不足", f"量比仅 {volume_ratio:.2f}，没有形成能推动突破的增量成交。", 7)
+
+    if turnover is not None:
+        if turnover >= 10 and pct_today >= 0:
+            add_reason("buy", "换手支持上攻", f"换手率 {turnover:.1f}% ，筹码交换充分，后续更容易走趋势。", 6)
+        elif turnover <= 2 and signal_color != "buy":
+            add_reason("watch", "换手偏低", f"换手率 {turnover:.1f}% ，当前更像存量博弈，信号确认度有限。", 4)
+
+    if net_mf_amount > 0:
+        flow_desc = f"主力净流入 {net_mf_amount:.2f} 万元"
+        if positive_flow_days_3 >= 2:
+            flow_desc += f"，近 3 日有 {positive_flow_days_3} 天维持净流入。"
+        add_reason("buy", "资金承接偏强", flow_desc, 8)
+    elif net_mf_amount < 0:
+        flow_desc = f"主力净流出 {abs(net_mf_amount):.2f} 万元"
+        if negative_flow_days_3 >= 2:
+            flow_desc += f"，近 3 日有 {negative_flow_days_3} 天偏弱。"
+        add_reason("sell", "资金承接偏弱", flow_desc, 8)
+
+    if factor_score is not None:
+        if factor_score >= 65:
+            add_reason("buy", "综合因子偏强", f"综合因子分 {factor_score:.1f}，趋势/流动性/事件因子整体占优。", 7)
+        elif factor_score <= 40:
+            add_reason("sell", "综合因子偏弱", f"综合因子分 {factor_score:.1f}，尚未形成高胜率配置结构。", 7)
+
+    if near_support:
+        add_reason(
+            "watch" if signal_color == "watch" else signal_color,
+            "位置靠近支撑",
+            f"现价距支撑1 {fmt_level(support_1)} 仅 {dist_support:.2f}% ，盈亏比会优于在区间中部追价。",
+            7,
+        )
+    elif near_resistance:
+        add_reason(
+            "sell" if signal_color == "sell" else "watch",
+            "位置逼近压力",
+            f"现价距压力1 {fmt_level(resistance_1)} 仅 {dist_resistance:.2f}% ，需要放量确认后才算突破。",
+            7,
+        )
+    else:
+        add_reason("watch", "位置处于中段", f"当前位于支撑 {fmt_level(support_1)} 与压力 {fmt_level(resistance_1)} 之间，先等更优位置。", 5)
+
     if risk_alert:
-        observation_points.append(f"风险：{risk_alert[0]['desc']}")
-    observation_points = observation_points[:5]
+        add_reason("sell" if signal_color == "sell" else "watch", risk_alert[0]["title"], risk_alert[0]["desc"], 7)
+
+    if pattern_view:
+        add_reason(
+            "watch",
+            f"形态参考：{pattern_view[0]['pattern']}",
+            "形态信号只作为辅助观察，不参与关键点位和仓位主判断。",
+            2,
+        )
+
+    add_reason("watch", "快照口径", f"{snapshot_text}，当前判定位置为“{zone_label}”。", 3)
+    signal_reasons = sorted(signal_reasons, key=lambda item: (-item["weight"], item["title"]))
+    observation_points = [f"{item['title']}：{item['desc']}" for item in signal_reasons[:5]]
+    signal_reasons = [{k: v for k, v in item.items() if k != "weight"} for item in signal_reasons[:5]]
+
+    action_signal = {
+        "color": signal_color,
+        "label": signal_label,
+        "headline": current_action_text,
+        "zone": zone_label,
+        "trigger": entry_text,
+        "fallback": invalid_text,
+        "snapshot": snapshot_text,
+    }
 
     summary_parts = [
         f"【结论】{decision_summary}",
-        f"【计划】{entry_text}",
+        f"【动作】{current_action_text}",
         f"【风险】{risk_brief}，跌破 {fmt_level(stop_level)} 需收缩仓位。",
     ]
     summary_parts = [item for item in summary_parts if item]
@@ -2634,6 +2900,16 @@ def get_professional_commentary_detailed(
     hotmoney_sorted = sorted(hotmoney_view, key=lambda x: hotmoney_order.get(x.get("level", "neutral"), 4))
     pattern_sorted = sorted(pattern_view, key=lambda x: pattern_order.get(x.get("type", "special"), 2))
 
+    intraday_context = {
+        "mode": quote_mode,
+        "quote_time": quote_time or None,
+        "snapshot": snapshot_text,
+        "zone": zone_label,
+        "distance_to_support_1": dist_support,
+        "distance_to_resistance_1": dist_resistance,
+        "status": current_action_text,
+    }
+
     return {
         "summary": " | ".join(summary_parts),
         "decision": {
@@ -2645,12 +2921,16 @@ def get_professional_commentary_detailed(
             "summary": decision_summary,
         },
         "trade_plan": {
+            "current": current_action_text,
             "entry": entry_text,
             "add": add_text,
             "reduce": reduce_text,
             "invalid": invalid_text,
             "position": _position_text(action, confidence),
         },
+        "action_signal": action_signal,
+        "signal_reasons": signal_reasons,
+        "intraday_context": intraday_context,
         "key_levels": key_levels,
         "level_methodology": level_methodology,
         "observation_points": observation_points,
@@ -2661,18 +2941,39 @@ def get_professional_commentary_detailed(
         "risk_alert": risk_alert,
         "technical": {
             "close": close,
+            "open": open_price,
+            "pre_close": prev_close,
             "pct_today": pct_today,
             "volume": vol_today,
+            "volume_ratio": volume_ratio,
             "vol_ratio_5": vol_ratio_5,
             "vol_ratio_20": vol_ratio_20,
             "turnover": turnover,
+            "amount": amount_today,
+            "amount_ratio": amount_ratio,
+            "net_mf_amount": net_mf_amount,
+            "net_mf_ratio": net_mf_ratio,
+            "big_order_ratio": big_order_ratio,
             "amplitude": amplitude_today,
             "ma5": ma5,
             "ma10": ma10,
             "ma20": ma20,
             "ma60": ma60,
+            "factor_score": factor_score,
+            "trend_factor": trend_factor,
+            "flow_factor": flow_factor,
+            "quality_factor": quality_factor,
+            "value_factor": value_factor,
+            "event_factor": event_factor,
+            "rps_20": rps_20,
+            "rps_50": rps_50,
+            "rps_120": rps_120,
             "score": score,
+            "zone": zone_label,
+            "quote_time": quote_time or None,
             "support_1": support_1,
+            "support_2": support_2,
             "resistance_1": resistance_1,
+            "resistance_2": resistance_2,
         }
     }

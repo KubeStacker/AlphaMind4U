@@ -92,14 +92,11 @@ export const getTableStats = () => apiClient.post('/admin/db/query', {
 });
 
 // --- 市场数据 ---
-export const getMarketSentiment = (days = 30) => apiClient.get('/admin/market_sentiment', { params: { days } });
-export const getSentimentPreview = (src = 'dc') => apiClient.get('/admin/sentiment/preview', { params: { src } });
+export const getMarketSentiment = (days = 30, params = {}) =>
+  apiClient.get('/admin/market_sentiment', { params: { days, ...params } });
 export const getMarketSuggestion = (params = {}) => apiClient.get('/admin/market/suggestion', { params });
-export const syncSentiment = (days = 250, syncIndex = false) =>
-  apiClient.post('/admin/etl/sentiment', null, { params: { days, sync_index: syncIndex } });
-export const getBacktestResult = (optimize = true) => apiClient.get('/admin/backtest_result', { params: { optimize } });
-export const getBacktestGrid = () => apiClient.get('/admin/backtest_grid');
-export const getBacktestWalkforward = (trainDays = 120, testDays = 40) => apiClient.get('/admin/backtest_walkforward', { params: { train_days: trainDays, test_days: testDays } });
+export const syncSentiment = (days = 250) =>
+  apiClient.post('/admin/etl/sentiment', null, { params: { days } });
 export const getMainlineHistory = (days = 30) => apiClient.get('/admin/mainline_history', { params: { days } });
 export const getWatchlistRealtime = (codes, src = 'sina', analysisDepth = 'compact') =>
   apiClient.get('/admin/watchlist/realtime', { params: { codes, src, analysis_depth: analysisDepth } });
@@ -143,6 +140,11 @@ export const selectTemplate = (templateId) => apiClient.put('/admin/users/me/sel
 export const getUserHoldings = () => apiClient.get('/admin/users/me/holdings');
 export const updateUserHolding = (tsCode, holding) => apiClient.put(`/admin/users/me/holdings/${tsCode}`, holding);
 export const deleteUserHolding = (tsCode) => apiClient.delete(`/admin/users/me/holdings/${tsCode}`);
+export const parseHoldingsImage = (formData) =>
+  apiClient.post('/admin/users/me/holdings/parse-image', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
+export const batchUpdateUserHoldings = (payload) => apiClient.post('/admin/users/me/holdings/batch', payload);
 
 // --- AI智能分析 ---
 export const analyzeStockWithAI = (tsCode, templateId, forceRefresh = false) => 

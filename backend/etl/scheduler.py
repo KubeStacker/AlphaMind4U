@@ -5,6 +5,7 @@ from apscheduler.triggers.cron import CronTrigger
 from etl.sync import sync_engine
 import logging
 import pytz
+from strategy.sentiment.live_monitor import live_sentiment_monitor
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +17,9 @@ scheduler = AsyncIOScheduler(timezone=SHANGHAI_TZ)
 
 def start_scheduler():
     """启动定时数据采集任务调度器"""
+    if scheduler.running:
+        logger.info("定时任务调度器已在运行，跳过重复启动")
+        return
     
     # 1. 每日凌晨 00:05 更新基础数据 (股票列表)
     scheduler.add_job(
@@ -78,6 +82,19 @@ def start_scheduler():
         replace_existing=True
     )
 
+    # 7. 每10分钟刷新一次外部风险信号（CNBC 10Y / Pizza 指数）
+    scheduler.add_job(
+        live_sentiment_monitor.refresh_macro_signals,
+        CronTrigger(minute="*/10", timezone=SHANGHAI_TZ),
+        id="refresh_external_sentiment_signals",
+        name="刷新外部风险信号",
+        kwargs={"force": True},
+        misfire_grace_time=300,
+        coalesce=True,
+        max_instances=1,
+        replace_existing=True,
+    )
+
 
     scheduler.start()
     logger.info(
@@ -85,5 +102,6 @@ def start_scheduler():
         "  - 基础数据: 00:05 (股票列表) / 00:10 (概念分类)\n"
         "  - 收盘数据: 16:45 (主) / 18:30 (兜底)\n"
         "  - 财务报表: 周日 02:00\n"
-        "  - 外汇数据: 08:00"
+        "  - 外汇数据: 08:00\n"
+        "  - 外部风险信号: 每10分钟"
     )

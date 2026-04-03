@@ -19,3 +19,4 @@ backend/venv/
 frontend/dist/
 *.tmp
 *.bak
+.codex

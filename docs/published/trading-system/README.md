@@ -107,6 +107,7 @@ Jarvis-Quant
 ### Dashboard 首页
 
 - **情绪驾驶舱**: 首页顶部只负责回答“今天能不能打、打多大”，头部直接输出结论，不再额外拆标题，也不重复展示日期/分区标签；头部样式与主线区保持同一套紧凑规格，下方把市场节奏、建议仓位、进攻方式、风控底线收进固定四格；“预测情绪”改为按钮触发弹窗参考，不再在首页常驻单独结果区
+- **自动刷新**: 交易时段情绪板会按返回的 `dashboard_refresh_seconds` 自动轮询，并叠加上证/沪深300/深成指/科创50盘中快照；外部 10Y/Pizza 信号按 10 分钟节奏刷新，若运行环境无法访问海外站点，宏观字段会返回 unavailable
 - **主线作战板**: 首页底部只负责回答“先看什么方向”，按“持续性 + 强度 + 共振”筛出最多 3 条主线；顶部只保留轮动正文，不再额外挂标题和提示文案，龙头样本改为在左侧方向卡片内按点击懒加载展开，减少右侧拥挤和首屏等待
 - **加载稳定性**: Dashboard 内按钮触发的新内容应避免挤压首页主布局；情绪预测改为弹窗参考，主线趋势图和回测诊断保持固定容器，避免异步结果把卡片撑乱
 - **视觉风格**: 保持与 Watchlist 一致的克制商务底色，并用低饱和暖色区分情绪、低饱和冷色区分主线，避免单调但不做花哨装饰
@@ -175,13 +176,15 @@ Jarvis-Quant
 | `/admin/etl/sync` | POST | 统一 ETL 同步 |
 | `/admin/etl/sentiment` | POST | 重算市场情绪 |
 | `/admin/tasks/status` | GET | 任务队列状态 |
-| `/admin/market_sentiment` | GET | 市场情绪历史 |
+| `/admin/market_sentiment` | GET | 市场情绪历史 + 交易日实时叠加（盘中指数、10Y/Pizza 风险、自动刷新提示；涨停/跌停会按 `daily_price` 实时回填） |
 | `/admin/integrity` | GET | 数据完整性报告 |
-| `/admin/stock/analyze` | POST | 个股 AI 分析（摘要驱动、结论优先，并带入定位与关键点位定义） |
+| `/admin/stock/analyze` | POST | 个股 AI 分析（摘要驱动、结论优先，并带入主线/市场配合、定位与关键点位定义） |
 | `/admin/watchlist` | GET/POST | 当前登录用户的自选列表管理 |
 | `/admin/watchlist/{ts_code}` | DELETE | 删除当前登录用户自选 |
-| `/admin/watchlist/realtime` | GET | 当前登录用户的实时自选行情，支持 `analysis_depth=compact|full`，交易日优先展示当日快照 |
-| `/admin/watchlist/{ts_code}/analysis` | GET | 当前登录用户自选内单只股票深度分析（返回 `classification` / `level_methodology` / `key_levels[*].note`） |
+| `/admin/watchlist/realtime` | GET | 当前登录用户的实时自选行情，支持 `analysis_depth=compact|full`；交易日优先展示当日快照，`compact` 也会返回 `action_signal` / `signal_reasons` / `key_levels` / `technical.volume_ratio`，并额外直出行级 `volume_ratio` / `turnover_rate` 供列表首屏直接使用 |
+| `/admin/watchlist/{ts_code}/analysis` | GET | 当前登录用户自选内单只股票深度分析（返回 `action_signal` / `signal_reasons` / `intraday_context` / `classification` / `level_methodology` / `key_levels[*].note`） |
+| `/admin/users/me/holdings/batch` | POST | 批量更新当前登录用户持仓，可选同步到自选、可选按提交结果替换旧持仓 |
+| `/admin/users/me/holdings/parse-image` | POST | 识别持仓截图并返回可预览、可应用的结构化结果 |
 
 ### 策略接口
 
@@ -332,8 +335,9 @@ curl -X POST "http://localhost:8000/auth/token" \
   -d "username=admin&password=admin"
 
 # 个股 AI 分析：将上一步返回的 access_token 填入 Authorization
-# 后端会先把行情/资金/市场压缩成摘要，再要求模型输出结论、关键价位和动作
-# commentary_snapshot 会额外带入个股定位以及支撑/压力位的定义，减少模型把旧行业标签直接当主判断
+# 后端会先把行情、因子、资金、主线归属和市场环境压缩成非 JSON 摘要，
+# 再要求模型输出聚焦买卖点、仓位、触发/失效和“最相关主线 + 市场配合”的短结论
+# commentary_snapshot 会额外带入个股定位、支撑/压力位定义和动作参考，减少模型把旧行业标签直接当主判断
 curl -X POST "http://localhost:8000/admin/stock/analyze" \
   -H "Authorization: Bearer <access_token>" \
   -H "Content-Type: application/json" \
@@ -404,11 +408,13 @@ curl -X POST "http://localhost:8000/admin/stock/analyze" \
 - 主线识别采用“宽主题稳定跟踪 + 强势股细分驱动拆解”的双层输出：`mapped_name` 负责稳定归并，`focus_tags` / `driver_summary` 负责解释最近真正上涨的细分原因；当 `stock_basic.industry` 仍停留在上游宽口径、但概念强证据更明显指向下游高权重赛道时，会允许概念主导重分类，避免把半导体材料/设备转型公司压回传统材料或泛电子
 - `/admin/mainline/leaders` 的龙头评分会剔除北交所标的，并以近10日趋势先行、持续资金跟踪、成交热度和题材命中为主，不再退化成单日涨幅榜
 - 盘中预估依赖 `realtime_quote` 的可用性与权限
-- 高频自选刷新建议使用 `/admin/watchlist/realtime?analysis_depth=compact`，详情页再单独调用 `/admin/watchlist/{ts_code}/analysis`；若今日日线尚未 ETL 入库，接口仍会优先返回当日实时/收盘后快照，`/admin/stock/{ts_code}/kline` 也会补一根当日临时 bar
+- 高频自选刷新建议使用 `/admin/watchlist/realtime?analysis_depth=compact`，详情页再单独调用 `/admin/watchlist/{ts_code}/analysis`；`compact` 走批量轻分析，只拼列表首屏需要的动作信号/量比/换手/关键位，不再逐股运行完整深度点评；若今日日线尚未 ETL 入库，接口仍会优先返回当日实时/收盘后快照，`/admin/stock/{ts_code}/kline` 也会补一根当日临时 bar
 - 自选盯盘接口按当前登录用户隔离，`watchlist` 表使用 `user_id + ts_code` 复合主键；旧版全局自选会在启动时迁移到现有用户名下
 - 新增自选仅允许 `stock_basic` 中已存在的代码；遗留无效代码会以空占位返回，便于前端删除，不再拖垮整批刷新
-- Watchlist 页面当前拆成“持仓跟踪 + 观察列表”：非持仓自选会自动归到观察列表，列表默认只展示结论不展示 10D 历史，顶部不再单独放汇总卡，`试错 / 主动进攻` 信号会标红浮出，专注模式只展示持仓股
-- `/admin/stock/analyze` 默认不再注入关联个股推荐段，自定义模板建议优先使用 `{stock_snapshot}`、`{capital_flow_snapshot}`、`{market_context}`、`{holding_context}`、`{commentary_snapshot}`、`{analysis_snapshot}`
+- Watchlist 页面当前拆成“持仓跟踪 + 观察列表”：非持仓自选会自动归到观察列表，列表默认只展示结论不展示 10D 历史，顶部不再单独放汇总卡，`试错 / 主动进攻` 信号会标红浮出，专注模式只展示持仓股；观察列表默认折叠，折叠时自动刷新优先只更新持仓，观察价格改为手动展开后按需刷新；页面刷新时会优先恢复本地快照并后台并行更新自选与持仓，减少空白等待
+- Watchlist / Dashboard 首屏遵循“信号、点位、结论”顺序：不要额外叠加弱相关汇总卡或统计概览；支撑 / 压力 / 触发 / 失效等目标点位必须在卡片首屏直出
+- Watchlist 点位与操作建议当前以趋势、量价、主力资金、因子分和实时位置主导，K 线形态只做辅助参考；界面颜色语义统一为红色偏买入、绿色偏卖出、白色偏观望
+- `/admin/stock/analyze` 默认不再注入关联个股推荐段，并会把行情、因子、主线映射、市场环境压缩成非 JSON 摘要后交给模型；自定义模板建议优先使用 `{stock_snapshot}`、`{capital_flow_snapshot}`、`{sector_context}`、`{market_context}`、`{holding_context}`、`{commentary_snapshot}`、`{analysis_snapshot}`
 - 策略优化目标是「提高盈亏比 + 降低回撤」，无法承诺单日或单阶段绝对盈利
 
 ---
