@@ -177,13 +177,36 @@ class SentimentAnalyst:
                 SELECT ts_code, pct_chg, close, pre_close
                 FROM market_index
                 WHERE trade_date = '{trade_date}'
-                  AND ts_code IN ('000300.SH', '000001.SH', '399001.SZ')
+                  AND ts_code IN ('000001.SH', '399006.SZ', '000300.SH', '399001.SZ')
                 """
             )
             if not indices.empty:
-                for code in ['000300.SH', '000001.SH', '399001.SZ']:
+                index_components = {}
+                weighted_sum = 0.0
+                total_weight = 0.0
+                for code, weight in (('000001.SH', 0.55), ('399006.SZ', 0.45)):
                     tmp = indices[indices['ts_code'] == code]
-                    if not tmp.empty:
+                    if tmp.empty:
+                        continue
+                    row = tmp.iloc[0]
+                    pct = self._finite_number(row.get('pct_chg', 0.0), 0.0)
+                    if abs(pct) < 1e-9:
+                        close = self._finite_number(row.get('close', 0.0), 0.0)
+                        pre_close = self._finite_number(row.get('pre_close', 0.0), 0.0)
+                        if pre_close > 0:
+                            pct = (close - pre_close) / pre_close * 100.0
+                    index_components[code] = round(pct, 3)
+                    weighted_sum += pct * weight
+                    total_weight += weight
+
+                if total_weight > 0:
+                    stats['index_pct_chg'] = round(weighted_sum / total_weight, 3)
+                    stats['index_components'] = index_components
+                else:
+                    for code in ['000300.SH', '000001.SH', '399001.SZ']:
+                        tmp = indices[indices['ts_code'] == code]
+                        if tmp.empty:
+                            continue
                         row = tmp.iloc[0]
                         pct = self._finite_number(row.get('pct_chg', 0.0), 0.0)
                         if abs(pct) < 1e-9:
@@ -191,7 +214,7 @@ class SentimentAnalyst:
                             pre_close = self._finite_number(row.get('pre_close', 0.0), 0.0)
                             if pre_close > 0:
                                 pct = (close - pre_close) / pre_close * 100.0
-                        stats['index_pct_chg'] = round(pct, 1)
+                        stats['index_pct_chg'] = round(pct, 3)
                         break
         except:
             pass
@@ -467,6 +490,7 @@ class SentimentAnalyst:
                 "breadth": round(fingerprint.get('breadth_ratio', 0.5) * 100, 1),
                 "median_chg": round(fingerprint.get('median_pct_chg', 0), 1),
                 "index_chg": round(fingerprint.get('index_pct_chg', 0), 1),
+                "index_components": fingerprint.get('index_components', {}),
                 "limit": fingerprint.get('limit_up_count', 0),
                 "limit_down": fingerprint.get('limit_down_count', 0),
                 "failure": fingerprint.get('broken_count', 0),

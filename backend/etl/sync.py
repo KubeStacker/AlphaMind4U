@@ -238,6 +238,7 @@ class SyncEngine:
         
         同步情绪/回测依赖的核心指数:
         - 000001.SH: 上证指数
+        - 399006.SZ: 创业板指
         - 000300.SH: 沪深300
         - 399001.SZ: 深证成指
         - 000688.SH: 科创50
@@ -246,7 +247,7 @@ class SyncEngine:
             years: 同步的年数
             days: 同步的天数
         """
-        for code in ("000001.SH", "000300.SH", "399001.SZ", "000688.SH"):
+        for code in ("000001.SH", "399006.SZ", "000300.SH", "399001.SZ", "000688.SH"):
             self.sync_market_index(ts_code=code, years=years, days=days)
 
     def calculate_market_sentiment(self, days: int = 30):

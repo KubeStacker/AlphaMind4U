@@ -4,9 +4,9 @@
       <h1 class="text-xl font-bold text-white tracking-tight">系统管理控制台</h1>
       
       <!-- 紧凑型标签切换 -->
-      <div v-if="visibleTabs.length > 0" class="flex bg-business-dark p-1 rounded-xl border border-business-light shadow-lg self-start">
+      <div v-if="visibleTabs.length > 0" class="flex self-start rounded-xl border border-white/[0.06] bg-obsidian-800/90 p-1 shadow-[0_16px_30px_rgba(0,0,0,0.24)] backdrop-blur-xl">
         <button v-for="tab in visibleTabs" :key="tab.id" @click="handleTabClick(tab.id)"
-          :class="[activeTab === tab.id ? 'bg-business-accent text-white shadow-md' : 'text-slate-500 hover:text-slate-300', 'px-4 py-1.5 rounded-lg text-[11px] font-bold transition-all whitespace-nowrap']">
+          :class="[activeTab === tab.id ? 'border-white/[0.08] bg-white/[0.1] text-white shadow-[0_10px_20px_rgba(0,0,0,0.22)]' : 'border-white/[0.05] bg-obsidian-900/85 text-slate-300 hover:bg-white/[0.06] hover:text-white', 'rounded-lg border px-4 py-1.5 text-[11px] font-bold whitespace-nowrap transition-all']">
           {{ tab.name }}
         </button>
       </div>
@@ -239,58 +239,60 @@
 
     <!-- AI 模型配置 -->
     <div v-if="activeTab === 'ai'" class="space-y-4">
+      <!-- 模型配置 -->
       <div class="bg-business-dark rounded-2xl border border-business-light overflow-hidden shadow-business">
         <div class="p-4 border-b border-business-light flex justify-between items-center bg-slate-900/30">
           <div class="flex items-center space-x-2">
             <SparklesIcon class="w-4 h-4 text-purple-400" />
-            <h2 class="text-sm font-bold text-white">AI 模型配置</h2>
+            <h2 class="text-sm font-bold text-white">模型</h2>
           </div>
           <button @click="saveAIConfig" :disabled="aiConfigLoading" class="h-8 px-4 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-[10px] font-bold uppercase transition-all shadow-lg flex items-center space-x-1">
             <ArrowPathIcon :class="{'animate-spin': aiConfigLoading}" class="w-3 h-3" />
-            <span>保存配置</span>
+            <span>保存</span>
           </button>
         </div>
 
         <div class="p-5 space-y-5">
-          <!-- 模型提供商 -->
+          <!-- 模型选择 + 默认标记 -->
           <div class="space-y-2">
-            <label class="block text-[10px] font-bold text-slate-500 uppercase ml-1 tracking-wider">模型提供商</label>
-            <div class="grid grid-cols-2 gap-2">
+            <label class="block text-[10px] font-bold text-slate-500 uppercase ml-1 tracking-wider">分析模型</label>
+            <div class="grid grid-cols-3 gap-2">
               <button 
                 v-for="provider in modelProviders" 
                 :key="provider.value"
-                @click="aiConfig.model_provider = provider.value"
+                @click="selectProvider(provider.value)"
                 :class="aiConfig.model_provider === provider.value ? 'bg-purple-600 border-purple-400 text-white' : 'bg-business-darker border-business-light text-slate-400 hover:border-purple-500'"
-                class="px-4 py-2.5 rounded-xl border text-[11px] font-bold transition-all"
+                class="relative px-4 py-2.5 rounded-xl border text-[11px] font-bold transition-all"
               >
                 {{ provider.label }}
+                <span v-if="aiConfig.model_provider === provider.value && providerConfigs[provider.value].api_key" class="absolute -top-1.5 -right-1.5 w-2.5 h-2.5 rounded-full bg-green-400 border-2 border-business-dark"></span>
               </button>
+            </div>
+            <p class="text-[9px] text-slate-600 ml-1">当前模型将用于所有AI分析入口，各 provider 独立保存</p>
+          </div>
+
+          <!-- API Key + 地址 -->
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div class="space-y-2">
+              <label class="block text-[10px] font-bold text-slate-500 uppercase ml-1 tracking-wider">API Key</label>
+              <div class="relative">
+                <input v-model="aiConfig.api_key" :type="showApiKey ? 'text' : 'password'" class="w-full bg-business-darker border border-business-light rounded-xl px-4 py-2.5 text-xs font-medium text-white focus:outline-none focus:border-purple-500 transition-all pr-10" placeholder="sk-..." />
+                <button type="button" @click="showApiKey = !showApiKey" class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white">
+                  <EyeIcon v-if="!showApiKey" class="w-4 h-4" />
+                  <EyeSlashIcon v-else class="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+            <div class="space-y-2">
+              <label class="block text-[10px] font-bold text-slate-500 uppercase ml-1 tracking-wider">API 地址 <span class="text-slate-700 font-normal normal-case tracking-normal">(可选)</span></label>
+              <input v-model="aiConfig.base_url" type="text" class="w-full bg-business-darker border border-business-light rounded-xl px-4 py-2.5 text-xs font-medium text-white focus:outline-none focus:border-purple-500 transition-all" :placeholder="baseUrlPlaceholder" />
             </div>
           </div>
 
           <!-- 模型名称 -->
           <div class="space-y-2">
-            <label class="block text-[10px] font-bold text-slate-500 uppercase ml-1 tracking-wider">模型名称</label>
-            <input v-model="aiConfig.model_name" type="text" class="w-full bg-business-darker border border-business-light rounded-xl px-4 py-2.5 text-xs font-medium text-white focus:outline-none focus:border-purple-500 transition-all" placeholder="DeepSeek: deepseek-chat, OpenAI: gpt-4o" />
-            <p class="text-[9px] text-slate-600 ml-1">留空将使用提供商默认模型</p>
-          </div>
-
-          <!-- API 地址 -->
-          <div class="space-y-2">
-            <label class="block text-[10px] font-bold text-slate-500 uppercase ml-1 tracking-wider">API 地址</label>
-            <input v-model="aiConfig.base_url" type="text" class="w-full bg-business-darker border border-business-light rounded-xl px-4 py-2.5 text-xs font-medium text-white focus:outline-none focus:border-purple-500 transition-all" placeholder="留空使用默认地址" />
-          </div>
-
-          <!-- API Key -->
-          <div class="space-y-2">
-            <label class="block text-[10px] font-bold text-slate-500 uppercase ml-1 tracking-wider">API Key</label>
-            <div class="relative">
-              <input v-model="aiConfig.api_key" :type="showApiKey ? 'text' : 'password'" class="w-full bg-business-darker border border-business-light rounded-xl px-4 py-2.5 text-xs font-medium text-white focus:outline-none focus:border-purple-500 transition-all pr-10" placeholder="sk-..." />
-              <button type="button" @click="showApiKey = !showApiKey" class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white">
-                <EyeIcon v-if="!showApiKey" class="w-4 h-4" />
-                <EyeSlashIcon v-else class="w-4 h-4" />
-              </button>
-            </div>
+            <label class="block text-[10px] font-bold text-slate-500 uppercase ml-1 tracking-wider">模型名称 <span class="text-slate-700 font-normal normal-case tracking-normal">(可选)</span></label>
+            <input v-model="aiConfig.model_name" type="text" class="w-full bg-business-darker border border-business-light rounded-xl px-4 py-2.5 text-xs font-medium text-white focus:outline-none focus:border-purple-500 transition-all" :placeholder="modelPlaceholder" />
           </div>
 
           <!-- 生成参数 -->
@@ -304,11 +306,34 @@
               <input v-model.number="aiConfig.temperature" type="number" min="0" max="2" step="0.1" class="w-full bg-business-darker border border-business-light rounded-xl px-4 py-2.5 text-xs font-medium text-white focus:outline-none focus:border-purple-500 transition-all" />
             </div>
           </div>
+        </div>
+      </div>
 
-          <!-- System Prompt -->
+      <!-- 分析提示词 -->
+      <div class="bg-business-dark rounded-2xl border border-business-light overflow-hidden shadow-business">
+        <div class="p-4 border-b border-business-light flex justify-between items-center bg-slate-900/30">
+          <div class="flex items-center space-x-2">
+            <SparklesIcon class="w-4 h-4 text-purple-400" />
+            <h2 class="text-sm font-bold text-white">分析提示词</h2>
+          </div>
+          <div class="flex items-center gap-2">
+            <select v-if="promptTemplates.length" v-model="selectedTemplateId" @change="onSelectTemplate" class="bg-business-darker border border-business-light rounded-lg px-3 py-1.5 text-[10px] font-bold text-white outline-none focus:border-purple-500">
+              <option value="">使用默认模板</option>
+              <option v-for="tpl in promptTemplates" :key="tpl.id" :value="tpl.id">{{ tpl.name }}</option>
+            </select>
+            <button @click="saveAnalysisPrompt" class="h-8 px-4 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-[10px] font-bold uppercase transition-all shadow-lg flex items-center space-x-1">
+              <span>保存</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="p-5">
           <div class="space-y-2">
-            <label class="block text-[10px] font-bold text-slate-500 uppercase ml-1 tracking-wider">System Prompt</label>
-            <textarea v-model="aiConfig.system_prompt" rows="4" class="w-full bg-business-darker border border-business-light rounded-xl px-4 py-3 text-xs font-medium text-white focus:outline-none focus:border-purple-500 transition-all resize-none" placeholder="输入系统提示词，用于定义AI助手的行为和角色..."></textarea>
+            <div class="flex items-center justify-between">
+              <label class="text-[10px] font-bold text-slate-500 uppercase tracking-wider">提示词内容</label>
+              <span class="text-[9px] text-slate-600">可用变量：{stock_snapshot} {capital_flow_snapshot} {sector_context} {market_context} {holding_context} {commentary_snapshot} {analysis_snapshot}</span>
+            </div>
+            <textarea v-model="analysisPrompt" rows="12" class="w-full bg-business-darker border border-business-light rounded-xl px-4 py-3 text-xs font-medium text-white focus:outline-none focus:border-purple-500 transition-all resize-none font-mono" placeholder="输入分析提示词..."></textarea>
           </div>
         </div>
       </div>
@@ -318,26 +343,24 @@
         <div class="p-4 border-b border-business-light flex justify-between items-center bg-slate-900/30">
           <div class="flex items-center space-x-2">
             <SparklesIcon class="w-4 h-4 text-purple-400" />
-            <h2 class="text-sm font-bold text-white">提示词模板</h2>
+            <h2 class="text-sm font-bold text-white">模板管理</h2>
           </div>
           <button @click="showTemplateModal = true" class="h-8 px-4 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-[10px] font-bold uppercase transition-all shadow-lg flex items-center space-x-1">
-            <span>新建模板</span>
+            <span>新建</span>
           </button>
         </div>
 
         <div class="p-4 space-y-3">
           <div v-if="promptTemplates.length === 0" class="text-center text-slate-500 text-xs py-4">
-            暂无模板，点击新建创建一个
+            暂无模板，点击上方"新建"创建
           </div>
           <div v-for="tpl in promptTemplates" :key="tpl.id" class="bg-business-darker rounded-xl border border-business-light p-3">
             <div class="flex items-center justify-between mb-2">
               <div class="flex items-center gap-2">
                 <span class="text-xs font-bold text-white">{{ tpl.name }}</span>
                 <span v-if="tpl.is_default" class="px-1.5 py-0.5 rounded bg-purple-600/30 text-purple-300 text-[9px] font-bold">默认</span>
-                <span v-if="selectedTemplateId === tpl.id" class="px-1.5 py-0.5 rounded bg-green-600/30 text-green-300 text-[9px] font-bold">已选中</span>
               </div>
               <div class="flex gap-2">
-                <button v-if="selectedTemplateId !== tpl.id" @click="selectPromptTemplate(tpl.id)" class="text-[10px] text-purple-400 hover:text-purple-300 font-bold">选用</button>
                 <button @click="deletePromptTemplate(tpl.id)" class="text-[10px] text-red-400 hover:text-red-300 font-bold">删除</button>
               </div>
             </div>
@@ -597,20 +620,44 @@ const refreshAll = async () => {
 // AI 配置
 const aiConfigLoading = ref(false);
 const showApiKey = ref(false);
-const aiConfig = reactive({
-  model_provider: 'deepseek',
+
+const createProviderConfig = (provider) => ({
+  model_provider: provider,
   model_name: '',
   api_key: '',
   base_url: '',
   system_prompt: '',
   max_tokens: 1200,
-  temperature: 0.35
+  temperature: 0.35,
 });
+
+const providerConfigs = reactive({
+  deepseek: createProviderConfig('deepseek'),
+  openai: createProviderConfig('openai'),
+  gemini: createProviderConfig('gemini'),
+});
+
+const activeProvider = ref('deepseek');
+
+const aiConfig = computed({
+  get: () => providerConfigs[activeProvider.value],
+  set: (val) => { Object.assign(providerConfigs[activeProvider.value], val); }
+});
+
+const analysisPrompt = ref('');
 
 const modelProviders = [
   { value: 'deepseek', label: 'DeepSeek' },
-  { value: 'openai', label: 'OpenAI' }
+  { value: 'openai', label: 'OpenAI' },
+  { value: 'gemini', label: 'Gemini' }
 ];
+
+const selectProvider = (value) => {
+  activeProvider.value = value;
+};
+
+const baseUrlPlaceholder = computed(() => '留空使用默认地址');
+const modelPlaceholder = computed(() => '留空使用默认模型');
 
 const promptTemplates = ref([]);
 const selectedTemplateId = ref(null);
@@ -680,6 +727,7 @@ const fetchPromptTemplates = async () => {
   try {
     const res = await getPromptTemplates();
     promptTemplates.value = res.data || [];
+    loadAnalysisPrompt();
   } catch (e) {
     console.error('获取提示词模板失败', e);
   }
@@ -725,17 +773,80 @@ const fetchAIConfig = async () => {
   if (activeTab.value !== 'ai') return;
   try {
     const res = await getUserAIConfig();
-    Object.assign(aiConfig, res.data);
+    const providerMap = res.data?.provider_configs && typeof res.data.provider_configs === 'object'
+      ? res.data.provider_configs
+      : {};
+    for (const key of Object.keys(providerConfigs)) {
+      Object.assign(providerConfigs[key], createProviderConfig(key));
+    }
+    for (const [providerKey, config] of Object.entries(providerMap)) {
+      if (!providerConfigs[providerKey]) continue;
+      Object.assign(providerConfigs[providerKey], createProviderConfig(providerKey), config || {}, { model_provider: providerKey });
+    }
+
+    const provider = providerConfigs[res.data.model_provider] ? res.data.model_provider : 'deepseek';
+    activeProvider.value = provider;
+    if (providerConfigs[provider]) {
+      Object.assign(providerConfigs[provider], createProviderConfig(provider), res.data || {}, { model_provider: provider });
+    }
+    selectedTemplateId.value = res.data.selected_template_id || null;
   } catch (e) {
     console.error('获取AI配置失败', e);
+  }
+};
+
+const onSelectTemplate = async () => {
+  try {
+    await selectTemplate(selectedTemplateId.value || null);
+    loadAnalysisPrompt();
+  } catch (e) {
+    alert('选择失败');
+  }
+};
+
+const saveAnalysisPrompt = async () => {
+  if (!analysisPrompt.value.trim()) {
+    alert('提示词内容不能为空');
+    return;
+  }
+  try {
+    const tplId = selectedTemplateId.value;
+    if (tplId) {
+      const tpl = promptTemplates.value.find(t => t.id === tplId);
+      if (tpl) {
+        await updatePromptTemplate(tplId, { name: tpl.name, content: analysisPrompt.value, is_default: tpl.is_default });
+        alert('提示词已保存');
+      }
+    } else {
+      const defaultTpl = promptTemplates.value.find(t => t.is_default);
+      if (defaultTpl) {
+        await updatePromptTemplate(defaultTpl.id, { name: defaultTpl.name, content: analysisPrompt.value, is_default: true });
+        alert('提示词已保存');
+      } else {
+        alert('请先创建一个模板');
+      }
+    }
+    await fetchPromptTemplates();
+  } catch (e) {
+    alert('保存失败: ' + (e.response?.data?.detail || e.message));
+  }
+};
+
+const loadAnalysisPrompt = () => {
+  if (selectedTemplateId.value) {
+    const tpl = promptTemplates.value.find(t => t.id === selectedTemplateId.value);
+    analysisPrompt.value = tpl ? tpl.content : '';
+  } else {
+    const defaultTpl = promptTemplates.value.find(t => t.is_default);
+    analysisPrompt.value = defaultTpl ? defaultTpl.content : '';
   }
 };
 
 const saveAIConfig = async () => {
   aiConfigLoading.value = true;
   try {
-    await updateUserAIConfig(aiConfig);
-    alert('AI配置已保存');
+    await updateUserAIConfig(providerConfigs[activeProvider.value]);
+    alert('已保存');
   } catch (e) {
     alert('保存失败: ' + (e.response?.data?.detail || e.message));
   } finally {

@@ -452,6 +452,22 @@ CREATE TABLE IF NOT EXISTS user_ai_config (
 );
 """
 
+# -- 用户分 Provider 的 AI 配置表 --
+CREATE_USER_AI_PROVIDER_CONFIG_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS user_ai_provider_configs (
+    user_id         INTEGER NOT NULL,
+    provider        VARCHAR(50) NOT NULL,
+    model_name      VARCHAR(100),
+    api_key         VARCHAR(500),
+    base_url        VARCHAR(500),
+    system_prompt   TEXT,
+    max_tokens      INTEGER DEFAULT 1200,
+    temperature     DOUBLE DEFAULT 0.35,
+    updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, provider)
+);
+"""
+
 # -- 用户提示词模板表 (user_prompt_templates) --
 CREATE_USER_PROMPT_TEMPLATES_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS user_prompt_templates (
@@ -583,6 +599,7 @@ ALL_TABLES_SQL = [
     CREATE_WATCHLIST_TABLE_SQL,
     CREATE_MAINLINE_SCORES_TABLE_SQL,
     CREATE_USER_AI_CONFIG_TABLE_SQL,
+    CREATE_USER_AI_PROVIDER_CONFIG_TABLE_SQL,
     CREATE_USER_PROMPT_TEMPLATES_TABLE_SQL,
     CREATE_USER_HOLDINGS_TABLE_SQL,
     CREATE_AI_ANALYSIS_CACHE_TABLE_SQL,

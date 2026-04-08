@@ -100,3 +100,13 @@ class DataProvider(ABC):
     ) -> pd.DataFrame:
         """获取业绩快报数据。"""
         pass
+
+    def us_tycr(
+        self,
+        date: str = None,
+        start_date: str = None,
+        end_date: str = None,
+        fields: str = None,
+    ) -> pd.DataFrame:
+        """获取美国国债收益率曲线。默认返回空结果，按需由具体 provider 覆盖。"""
+        return pd.DataFrame()

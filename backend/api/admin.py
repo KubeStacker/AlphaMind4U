@@ -17,6 +17,7 @@ from etl.utils.quality import quality_checker
 from db.connection import get_db_connection, fetch_df
 from passlib.context import CryptContext
 from etl.calendar import trading_calendar
+from strategy.sentiment.dashboard import build_market_sentiment_payload
 
 logger = logging.getLogger(__name__)
 
@@ -1392,74 +1393,13 @@ async def analyze_stock_with_ai(request: Request, body: AIAnalyzeRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/market_sentiment")
-def get_market_sentiment(days: int = 365):
+def get_market_sentiment(days: int = 365, force_macro_refresh: bool = False):
     """获取市场情绪历史数据 - 返回从旧到新的时间序列"""
     try:
-        import json
-        import math
-
-        def _sanitize_json_value(val):
-            if val is None:
-                return 0
-            if isinstance(val, float):
-                if math.isnan(val) or math.isinf(val):
-                    return 0.0
-                return val
-            if isinstance(val, dict):
-                return {k: _sanitize_json_value(v) for k, v in val.items()}
-            if isinstance(val, list):
-                return [_sanitize_json_value(v) for v in val]
-            return val
-
-        # 先获取最近 N 天的数据（按日期倒序），然后反转成正序
-        df = fetch_df(f"SELECT trade_date, score, label, details FROM market_sentiment ORDER BY trade_date DESC LIMIT {days}")
-        if df.empty:
-            return {"status": "success", "data": {"dates": [], "sentiment": [], "index": []}}
-        
-        # 反转数据顺序，实现从旧到新
-        records = df.iloc[::-1].to_dict('records')
-        dates = [str(r['trade_date'])[:10] for r in records]
-        sentiment = []
-        for r in records:
-            details = r.get('details')
-            if isinstance(details, str):
-                try:
-                    details = json.loads(details)
-                except Exception:
-                    details = {}
-            details = _sanitize_json_value(details)
-            sentiment.append({
-                'trade_date': str(r['trade_date'])[:10],
-                'value': _sanitize_json_value(r['score']),
-                'label': r['label'] or "观望",
-                'details': details
-            })
-        
-        # 获取上证指数数据（指数数据在 market_index 表）
-        min_date = dates[0]
-        max_date = dates[-1]
-        index_df = fetch_df(
-            """
-            SELECT trade_date, close
-            FROM market_index
-            WHERE ts_code = '000001.SH'
-              AND trade_date BETWEEN ? AND ?
-            ORDER BY trade_date
-            """,
-            (min_date, max_date)
+        return build_market_sentiment_payload(
+            days=days,
+            force_macro_refresh=force_macro_refresh,
         )
-        index_map = {}
-        if not index_df.empty:
-            for _, row in index_df.iterrows():
-                index_map[str(row['trade_date'])[:10]] = _sanitize_json_value(row['close'])
-        index = []
-        last_index = 0.0
-        for d in dates:
-            iv = _sanitize_json_value(index_map.get(d, last_index))
-            last_index = iv
-            index.append(iv)
-        
-        return {"status": "success", "data": {"dates": dates, "sentiment": sentiment, "index": index}}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 

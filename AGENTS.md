@@ -27,8 +27,22 @@ docker-compose exec backend bash
 每次代码修改后，**必须验证功能**：
 1. 验证代码是否按预期工作
 2. 不要假设代码能运行，必须实际测试
+3. ❌ **不要做**：不要使用 `npm run build`、`npm run dev` 等构建/开发命令验证前端，代码会通过Docker挂载直接动态更新到容器
+4. ❌ **不要做**：不要使用 `pip install` 重新安装后端依赖来验证，容器内已包含所需依赖
+5. ✅ **应该做**：后端修改后通过 `curl` 调用API验证功能
+6. ✅ **应该做**：前端修改后通过浏览器访问容器暴露的端口验证
+7. ✅ **应该做**：前端较大改动或反复无法正确修改时，建议使用无头浏览器访问验证，用户名 `yuanpeng`，密码 `1qaz2wsx`
 
-### 3. 节省Token消耗
+### 3. Tushare Pro 数据源（重要）
+
+**本项目优先使用 Tushare Pro 接口获取A股数据**：
+- ✅ **应该做**：新增数据同步任务时，优先查找并使用 Tushare Pro 接口
+- ✅ **应该做**：参考 `backend/etl/providers/` 中已有的 Tushare 接口封装
+- ⚠️ **注意**：当前 Tushare Pro Token 仅有 **2000 积分**，部分高积分接口（如 `stk_factor`、`daily_hf` 等）无权限调用
+- ⚠️ **注意**：如果遇到积分不足导致无法验证的情况，**给出说明即可，不用强求**，不要花费大量Token尝试绕过或寻找替代验证方案
+- ❌ **不要做**：不要假设所有 Tushare 接口都可用，实现前先确认接口所需积分
+
+### 4. 节省Token消耗
 
 **减少不必要的索引和搜索操作**：
 - ❌ **不要做**：不要多次搜索同一文件
@@ -37,7 +51,7 @@ docker-compose exec backend bash
 - ✅ **应该做**：批量执行独立的工具调用
 - ✅ **应该做**：直接定位文件路径，避免全局搜索
 
-### 4. 文档同步
+### 5. 文档同步
 
 代码修改后，**必须更新文档**：
 - 更新AGENTS.md中的相关列表（API端点、ETL任务、数据库表等）
@@ -157,7 +171,7 @@ curl -X POST "http://localhost:8000/admin/etl/sentiment?days=365&sync_index=fals
 | `/mainline_history` | GET | 主线历史记录（聚焦近10日主线演变、当前最强/连续主线及Top5个股摘要，并返回 `display_name` / `focus_tags` / `driver_summary` 等细分驱动字段） |
 | `/mainline/leaders` | GET | 主线及主线下龙头（支持前端按Top5展示，优先近10日持续性方向，剔除北交所，并按趋势先行/资金追踪/热度/题材命中综合评分，返回 `display_sector` / `focus_tags` / `driver_summary`） |
 | `/market/suggestion` | GET | 市场建议 |
-| `/market_sentiment` | GET | 市场情绪历史 + 交易日实时叠加（盘中指数、10Y/Pizza 风险、自动刷新提示；涨停/跌停按 `daily_price` 实时回填） |
+| `/market_sentiment` | GET | 市场情绪历史 + 自动补算最新收盘情绪；交易时段按上证/创业板实时叠加，返回 10Y/Pizza 风险旁证、自动刷新提示，以及涨停/跌停回填后的情绪明细 |
 | `/portfolio/recommendation` | GET | 组合建议（regime + theme + stock rank + position sizing） |
 | `/sentiment/preview` | GET | 情绪预览 |
 | `/stock/analyze` | POST | 个股AI分析（摘要驱动、结论优先、返回更短，并带入主线/市场配合、定位与关键点位定义） |
@@ -168,11 +182,11 @@ curl -X POST "http://localhost:8000/admin/etl/sentiment?days=365&sync_index=fals
 | `/auth/token` | POST | 获取令牌 |
 | `/users` | GET | 用户列表 |
 | `/users` | POST | 创建用户 |
-| `/users/me/ai-config` | GET | 获取AI配置 |
-| `/users/me/ai-config` | PUT | 更新AI配置 |
+| `/users/me/ai-config` | GET | 获取当前AI配置（返回当前 provider 顶层字段，并附带 `provider_configs` 供前端切换时回显各家历史配置） |
+| `/users/me/ai-config` | PUT | 更新当前AI配置（仅覆盖当前 provider，同时把该 provider 镜像回 `user_ai_config` 兼容旧调用方） |
 | `/users/me/holdings` | GET | 获取持仓 |
 | `/users/me/holdings/batch` | POST | 批量更新持仓（支持同步到自选、可选按提交结果替换旧持仓） |
-| `/users/me/holdings/parse-image` | POST | 识别持仓截图并返回可预览、可应用的结构化结果 |
+| `/users/me/holdings/parse-image` | POST | 使用 OpenAI 配置的多模态模型识别持仓截图，并基于 `stock_basic` 做“代码提取 + 名称归一化”自动匹配后返回预览；`unmatched` 表示图片已识别但待确认代码，不等于识别失败；若未配置 OpenAI API Key 则直接报错，其他 AI 分析仍使用当前选中的 provider |
 | `/users/me/holdings/{ts_code}` | PUT | 更新持仓 |
 | `/users/me/holdings/{ts_code}` | DELETE | 删除持仓 |
 | `/users/me/prompt-templates` | GET | 获取提示模板 |
@@ -186,6 +200,7 @@ curl -X POST "http://localhost:8000/admin/etl/sentiment?days=365&sync_index=fals
 | `/watchlist` | GET | 当前登录用户的关注列表 |
 | `/watchlist` | POST | 为当前登录用户添加关注 |
 | `/watchlist/realtime` | GET | 当前登录用户的实时关注数据（支持 `analysis_depth=compact|full`，交易日优先展示当日快照；`compact` 也会返回 `action_signal` / `signal_reasons` / `key_levels` / `technical.volume_ratio`，并额外直出行级 `volume_ratio` / `turnover_rate`，供列表首屏直接展示） |
+| `/watchlist/levels/backtest` | GET | Watchlist 点位回测诊断（默认聚焦创业板/科创板高流动性样本；也支持 `codes=...` 对当前自选/指定股票做定向回放，对比 `adaptive` 与 `legacy` 的支撑/压力反应率、主点位距离与二级间距异常） |
 | `/watchlist/{ts_code}/analysis` | GET | 当前登录用户自选内单只股票的深度分析（详情弹窗按需加载，返回 `action_signal` / `signal_reasons` / `intraday_context` / `classification` / `level_methodology` / `key_levels[*].note`） |
 | `/watchlist/{ts_code}` | DELETE | 删除当前登录用户的关注 |
 | `/docs/list` | GET | 获取文档列表（支持include_published筛选published目录文档） |
@@ -220,6 +235,18 @@ curl -X POST "http://localhost:8000/admin/etl/sentiment?days=365&sync_index=fals
 - **状态**：使用Pinia进行全局状态管理
 - **HTTP**：使用axios进行API调用
 - **组件**：遵循Vue 3命名规范（PascalCase）
+
+### 前端设计规范
+
+- **克制表达**：避免与功能无关的提示性描述、装饰性标签、解释性文案；界面只展示决策所需信息，不为"看起来完整"而增加内容
+- **高级感**：保持页面简洁、留白充足、信息层次清晰；使用低饱和度色彩，避免花哨装饰和高饱和色块
+- **设计一致性**：整个系统保持统一的视觉语言，包括间距、圆角、阴影、字体大小、色彩体系等；同一类组件使用相同的设计模式
+- **色彩规范**：**禁止使用AI常见的紫色渐变、靛蓝色调**（如 `purple-*`、`indigo-*`、`violet-*` 渐变）；采用低饱和冷暖分区——情绪区偏暖色、主线区偏冷色，只做轻微层次变化；主色调以中性灰、深灰、白色为基础，辅以克制的红色（买入信号）和绿色（卖出信号）
+- **信息密度**：首屏直出核心信息，支撑/压力/触发/失效等关键点位必须可见，不能被抽象总结替代
+- **减少层级**：能在原卡片内解决的不新增额外容器、概览区或折叠层
+- **去重原则**：同一信息只在一个位置展示一次，禁止在chip、标签、结论段落中重复渲染相同内容；信号chip显示"试错"后，结论段落不再重复"试错：xxx"
+- **小白友好**：不展示UI使用指南（如"先处理动作和风险，再看解释细节"）、不展示filter解释文案、不展示冗长的刷新状态描述；状态标签用最简短词汇（如"实时刷新"而非"自动实时刷新"）
+- **后端数据精简**：API返回的 `headline` / `current_action_text` / `status` 等字段只返回动作关键词（如"试错"），详细操作指导（如"优先盯支撑承接，只有放量确认再执行"）只保留在详情弹窗中，不在列表卡片渲染
 
 ### 通用规范
 
@@ -316,6 +343,7 @@ curl -X POST "http://localhost:8000/admin/etl/sentiment?days=365&sync_index=fals
 - `watchlist`（按 `user_id + ts_code` 复合主键隔离每个用户的自选盯盘）
 - `mainline_scores`
 - `user_ai_config`
+- `user_ai_provider_configs`（按 `user_id + provider` 分别保存 OpenAI / DeepSeek / Gemini 等模型配置，切换 provider 不再互相覆盖）
 - `user_prompt_templates`
 - `user_holdings`
 - `ai_analysis_cache`
@@ -333,10 +361,14 @@ curl -X POST "http://localhost:8000/admin/etl/sentiment?days=365&sync_index=fals
 - 主线龙头评分当前会剔除北交所标的，不再按单日涨幅直接排队；更强调近10日趋势先行、持续资金跟踪、成交热度和细分题材命中度
 - 通信链当前已拆分为 `光通信` / `通信网络` / `算力基建`，避免把 `中际旭创`、`烽火通信` 这类不同子方向压成同一主线
 - Dashboard 首页当前拆成“情绪驾驶舱 + 主线作战板”，并与 Watchlist 保持同一套克制风格：情绪区头部直接输出结论，不再拆单独标题，也不重复展示日期/分区标签，只负责节奏、仓位、进攻方式和风控；“预测情绪”改为按钮触发弹窗参考，不在首页固定占位；主线区只负责方向优先级和龙头观察，主体最多展示 3 条主线，顶部只保留轮动正文，Top5 龙头改为在左侧方向卡片内按点击懒加载展开，避免右侧信息堆叠和首屏重复计算
-- Dashboard 情绪区当前会按接口返回的 `dashboard_refresh_seconds` 自动刷新，并叠加交易时段指数快照、10Y/Pizza 外部风险提示；若容器环境无法访问海外站点，`/admin/market_sentiment` 的宏观字段会返回 unavailable，前端应展示降级态而不是假定有值
+- Dashboard 情绪区当前会按接口返回的 `dashboard_refresh_seconds` 自动刷新：交易时段只用 `上证指数 + 创业板指` 实时快照修正盘中节奏，收盘后优先补算最新交易日情绪并直接返回收盘基线；10Y 优先取 Tushare `us_tycr` 的最近可用 `y10`，若失败再回退海外源，Pizza 只解析 live 区段的 DOUGHCON/当前 spike，统一作为外部风险旁证，若容器环境无法访问海外站点则 `/admin/market_sentiment` 宏观字段会返回 unavailable，前端应展示降级态而不是假定有值
 - Dashboard 内按钮触发的新内容需要使用固定宽度、固定分栏和占位容器，避免回测弹窗、诊断结果或异步内容加载时出现挤压、拉伸或表格畸形
 - Dashboard 配色当前采用低饱和冷暖分区：情绪区偏暖色、主线区偏冷色，只做轻微层次变化，不使用高饱和装饰色块
+- AI 配置当前采用“双层存储”：`user_ai_provider_configs` 保存各 provider 的历史配置，`user_ai_config` 仅镜像当前选中的 provider 供分析入口兼容读取；修改设置时不要再假设一行 `user_ai_config` 就代表全部 provider 状态
 - Watchlist 当前拆成“持仓跟踪 + 观察列表”两段：非持仓自选自动归入观察列表，列表默认只展示结论不展示 10D 历史，顶部不再单独放汇总卡；出现“试错 / 主动进攻”时需标红浮出，专注模式只展示持仓股；观察列表默认折叠，折叠状态下自动刷新优先只更新持仓，观察价格改为手动展开后按需刷新；页面刷新时优先恢复本地快照并后台并行更新自选与持仓，减少空白等待
+- Watchlist 搜索添加 / 删除观察股当前采用“本地先更新 + 单票补拉”策略：添加后先局部插入卡片，再只请求该股票的 compact 实时数据；删除时先本地移除，不再为单条操作阻塞整页重算
+- 持仓图片导入当前也采用“本地先落持仓 + 受影响代码后台补拉”策略：一键更新后先本地更新 `holdings` 和必要的 watchlist 占位行，再后台补拉受影响股票；预览里的 `待确认` 明确表示图片已识别，但该项尚未自动匹配到 `stock_basic`
+- Watchlist 搜索候选层、控制台下拉入口和 Settings 顶部 tab 必须使用清晰的近不透明实底浮层/按钮样式，不能与页面背景混成“透明态”，保证代码和名称在首屏直接可辨识
 - Watchlist / Dashboard 的首屏 UI 只保留直接决策信息，不额外增加“汇总卡 / 统计概览 / 解释性摘要”这类弱信息层；支撑 / 压力 / 触发 / 失效等目标点位必须在卡片首屏直出，不能被摘要文案替代，也不能默认藏到二级弹窗
 - 当前 `concepts_task` 已支持“`short token` 优先同花顺、失败回退 Tushare concept/concept_detail”；若库内 `stock_concepts.src` 只有 `ts`，说明目前并未拿到同花顺概念成分
 - 概念同步当前采用 staging + 原子发布：先写入 `stock_concepts__staging` / `stock_concept_details__staging`，校验通过后再一次性覆盖正式表，避免刷新过程中主线/龙头接口读到半成品
@@ -345,7 +377,10 @@ curl -X POST "http://localhost:8000/admin/etl/sentiment?days=365&sync_index=fals
 - 自选盯盘接口现按当前登录用户隔离，调用 `/admin/watchlist*` 时需携带 `Authorization: Bearer <token>`
 - 新增自选仅允许 `stock_basic` 中存在的代码；遗留无效代码会以空占位返回，便于前端清理，不再阻塞其他股票刷新
 - Watchlist 点位与动作信号当前以趋势、量价、主力资金、因子分和 realtime 位置主导，K 线形态仅作辅助参考；颜色语义统一为红色偏买入、绿色偏卖出、白色偏观望
-- `/admin/stock/analyze` 默认使用压缩后的行情、因子、资金、主线映射、市场环境摘要构造提示词，不再注入关联个股推荐段；`{commentary_snapshot}` 会带入个股定位、支撑/压力定义、动作参考与关键位，`{sector_context}` 会补充最相关主线及后续观察，自定义模板优先使用 `{stock_snapshot}`、`{capital_flow_snapshot}`、`{sector_context}`、`{market_context}`、`{holding_context}`、`{commentary_snapshot}`、`{analysis_snapshot}`
+- Watchlist 的支撑/压力位当前采用“rolling window 多源候选 + ATR/振幅归一化去重 + 成交密集区/摆动高低点打分”的统一算法：同时评估 MA5/10/20/60、近 5/10/20/60 日高低点、确认后的 swing high/low 和近 60 日成交密集区，再按来源共振、触碰次数、量能与最近性综合排序，避免出现两个压力位或两个支撑位贴得过近却都被返回
+- 点位引擎当前进一步按主板 / 创业板 / 科创板三套波动画像做自适应校准：创业板更保留趋势延续下的回踩空间，科创板则额外压缩二级间距并提升趋势/成交密集区权重，统一弱化 `OPEN` / `PRE_CLOSE` 这类噪声锚点，减少回踩/回落场景下点位过近或过远
+- `/admin/watchlist/levels/backtest` 可直接对创业板/科创板样本做自驱动点位回放，输出 `adaptive` vs `legacy` 的支撑/压力反应率、主点位距离和二级间距异常，后续调参数优先以该接口验证
+- `/admin/stock/analyze` 当前默认只向模型注入客观数据摘要，不再额外灌入程序化交易结论；`{commentary_snapshot}` 仅保留换手/量比/RPS/因子分等客观补充字段，`{sector_context}` / `{market_context}` 也只提供方向榜单与评分字段，自定义模板优先使用 `{stock_snapshot}`、`{capital_flow_snapshot}`、`{sector_context}`、`{market_context}`、`{holding_context}`、`{commentary_snapshot}`、`{analysis_snapshot}`
 - `/admin/etl/sentiment?sync_index=true` 当前复用 `sync_core_market_indices`，`/admin/system/trigger_daily_sync` 复用 `perform_daily_data_update`，不要再调用旧的 `sync_core_indices` / `sync_daily_update`
 - `stock_income` / `stock_fina_indicator` 已纳入 `db/schema.py` 初始化；`/admin/data/day_status` 与 `/admin/integrity` 对 `daily_price` / `stock_moneyflow` / `stock_margin` 统一使用 4000 条阈值判定交易日数据完整性
 - `/admin/factor/diagnostics` 提供 `factor_score` / `trend_score` / `quality_score` 等因子的 IC、RankIC 和分层收益；`/admin/portfolio/recommendation` 则把情绪仓位、主线方向、横截面因子和相关性约束收口成组合建议

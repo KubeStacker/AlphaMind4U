@@ -48,6 +48,49 @@ def _migrate_watchlist_schema(con):
     con.execute("DROP TABLE watchlist_legacy")
     print("watchlist 表迁移完成：已切换为 user_id + ts_code 复合主键。")
 
+
+def _backfill_user_ai_provider_configs(con):
+    """
+    将旧版 user_ai_config 中的当前 provider 配置回填到按 provider 拆分的新表。
+    仅在目标 provider 尚未存在配置时写入，避免覆盖用户已保存的新结构数据。
+    """
+    rows = con.execute(
+        """
+        SELECT
+            user_id,
+            COALESCE(NULLIF(model_provider, ''), 'openai') AS provider,
+            model_name,
+            api_key,
+            base_url,
+            system_prompt,
+            COALESCE(max_tokens, 1200) AS max_tokens,
+            COALESCE(temperature, 0.35) AS temperature
+        FROM user_ai_config
+        """
+    ).fetchall()
+
+    migrated = 0
+    for row in rows:
+        user_id, provider, model_name, api_key, base_url, system_prompt, max_tokens, temperature = row
+        exists = con.execute(
+            "SELECT 1 FROM user_ai_provider_configs WHERE user_id = ? AND provider = ?",
+            (user_id, provider),
+        ).fetchone()
+        if exists:
+            continue
+        con.execute(
+            """
+            INSERT INTO user_ai_provider_configs (
+                user_id, provider, model_name, api_key, base_url, system_prompt, max_tokens, temperature
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (user_id, provider, model_name, api_key, base_url, system_prompt, max_tokens, temperature),
+        )
+        migrated += 1
+
+    print(f"AI provider 配置回填完成：新增 {migrated} 条历史配置。")
+
 def initialize_database():
     """
     初始化数据库。如果数据库文件不存在，则创建它，并根据 schema.py 中的定义创建所有表。
@@ -95,6 +138,11 @@ def initialize_database():
                 print("已添加 user_ai_config.selected_template_id 列")
             except Exception as e:
                 print(f"添加 user_ai_config.selected_template_id 列失败: {e}")
+
+            try:
+                _backfill_user_ai_provider_configs(con)
+            except Exception as e:
+                print(f"回填 user_ai_provider_configs 失败: {e}")
             
             try:
                 # 为 stock_moneyflow 表添加 net_mf_ratio 列

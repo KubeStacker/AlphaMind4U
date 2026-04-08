@@ -7,6 +7,7 @@ import math
 import re
 import threading
 import time
+import unicodedata
 from collections import OrderedDict
 from datetime import date, datetime
 from typing import Any, Dict, Optional
@@ -28,6 +29,18 @@ _ANALYSIS_CACHE_LOCK = threading.Lock()
 _ANALYSIS_CACHE: OrderedDict[str, tuple[float, dict[str, Any]]] = OrderedDict()
 _ANALYSIS_CACHE_TTL_SECONDS = 900
 _ANALYSIS_CACHE_MAX_ENTRIES = 256
+_STOCK_BASIC_LOOKUP_LOCK = threading.Lock()
+_STOCK_BASIC_LOOKUP_TTL_SECONDS = 600
+_STOCK_BASIC_LOOKUP_CACHE: dict[str, Any] = {
+    "loaded_at": 0.0,
+    "rows": [],
+    "by_ts_code": {},
+    "by_symbol": {},
+    "by_exact_name": {},
+    "by_norm_name": {},
+    "by_pinyin": {},
+    "by_pinyin_abbr": {},
+}
 
 # --- 通用工具函数 ---
 
@@ -46,6 +59,163 @@ def _normalize_ts_code(code: str) -> str:
     if code.startswith("8") or code.startswith("4"):
         return f"{code}.BJ"
     return code
+
+
+def _normalize_lookup_text(value: Any) -> str:
+    text = unicodedata.normalize("NFKC", str(value or ""))
+    text = text.replace("\u3000", " ")
+    text = text.replace("（", "(").replace("）", ")")
+    return text.strip().upper()
+
+
+def _normalize_stock_name_key(value: Any) -> str:
+    text = _normalize_lookup_text(value)
+    if not text:
+        return ""
+    text = text.replace("股份有限公司", "").replace("有限公司", "")
+    text = text.replace("*", "")
+    text = re.sub(r"\([^)]*\)", "", text)
+    text = re.sub(r"[\s·•ㆍ･・/,_\\-]+", "", text)
+    text = re.sub(r"[()\[\]{}【】<>《》]", "", text)
+    return text.strip()
+
+
+def _append_unique_text(bucket: list[str], seen: set[str], value: Any) -> None:
+    text = _normalize_lookup_text(value)
+    if not text or text in seen:
+        return
+    seen.add(text)
+    bucket.append(text)
+
+
+def _extract_stock_symbol_candidates(*values: Any) -> list[str]:
+    candidates: list[str] = []
+    seen: set[str] = set()
+
+    for value in values:
+        text = _normalize_lookup_text(value)
+        if not text:
+            continue
+
+        stripped = re.sub(r"[^0-9A-Z.]", "", text)
+        if stripped:
+            cleaned = stripped.replace("SH", "").replace("SZ", "").replace("BJ", "").replace(".", "")
+            if len(cleaned) == 6 and cleaned.isdigit() and cleaned not in seen:
+                seen.add(cleaned)
+                candidates.append(cleaned)
+
+        for symbol in re.findall(r"(?<!\d)(\d{6})(?!\d)", text):
+            if symbol in seen:
+                continue
+            seen.add(symbol)
+            candidates.append(symbol)
+
+    return candidates
+
+
+def _build_stock_name_candidates(raw_name: Any) -> list[str]:
+    base = _normalize_lookup_text(raw_name)
+    if not base:
+        return []
+
+    candidates: list[str] = []
+    seen: set[str] = set()
+
+    def add(value: Any) -> None:
+        _append_unique_text(candidates, seen, value)
+
+    add(base)
+    stripped_brackets = re.sub(r"\([^)]*\)", "", base).strip()
+    add(stripped_brackets)
+
+    for source in tuple(candidates):
+        trimmed = source
+        for prefix in ("XD", "XR", "DR", "N", "C"):
+            if trimmed.startswith(prefix) and len(trimmed) > len(prefix) + 1:
+                add(trimmed[len(prefix):])
+        if trimmed.startswith("*ST") and len(trimmed) > 3:
+            add(trimmed[1:])
+        if trimmed.endswith("A股") and len(trimmed) > 2:
+            add(trimmed[:-2])
+        if trimmed.endswith("B股") and len(trimmed) > 2:
+            add(trimmed[:-2])
+        if trimmed.endswith("A") and len(trimmed) > 2:
+            add(trimmed[:-1])
+        if trimmed.endswith("B") and len(trimmed) > 2:
+            add(trimmed[:-1])
+
+    return candidates
+
+
+def _pick_unique_stock_record(records: Any) -> Optional[dict[str, Any]]:
+    if not isinstance(records, list) or len(records) != 1:
+        return None
+    record = records[0]
+    return record if isinstance(record, dict) else None
+
+
+def _load_stock_basic_lookup() -> dict[str, Any]:
+    now = time.time()
+    with _STOCK_BASIC_LOOKUP_LOCK:
+        if now - float(_STOCK_BASIC_LOOKUP_CACHE.get("loaded_at") or 0) < _STOCK_BASIC_LOOKUP_TTL_SECONDS:
+            return _STOCK_BASIC_LOOKUP_CACHE
+
+    df = fetch_df(
+        """
+        SELECT ts_code, symbol, name, pinyin, pinyin_abbr
+        FROM stock_basic
+        """,
+    )
+
+    lookup: dict[str, Any] = {
+        "loaded_at": now,
+        "rows": [],
+        "by_ts_code": {},
+        "by_symbol": {},
+        "by_exact_name": {},
+        "by_norm_name": {},
+        "by_pinyin": {},
+        "by_pinyin_abbr": {},
+    }
+
+    if not df.empty:
+        for raw_row in df.to_dict("records"):
+            ts_code = _normalize_ts_code(raw_row.get("ts_code") or "")
+            name = str(raw_row.get("name") or "").strip()
+            symbol = str(raw_row.get("symbol") or "").strip().upper()
+            pinyin = _normalize_lookup_text(raw_row.get("pinyin"))
+            pinyin_abbr = _normalize_lookup_text(raw_row.get("pinyin_abbr"))
+            exact_name = _normalize_lookup_text(name)
+            norm_name = _normalize_stock_name_key(name)
+
+            record = {
+                "ts_code": ts_code,
+                "name": name,
+                "symbol": symbol,
+                "exact_name": exact_name,
+                "norm_name": norm_name,
+                "pinyin": pinyin,
+                "pinyin_abbr": pinyin_abbr,
+            }
+            lookup["rows"].append(record)
+
+            if ts_code and ts_code not in lookup["by_ts_code"]:
+                lookup["by_ts_code"][ts_code] = record
+            if symbol and symbol not in lookup["by_symbol"]:
+                lookup["by_symbol"][symbol] = record
+            if exact_name:
+                lookup["by_exact_name"].setdefault(exact_name, []).append(record)
+            if norm_name:
+                lookup["by_norm_name"].setdefault(norm_name, []).append(record)
+            if pinyin:
+                lookup["by_pinyin"].setdefault(pinyin, []).append(record)
+            if pinyin_abbr:
+                lookup["by_pinyin_abbr"].setdefault(pinyin_abbr, []).append(record)
+
+    with _STOCK_BASIC_LOOKUP_LOCK:
+        _STOCK_BASIC_LOOKUP_CACHE.clear()
+        _STOCK_BASIC_LOOKUP_CACHE.update(lookup)
+        return _STOCK_BASIC_LOOKUP_CACHE
 
 
 def _is_beijing_stock(code: Any) -> bool:
@@ -405,12 +575,12 @@ def _merge_live_snapshot_into_df(df: pd.DataFrame, snapshot: Optional[Dict[str, 
 
     base = df.copy()
     if base.empty:
-        base = pd.DataFrame(columns=["trade_date", "open", "high", "low", "close", "vol", "amount", "pct_chg"])
+        base = pd.DataFrame(columns=["trade_date", "open", "high", "low", "close", "pre_close", "vol", "amount", "pct_chg"])
 
     if "trade_date" in base.columns:
         base["trade_date"] = base["trade_date"].map(_normalize_trade_date)
 
-    for col in ("open", "high", "low", "close", "vol", "amount", "pct_chg"):
+    for col in ("open", "high", "low", "close", "pre_close", "vol", "amount", "pct_chg"):
         if col not in base.columns:
             base[col] = None
         base[col] = pd.to_numeric(base[col], errors="coerce")
@@ -422,13 +592,19 @@ def _merge_live_snapshot_into_df(df: pd.DataFrame, snapshot: Optional[Dict[str, 
         if not same_day.empty:
             existing_same_day = same_day.iloc[-1].to_dict()
 
-    snapshot_row = dict(existing_same_day or {col: None for col in base.columns})
+    if existing_same_day is not None:
+        snapshot_row = dict(existing_same_day)
+    elif not base.empty:
+        snapshot_row = base.iloc[-1].to_dict()
+    else:
+        snapshot_row = {col: None for col in base.columns}
     snapshot_row.update({
         "trade_date": snapshot["trade_date"],
         "open": snapshot.get("open", last_close),
         "high": snapshot.get("high"),
         "low": snapshot.get("low"),
         "close": snapshot.get("close"),
+        "pre_close": snapshot.get("pre_close", last_close),
         "vol": snapshot.get("vol_lot"),
         "amount": snapshot.get("amount_k"),
         "pct_chg": snapshot.get("pct"),
@@ -588,7 +764,7 @@ def _expand_watch_factor_columns(df: pd.DataFrame) -> pd.DataFrame:
     return work
 
 
-def _fetch_watch_context_map(ts_codes: list[str]) -> dict[str, dict[str, Any]]:
+def _fetch_watch_history_map(ts_codes: list[str], limit: int = 75) -> dict[str, pd.DataFrame]:
     codes = [_normalize_ts_code(code) for code in (ts_codes or []) if _normalize_ts_code(code)]
     if not codes:
         return {}
@@ -596,106 +772,60 @@ def _fetch_watch_context_map(ts_codes: list[str]) -> dict[str, dict[str, Any]]:
     placeholders = ",".join(["?"] * len(codes))
     df = fetch_df(
         f"""
-        SELECT
-            d.ts_code,
-            d.trade_date,
-            d.open,
-            d.high,
-            d.low,
-            d.close,
-            d.pre_close,
-            d.vol,
-            d.amount,
-            d.pct_chg,
-            d.factors,
-            COALESCE(m.net_mf_amount, 0) AS net_mf_amount,
-            m.net_mf_ratio
-        FROM daily_price d
-        LEFT JOIN stock_moneyflow m
-          ON d.ts_code = m.ts_code AND d.trade_date = m.trade_date
-        WHERE (d.ts_code, d.trade_date) IN (
-            SELECT ts_code, MAX(trade_date)
-            FROM daily_price
-            WHERE ts_code IN ({placeholders})
-            GROUP BY ts_code
-        )
+        SELECT *
+        FROM (
+            SELECT
+                d.ts_code,
+                d.trade_date,
+                d.open,
+                d.high,
+                d.low,
+                d.close,
+                d.pre_close,
+                d.vol,
+                d.amount,
+                d.pct_chg,
+                d.factors,
+                COALESCE(m.net_mf_amount, 0) AS net_mf_amount,
+                m.net_mf_ratio,
+                ROW_NUMBER() OVER (PARTITION BY d.ts_code ORDER BY d.trade_date DESC) AS rn
+            FROM daily_price d
+            LEFT JOIN stock_moneyflow m
+              ON d.ts_code = m.ts_code AND d.trade_date = m.trade_date
+            WHERE d.ts_code IN ({placeholders})
+        ) ranked
+        WHERE rn <= ?
+        ORDER BY ts_code, trade_date
         """,
-        tuple(codes),
+        (*codes, max(20, int(limit))),
     )
     if df.empty:
         return {}
 
     df = _expand_watch_factor_columns(df)
-    context_map: dict[str, dict[str, Any]] = {}
-    for _, row in df.iterrows():
-        ts_code = _normalize_ts_code(row.get("ts_code"))
+    history_map: dict[str, pd.DataFrame] = {}
+    for raw_code, group in df.groupby("ts_code", sort=False):
+        ts_code = _normalize_ts_code(raw_code)
         if not ts_code:
             continue
-        context_map[ts_code] = _sanitize_json_value(row.to_dict())
-    return context_map
-
-
-def _merge_compact_snapshot_row(
-    context_row: Optional[Dict[str, Any]],
-    realtime_snapshot: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    merged = dict(context_row or {})
-    if realtime_snapshot:
-        merged.update({
-            "trade_date": realtime_snapshot.get("trade_date") or merged.get("trade_date"),
-            "open": realtime_snapshot.get("open", merged.get("open")),
-            "high": realtime_snapshot.get("high", merged.get("high")),
-            "low": realtime_snapshot.get("low", merged.get("low")),
-            "close": realtime_snapshot.get("close", merged.get("close")),
-            "pre_close": realtime_snapshot.get("pre_close", merged.get("pre_close") or merged.get("close")),
-            "pct_chg": realtime_snapshot.get("pct", merged.get("pct_chg")),
-            "vol": realtime_snapshot.get("vol_lot", merged.get("vol")),
-            "amount": realtime_snapshot.get("amount_k", merged.get("amount")),
-            "quote_time": realtime_snapshot.get("quote_time"),
-        })
-    return merged
-
-
-def _nearest_levels(
-    close: Optional[float],
-    candidates: list[tuple[str, Optional[float]]],
-) -> tuple[list[tuple[str, float]], list[tuple[str, float]]]:
-    price = _safe_float(close)
-    if price is None or price <= 0:
-        return ([], [])
-
-    support_raw: list[tuple[str, float]] = []
-    resistance_raw: list[tuple[str, float]] = []
-    seen_support: set[tuple[str, float]] = set()
-    seen_resistance: set[tuple[str, float]] = set()
-
-    for label, raw_value in candidates:
-        value = _safe_float(raw_value)
-        if value is None or value <= 0:
-            continue
-        rounded = round(float(value), 2)
-        if rounded <= price:
-            key = (label, rounded)
-            if key not in seen_support:
-                support_raw.append((label, rounded))
-                seen_support.add(key)
-        if rounded >= price:
-            key = (label, rounded)
-            if key not in seen_resistance:
-                resistance_raw.append((label, rounded))
-                seen_resistance.add(key)
-
-    support = sorted(support_raw, key=lambda item: (-(item[1]), item[0]))[:2]
-    resistance = sorted(resistance_raw, key=lambda item: (item[1], item[0]))[:2]
-    return support, resistance
+        history = group.drop(columns=["rn"], errors="ignore").sort_values("trade_date").reset_index(drop=True)
+        history_map[ts_code] = _prepare_watch_df(history)
+    return history_map
 
 
 def _build_compact_watch_analysis(
     ts_code: str,
-    context_row: Optional[Dict[str, Any]],
+    history_df: Optional[pd.DataFrame],
     realtime_snapshot: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    merged = _merge_compact_snapshot_row(context_row, realtime_snapshot=realtime_snapshot)
+    if history_df is None or history_df.empty:
+        return _compact_watch_analysis(_empty_watch_analysis(include_detail=False))
+
+    work = history_df.copy()
+    if realtime_snapshot:
+        work = _merge_live_snapshot_into_df(work, realtime_snapshot)
+    work = _prepare_watch_df(work)
+    merged = _sanitize_json_value(work.iloc[-1].to_dict()) if not work.empty else {}
     close = _safe_float(merged.get("close"))
     if close is None or close <= 0:
         return _compact_watch_analysis(_empty_watch_analysis(include_detail=False))
@@ -709,7 +839,7 @@ def _build_compact_watch_analysis(
         pct_today = (close - pre_close) / pre_close * 100.0
     pct_today = pct_today or 0.0
 
-    volume = _safe_float(merged.get("vol"), 0.0) or 0.0
+    volume = _safe_float(merged.get("volume") or merged.get("vol"), 0.0) or 0.0
     amount = _safe_float(merged.get("amount"), 0.0) or 0.0
     ma5 = _safe_float(merged.get("ma5"), close) or close
     ma10 = _safe_float(merged.get("ma10"), close) or close
@@ -730,35 +860,23 @@ def _build_compact_watch_analysis(
     quality_factor = _safe_float(merged.get("quality_score"))
     big_order_ratio = _safe_float(merged.get("big_order_ratio"))
 
-    support_candidates = [
-        ("昨收", pre_close),
-        ("开盘", open_price),
-        ("日低", low_price),
-        ("MA5", ma5),
-        ("MA10", ma10),
-        ("MA20", ma20),
-        ("MA60", ma60),
-    ]
-    resistance_candidates = [
-        ("昨收", pre_close),
-        ("开盘", open_price),
-        ("日高", high_price),
-        ("MA5", ma5),
-        ("MA10", ma10),
-        ("MA20", ma20),
-        ("MA60", ma60),
-    ]
-    support_levels, resistance_levels = _nearest_levels(close, support_candidates + resistance_candidates)
+    from etl.utils.kline_patterns import build_structural_price_levels
 
-    support_1 = support_levels[0][1] if support_levels else round(close * 0.985, 2)
-    support_2 = support_levels[1][1] if len(support_levels) > 1 else round(support_1 * 0.985, 2)
-    resistance_1 = resistance_levels[0][1] if resistance_levels else round(close * 1.015, 2)
-    resistance_2 = resistance_levels[1][1] if len(resistance_levels) > 1 else round(resistance_1 * 1.015, 2)
+    level_bundle = build_structural_price_levels(work, top_n=2)
+    support_levels = list(level_bundle.get("support_levels") or [])
+    resistance_levels = list(level_bundle.get("resistance_levels") or [])
+    level_gap = _safe_float(level_bundle.get("selection_gap"), close * 0.015) or (close * 0.015)
+
+    support_1 = support_levels[0]["price"] if support_levels else round(max(0.01, close - level_gap), 2)
+    support_2 = support_levels[1]["price"] if len(support_levels) > 1 else round(max(0.01, support_1 - level_gap), 2)
+    resistance_1 = resistance_levels[0]["price"] if resistance_levels else round(close + level_gap, 2)
+    resistance_2 = resistance_levels[1]["price"] if len(resistance_levels) > 1 else round(resistance_1 + level_gap, 2)
 
     dist_support = round(max(0.0, (close - support_1) / close * 100.0), 2) if close else None
     dist_resistance = round(max(0.0, (resistance_1 - close) / close * 100.0), 2) if close else None
-    near_support = dist_support is not None and dist_support <= 1.2
-    near_resistance = dist_resistance is not None and dist_resistance <= 1.2
+    near_band_pct = min(2.0, max(1.0, level_gap / close * 100.0)) if close else 1.2
+    near_support = dist_support is not None and dist_support <= near_band_pct
+    near_resistance = dist_resistance is not None and dist_resistance <= near_band_pct
     if near_support:
         zone_label = "支撑附近"
     elif near_resistance:
@@ -876,26 +994,54 @@ def _build_compact_watch_analysis(
         f"{merged.get('trade_date') or '-'} 收盘快照"
     )
     if signal_color == "buy":
-        current_action_text = f"{action}：优先盯支撑承接，只有放量确认再执行。"
+        current_action_text = action
         entry_text = f"回踩 {support_1:.2f} 不破可跟踪；或放量站上 {resistance_1:.2f} 再确认。"
         invalid_text = f"跌破 {support_1:.2f} 且承接不足，买点失效。"
         reduce_text = f"逼近 {resistance_1:.2f} 仍无放量时，不追高。"
     elif signal_color == "sell":
-        current_action_text = f"{action}：先收缩仓位，等重新站稳关键位再看。"
+        current_action_text = action
         entry_text = f"只有重新放量站回 {resistance_1:.2f} 上方，才考虑撤销防守。"
         invalid_text = f"继续跌破 {support_1:.2f}，弱势延续。"
         reduce_text = f"靠近 {resistance_1:.2f} 但不能突破时，优先减仓。"
     else:
-        current_action_text = "观望：先等更优位置或量能确认。"
+        current_action_text = action
         entry_text = f"靠近 {support_1:.2f} 看承接，或放量突破 {resistance_1:.2f} 再跟。"
         invalid_text = f"若跌破 {support_1:.2f}，则转为防守；若冲高不过 {resistance_1:.2f}，继续等。"
         reduce_text = f"未放量前靠近 {resistance_1:.2f} 不追价。"
 
+    def build_level_entry(label: str, price: float, base_note: str, trigger: str) -> Dict[str, Any]:
+        note = str(base_note or "").strip()
+        if note:
+            note = f"{note} 操作：{trigger}"
+        else:
+            note = trigger
+        return {"label": label, "price": price, "note": note, "trigger": trigger}
+
     key_levels = [
-        {"label": "支撑1", "price": support_1, "note": f"首要防守位，跌破则先看弱。", "trigger": f"回踩 {support_1:.2f} 不破再看承接。"},
-        {"label": "支撑2", "price": support_2, "note": f"次级缓冲位，失守说明结构继续转弱。", "trigger": f"仅在 {support_2:.2f} 附近止跌时考虑二次观察。"},
-        {"label": "压力1", "price": resistance_1, "note": f"首个突破确认位，放量站上才算有效。", "trigger": f"放量站上 {resistance_1:.2f} 才算压力化解。"},
-        {"label": "压力2", "price": resistance_2, "note": f"上方第二道抛压位。", "trigger": f"逼近 {resistance_2:.2f} 时看是否继续放量。"},
+        build_level_entry(
+            "支撑1",
+            support_1,
+            support_levels[0].get("note", "") if support_levels else "首要防守位，跌破则先看弱。",
+            f"回踩 {support_1:.2f} 不破再看承接。",
+        ),
+        build_level_entry(
+            "支撑2",
+            support_2,
+            support_levels[1].get("note", "") if len(support_levels) > 1 else "次级缓冲位，失守说明结构继续转弱。",
+            f"仅在 {support_2:.2f} 附近止跌时考虑二次观察。",
+        ),
+        build_level_entry(
+            "压力1",
+            resistance_1,
+            resistance_levels[0].get("note", "") if resistance_levels else "首个突破确认位，放量站上才算有效。",
+            f"放量站上 {resistance_1:.2f} 才算压力化解。",
+        ),
+        build_level_entry(
+            "压力2",
+            resistance_2,
+            resistance_levels[1].get("note", "") if len(resistance_levels) > 1 else "上方第二道抛压位。",
+            f"逼近 {resistance_2:.2f} 时看是否继续放量。",
+        ),
     ]
 
     detail = {
@@ -906,7 +1052,7 @@ def _build_compact_watch_analysis(
             "action": action,
             "confidence": "high" if score >= 72 or score <= 32 else "medium",
             "style": "realtime_compact",
-            "summary": f"{action}，当前更适合围绕关键位执行，不适合在中段随意追单。 ",
+            "summary": "",
         },
         "trade_plan": {
             "current": current_action_text,
@@ -1197,8 +1343,30 @@ def _ensure_watchlist_membership(user_id: int, ts_code: str) -> None:
         raise HTTPException(status_code=404, detail="当前用户自选中不存在该股票")
 
 
-def _load_user_ai_config(user_id: int) -> tuple[str, Optional[str], Optional[str], Optional[str], Optional[int]]:
+def _load_user_ai_config(
+    user_id: int,
+    provider: Optional[str] = None,
+) -> tuple[str, Optional[str], Optional[str], Optional[str], Optional[int]]:
+    target_provider = str(provider or "").strip().lower()
     with get_db_connection() as con:
+        if target_provider:
+            provider_row = con.execute(
+                """
+                SELECT model_name, api_key, base_url, max_tokens
+                FROM user_ai_provider_configs
+                WHERE user_id = ? AND provider = ?
+                """,
+                (user_id, target_provider),
+            ).fetchone()
+            if provider_row and provider_row[1]:
+                return (
+                    target_provider,
+                    provider_row[0],
+                    provider_row[1],
+                    provider_row[2],
+                    provider_row[3],
+                )
+
         row = con.execute(
             """
             SELECT model_provider, model_name, api_key, base_url, max_tokens
@@ -1207,6 +1375,16 @@ def _load_user_ai_config(user_id: int) -> tuple[str, Optional[str], Optional[str
             """,
             (user_id,),
         ).fetchone()
+
+    if target_provider:
+        legacy_provider = str(row[0] or "openai").lower() if row else ""
+        if row and legacy_provider == target_provider and row[2]:
+            return target_provider, row[1], row[2], row[3], row[4]
+        raise HTTPException(
+            status_code=400,
+            detail=f"请先在设置中配置 {target_provider.upper()} 的 API Key，持仓截图识别固定使用 OpenAI 模型。",
+        )
+
     if not row or not row[2]:
         raise HTTPException(status_code=400, detail="请先在设置中配置可用的 AI API Key")
     return row[0] or "openai", row[1], row[2], row[3], row[4]
@@ -1236,41 +1414,364 @@ def _extract_json_payload(raw_text: str) -> Any:
     raise HTTPException(status_code=502, detail="图片识别结果不是有效 JSON")
 
 
-def _resolve_stock_identity(raw_code: Any = None, raw_name: Any = None) -> tuple[Optional[str], Optional[str], str]:
-    code_text = str(raw_code or "").strip().upper()
-    code_text = code_text.replace("SH", "").replace("SZ", "").replace("BJ", "").replace(".", "")
-    norm_code = _normalize_ts_code(code_text) if code_text else ""
+def _extract_text_from_ai_content(content: Any) -> str:
+    if isinstance(content, str):
+        return content.strip()
 
-    if norm_code:
-        by_ts_code = fetch_df(
-            "SELECT ts_code, name FROM stock_basic WHERE ts_code = ? LIMIT 1",
-            (norm_code,),
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            text = _extract_text_from_ai_content(item)
+            if text:
+                parts.append(text)
+        return "\n".join(parts).strip()
+
+    if isinstance(content, dict):
+        text_value = content.get("text")
+        if isinstance(text_value, str) and text_value.strip():
+            return text_value.strip()
+        if isinstance(text_value, dict):
+            nested_value = text_value.get("value")
+            if isinstance(nested_value, str) and nested_value.strip():
+                return nested_value.strip()
+
+        for key in ("content", "output_text", "value"):
+            nested = content.get(key)
+            if nested is None:
+                continue
+            text = _extract_text_from_ai_content(nested)
+            if text:
+                return text
+
+        function_payload = content.get("function")
+        if isinstance(function_payload, dict):
+            arguments = function_payload.get("arguments")
+            if isinstance(arguments, str) and arguments.strip():
+                return arguments.strip()
+
+    return ""
+
+
+def _extract_ai_response_text(result: dict[str, Any]) -> str:
+    choices = result.get("choices")
+    if isinstance(choices, list):
+        for choice in choices:
+            if not isinstance(choice, dict):
+                continue
+
+            message = choice.get("message")
+            if isinstance(message, dict):
+                content = _extract_text_from_ai_content(message.get("content"))
+                if content:
+                    return content
+
+                for tool_call in message.get("tool_calls") or []:
+                    if not isinstance(tool_call, dict):
+                        continue
+                    function_payload = tool_call.get("function")
+                    if not isinstance(function_payload, dict):
+                        continue
+                    arguments = function_payload.get("arguments")
+                    if isinstance(arguments, str) and arguments.strip():
+                        return arguments.strip()
+
+            choice_text = _extract_text_from_ai_content(choice.get("text"))
+            if choice_text:
+                return choice_text
+
+    output_text = _extract_text_from_ai_content(result.get("output_text"))
+    if output_text:
+        return output_text
+
+    output = result.get("output")
+    if isinstance(output, list):
+        for item in output:
+            if not isinstance(item, dict):
+                continue
+            content = _extract_text_from_ai_content(item.get("content"))
+            if content:
+                return content
+
+    return ""
+
+
+def _extract_text_from_chunk_delta(delta: Any) -> str:
+    if not isinstance(delta, dict):
+        return ""
+
+    content = _extract_text_from_ai_content(delta.get("content"))
+    if content:
+        return content
+
+    for key in ("reasoning_content", "reasoning", "text"):
+        value = delta.get(key)
+        text = _extract_text_from_ai_content(value)
+        if text:
+            return text
+
+    tool_calls = delta.get("tool_calls")
+    if isinstance(tool_calls, list):
+        parts: list[str] = []
+        for tool_call in tool_calls:
+            if not isinstance(tool_call, dict):
+                continue
+            function_payload = tool_call.get("function")
+            if not isinstance(function_payload, dict):
+                continue
+            arguments = function_payload.get("arguments")
+            if isinstance(arguments, str) and arguments:
+                parts.append(arguments)
+        if parts:
+            return "".join(parts)
+
+    return ""
+
+
+def _extract_ai_response_text_from_sse(raw_text: str) -> str:
+    chunks: list[str] = []
+    fallback_payloads: list[str] = []
+
+    for raw_line in str(raw_text or "").splitlines():
+        line = raw_line.strip()
+        if not line or not line.startswith("data:"):
+            continue
+
+        data = line[5:].strip()
+        if not data or data == "[DONE]":
+            continue
+
+        try:
+            payload = json.loads(data)
+        except json.JSONDecodeError:
+            continue
+
+        if not isinstance(payload, dict):
+            continue
+
+        direct_text = _extract_ai_response_text(payload)
+        if direct_text:
+            fallback_payloads.append(direct_text)
+
+        choices = payload.get("choices")
+        if not isinstance(choices, list):
+            continue
+
+        for choice in choices:
+            if not isinstance(choice, dict):
+                continue
+            delta = choice.get("delta")
+            chunk_text = _extract_text_from_chunk_delta(delta)
+            if chunk_text:
+                chunks.append(chunk_text)
+
+    if chunks:
+        return "".join(chunks).strip()
+    if fallback_payloads:
+        return "\n".join(part for part in fallback_payloads if part).strip()
+    return ""
+
+
+async def _parse_holdings_with_ai_vision(
+    user_id: int,
+    content: bytes,
+    content_type: str,
+) -> dict[str, Any]:
+    _, model_name, api_key, base_url, max_tokens = _load_user_ai_config(user_id, provider="openai")
+    provider = "openai"
+    if not base_url:
+        base_url = "https://api.openai.com/v1"
+    base_url = str(base_url).rstrip("/")
+    model = model_name or "gpt-4.1-mini"
+
+    data_uri = f"data:{content_type};base64,{base64.b64encode(content).decode('utf-8')}"
+    prompt = (
+        "请识别这张券商持仓截图里的 A 股持仓明细，只返回 JSON 对象，不要输出 Markdown 或解释。\n"
+        "格式固定为：\n"
+        "{\n"
+        '  "holdings": [\n'
+        '    {"ts_code": "600519", "name": "贵州茅台", "shares": 100, "avg_cost": 1688.88}\n'
+        "  ],\n"
+        '  "notes": ["无法确认的内容"]\n'
+        "}\n"
+        "要求：\n"
+        "1. 只保留当前持仓股票，不要包含总资产、可用资金、盈亏汇总、现金、基金或港美股。\n"
+        "2. ts_code 尽量输出 6 位数字；如果看不到代码，可仅填 name。\n"
+        "3. shares 必须是数字股数；avg_cost 看不清可填 null。\n"
+        "4. 无法确认的行不要猜，写入 notes。\n"
+        "5. 如果图片不是持仓页，返回空 holdings，并在 notes 里说明。"
+    )
+
+    payload = {
+        "model": model,
+        "messages": [
+            {
+                "role": "system",
+                "content": "你是 A 股券商持仓截图结构化助手，只输出严格 JSON。",
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": data_uri}},
+                ],
+            },
+        ],
+        "max_tokens": max(500, min(int(max_tokens or 1200), 1200)),
+        "temperature": 0,
+        "stream": False,
+        "response_format": {"type": "json_object"},
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            resp = await client.post(
+                f"{base_url}/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json=payload,
+            )
+    except httpx.HTTPError as exc:
+        logger.error("持仓图片 %s 调用异常: %s", provider, exc)
+        raise HTTPException(
+            status_code=502,
+            detail=f"{provider.upper()} 图片识别调用失败: {type(exc).__name__}",
+        ) from exc
+    if resp.status_code != 200:
+        logger.error("持仓图片 AI 兜底识别失败: %s", resp.text)
+        upstream_message = resp.text
+        try:
+            error_payload = resp.json()
+        except json.JSONDecodeError:
+            error_payload = None
+        if isinstance(error_payload, dict) and isinstance(error_payload.get("error"), dict):
+            upstream_message = str(error_payload["error"].get("message") or upstream_message).strip()
+        invalid_image_markers = (
+            "does not represent a valid image",
+            "invalid image",
+            "image data",
+            "invalid_value",
         )
-        if not by_ts_code.empty:
-            record = by_ts_code.iloc[0]
+        if any(marker in upstream_message.lower() for marker in invalid_image_markers):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"当前 OpenAI 图片识别所用 base_url={base_url} 返回无效图片错误。"
+                    "这通常不是截图本身坏了，而是当前代理/兼容网关不支持 base64 图片输入。"
+                    "请在设置里把 OpenAI base_url 改成官方 OpenAI，或改成明确支持多模态图片输入的兼容端点。"
+                ),
+            )
+        raise HTTPException(status_code=502, detail=f"AI 图片识别调用失败: {upstream_message}")
+
+    raw_body = resp.text or ""
+    content_type = str(resp.headers.get("content-type") or "").lower()
+    if "text/event-stream" in content_type or raw_body.lstrip().startswith("data:"):
+        raw_content = _extract_ai_response_text_from_sse(raw_body)
+        if not raw_content:
+            body_preview = raw_body.strip()[:500]
+            logger.error(
+                "持仓图片 AI 返回 SSE 但未提取到内容: content_type=%s body=%s",
+                resp.headers.get("content-type"),
+                body_preview,
+            )
+            raise HTTPException(
+                status_code=502,
+                detail="AI 图片识别返回了流式响应，但未提取到有效内容，请检查当前 OpenAI 模型或代理是否支持图像输入。",
+            )
+        parsed = _extract_json_payload(raw_content)
+        return {
+            "backend": f"ai_multimodal_{provider}",
+            "holdings": parsed.get("holdings") if isinstance(parsed, dict) else [],
+            "notes": parsed.get("notes") if isinstance(parsed, dict) else [],
+        }
+
+    try:
+        result = resp.json()
+    except json.JSONDecodeError as exc:
+        body_preview = raw_body.strip()[:500]
+        logger.error(
+            "持仓图片 AI 返回非 JSON: content_type=%s body=%s",
+            resp.headers.get("content-type"),
+            body_preview,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail="AI 图片识别返回了非 JSON 响应，请检查当前 OpenAI 模型或代理是否支持图像输入。",
+        ) from exc
+
+    if isinstance(result, dict) and isinstance(result.get("error"), dict):
+        error_message = str(result["error"].get("message") or "上游模型返回错误").strip()
+        raise HTTPException(status_code=502, detail=f"AI 图片识别调用失败: {error_message}")
+
+    raw_content = _extract_ai_response_text(result)
+    if not raw_content:
+        logger.error(
+            "持仓图片 AI 返回空内容: keys=%s body=%s",
+            list(result.keys()) if isinstance(result, dict) else type(result).__name__,
+            json.dumps(result, ensure_ascii=False)[:800] if isinstance(result, dict) else str(result)[:800],
+        )
+        raise HTTPException(
+            status_code=502,
+            detail="AI 图片识别返回空内容，请检查当前 OpenAI 模型或代理是否支持图像输入。",
+        )
+
+    parsed = _extract_json_payload(raw_content)
+    return {
+        "backend": f"ai_multimodal_{provider}",
+        "holdings": parsed.get("holdings") if isinstance(parsed, dict) else [],
+        "notes": parsed.get("notes") if isinstance(parsed, dict) else [],
+    }
+
+
+def _resolve_stock_identity(raw_code: Any = None, raw_name: Any = None) -> tuple[Optional[str], Optional[str], str]:
+    lookup = _load_stock_basic_lookup()
+
+    for symbol in _extract_stock_symbol_candidates(raw_code, raw_name):
+        norm_code = _normalize_ts_code(symbol)
+        record = lookup["by_ts_code"].get(norm_code) if norm_code else None
+        if record:
             return str(record["ts_code"]), str(record["name"]), "ts_code"
 
-        symbol = code_text[:6]
-        if symbol:
-            by_symbol = fetch_df(
-                "SELECT ts_code, name FROM stock_basic WHERE symbol = ? LIMIT 1",
-                (symbol,),
-            )
-            if not by_symbol.empty:
-                record = by_symbol.iloc[0]
-                return str(record["ts_code"]), str(record["name"]), "symbol"
+        record = lookup["by_symbol"].get(symbol)
+        if record:
+            return str(record["ts_code"]), str(record["name"]), "symbol"
 
-    name_text = str(raw_name or "").strip()
-    if name_text:
-        by_name = fetch_df(
-            "SELECT ts_code, name FROM stock_basic WHERE name = ? LIMIT 1",
-            (name_text,),
-        )
-        if not by_name.empty:
-            record = by_name.iloc[0]
+    raw_name_text = str(raw_name or "").strip()
+    name_candidates = _build_stock_name_candidates(raw_name)
+    for candidate in name_candidates:
+        record = _pick_unique_stock_record(lookup["by_exact_name"].get(candidate))
+        if record:
             return str(record["ts_code"]), str(record["name"]), "name"
 
-    return None, name_text or None, "unmatched"
+    for candidate in name_candidates:
+        norm_key = _normalize_stock_name_key(candidate)
+        if not norm_key:
+            continue
+        record = _pick_unique_stock_record(lookup["by_norm_name"].get(norm_key))
+        if record:
+            return str(record["ts_code"]), str(record["name"]), "name_normalized"
+
+    for candidate in name_candidates:
+        norm_key = _normalize_stock_name_key(candidate)
+        if len(norm_key) < 3:
+            continue
+        fuzzy_matches = [
+            row
+            for row in lookup["rows"]
+            if row.get("norm_name") and (norm_key in row["norm_name"] or row["norm_name"] in norm_key)
+        ]
+        record = _pick_unique_stock_record(fuzzy_matches)
+        if record:
+            return str(record["ts_code"]), str(record["name"]), "name_fuzzy"
+
+    ascii_name = _normalize_lookup_text(raw_name)
+    if ascii_name and ascii_name.isascii():
+        record = _pick_unique_stock_record(lookup["by_pinyin"].get(ascii_name))
+        if record:
+            return str(record["ts_code"]), str(record["name"]), "pinyin"
+        record = _pick_unique_stock_record(lookup["by_pinyin_abbr"].get(ascii_name))
+        if record:
+            return str(record["ts_code"]), str(record["name"]), "pinyin_abbr"
+
+    return None, raw_name_text or None, "unmatched"
 
 
 def _prepare_imported_holding_rows(raw_holdings: Any, raw_notes: Any = None) -> tuple[list[dict[str, Any]], list[str]]:
@@ -1299,7 +1800,7 @@ def _prepare_imported_holding_rows(raw_holdings: Any, raw_notes: Any = None) -> 
             avg_cost = None
             warning = "成本价无效，已清空。"
         if status != "matched":
-            warning = warning or "未能匹配到 stock_basic，应用前请手工确认。"
+            warning = warning or "图片已识别，但该项未自动匹配到 stock_basic；应用前请手工确认代码。"
 
         prepared_rows.append({
             "ts_code": ts_code,
@@ -1335,23 +1836,26 @@ def _sync_watchlist_entries(
         (user_id,),
     ).fetchone()[0] or 0
 
-    inserted = 0
+    insert_params: list[tuple[Any, ...]] = []
     for item in valid_items:
         ts_code = str(item["ts_code"])
         if ts_code in existing_codes:
             continue
         current_max_sort += 1
-        con.execute(
+        insert_params.append(
+            (user_id, ts_code, item.get("name") or ts_code, "持仓同步", current_max_sort)
+        )
+        existing_codes.add(ts_code)
+    if insert_params:
+        con.executemany(
             """
             INSERT INTO watchlist (user_id, ts_code, name, remark, sort_order)
             VALUES (?, ?, ?, ?, ?)
             """,
-            (user_id, ts_code, item.get("name") or ts_code, "持仓同步", current_max_sort),
+            insert_params,
         )
-        existing_codes.add(ts_code)
-        inserted += 1
 
-    return inserted
+    return len(insert_params)
 
 
 @router.get("/watchlist")
@@ -1428,6 +1932,42 @@ async def reorder_watchlist(body: WatchlistReorder, request: Request):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.get("/watchlist/levels/backtest")
+async def get_watchlist_level_backtest(
+    board: str = "growth",
+    codes: Optional[str] = None,
+    sample_size: int = 60,
+    lookback_days: int = 120,
+    eval_days: int = 60,
+    horizon: int = 7,
+    include_legacy: bool = True,
+):
+    """
+    Watchlist 点位回测诊断。
+    默认聚焦创业板/科创板的高流动性样本，对比 adaptive 与 legacy 点位。
+    """
+    try:
+        from etl.utils.kline_patterns import backtest_structural_price_levels
+
+        target_codes = [
+            _normalize_ts_code(code)
+            for code in str(codes or "").split(",")
+            if str(code).strip()
+        ] if codes else None
+        payload = backtest_structural_price_levels(
+            board=board,
+            sample_size=sample_size,
+            lookback_days=lookback_days,
+            eval_days=eval_days,
+            horizon=horizon,
+            include_legacy=include_legacy,
+            target_codes=target_codes,
+        )
+        return {"status": "success", **payload}
+    except Exception as e:
+        logger.warning("Watchlist 点位回测失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.get("/watchlist/realtime")
 async def get_watchlist_realtime(
     request: Request,
@@ -1494,7 +2034,7 @@ async def get_watchlist_realtime(
 
     quote_candidate_codes = [c for c in norm_codes if c in tradable_codes]
     display_name_map = {**watchlist_name_map, **basic_name_map}
-    context_map = _fetch_watch_context_map(norm_codes) if analysis_depth == "compact" else {}
+    history_map = _fetch_watch_history_map(norm_codes) if analysis_depth == "compact" else {}
 
     is_trading = trading_calendar.is_trading_time()
     live_quote_day = trading_calendar.is_trading_day(arrow.now("Asia/Shanghai").date())
@@ -1519,7 +2059,7 @@ async def get_watchlist_realtime(
                     if analysis_depth == "compact":
                         analyze_result = _build_compact_watch_analysis(
                             ts_code,
-                            context_map.get(ts_code),
+                            history_map.get(ts_code),
                             realtime_snapshot=snapshot,
                         )
                     else:
@@ -1553,23 +2093,24 @@ async def get_watchlist_realtime(
 
     if remaining_codes and analysis_depth == "compact":
         for tc in remaining_codes:
-            context_row = context_map.get(tc)
-            if not context_row:
+            history_df = history_map.get(tc)
+            if history_df is None or history_df.empty:
                 continue
+            latest_row = history_df.iloc[-1]
             analyze_result = (
-                _build_compact_watch_analysis(tc, context_row, realtime_snapshot=None)
+                _build_compact_watch_analysis(tc, history_df, realtime_snapshot=None)
                 if include_analysis else {}
             )
             rows.append(_sanitize_json_value({
                 "ts_code": tc,
                 "name": display_name_map.get(tc, tc),
-                "trade_date": _normalize_trade_date(context_row.get("trade_date")),
+                "trade_date": _normalize_trade_date(latest_row.get("trade_date")),
                 "quote_time": None,
-                "price": context_row.get("close"),
-                "pre_close": context_row.get("pre_close"),
-                "pct": context_row.get("pct_chg"),
-                "vol": context_row.get("vol"),
-                "amount": context_row.get("amount"),
+                "price": latest_row.get("close"),
+                "pre_close": latest_row.get("pre_close"),
+                "pct": latest_row.get("pct_chg"),
+                "vol": latest_row.get("volume", latest_row.get("vol")),
+                "amount": latest_row.get("amount"),
                 "volume_ratio": _extract_watch_technical_metric(analyze_result, "volume_ratio"),
                 "turnover_rate": _extract_watch_technical_metric(analyze_result, "turnover"),
                 "analyze": analyze_result
@@ -1899,79 +2440,30 @@ async def parse_holdings_from_image(
     if len(content) > 8 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="图片过大，请控制在 8MB 以内")
 
-    model_provider, model_name, api_key, base_url, max_tokens = _load_user_ai_config(user_id)
-    if str(model_provider).lower() == "deepseek":
-        raise HTTPException(
-            status_code=400,
-            detail="图片识别持仓当前仅支持 OpenAI 兼容多模态模型，请在设置中切换 provider。",
-        )
-
-    if not base_url:
-        base_url = "https://api.openai.com/v1"
-    base_url = str(base_url).rstrip("/")
-    model = model_name or "gpt-4.1-mini"
-    data_uri = f"data:{file.content_type};base64,{base64.b64encode(content).decode('utf-8')}"
-    prompt = (
-        "请识别这张券商持仓截图里的 A 股持仓明细，只返回 JSON 对象，不要输出 Markdown 或解释。\n"
-        "格式固定为：\n"
-        "{\n"
-        '  "holdings": [\n'
-        '    {"ts_code": "600519", "name": "贵州茅台", "shares": 100, "avg_cost": 1688.88}\n'
-        "  ],\n"
-        '  "notes": ["无法确认的内容"]\n'
-        "}\n"
-        "要求：\n"
-        "1. 只保留当前持仓股票，不要包含总资产、可用资金、盈亏汇总、现金、基金或港美股。\n"
-        "2. ts_code 尽量输出 6 位数字；如果看不到代码，可仅填 name。\n"
-        "3. shares 必须是数字股数；avg_cost 看不清可填 null。\n"
-        "4. 无法确认的行不要猜，写入 notes。\n"
-        "5. 如果图片不是持仓页，返回空 holdings，并在 notes 里说明。"
-    )
-
-    payload = {
-        "model": model,
-        "messages": [
-            {
-                "role": "system",
-                "content": "你是 A 股券商持仓截图结构化助手，只输出严格 JSON。",
-            },
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": data_uri}},
-                ],
-            },
-        ],
-        "max_tokens": max(500, min(int(max_tokens or 1200), 1200)),
-        "temperature": 0,
-    }
-
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            resp = await client.post(
-                f"{base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                json=payload,
-            )
-        if resp.status_code != 200:
-            logger.error("持仓图片识别失败: %s", resp.text)
-            raise HTTPException(status_code=502, detail=f"图片识别调用失败: {resp.text}")
-
-        result = resp.json()
-        raw_content = (
-            result.get("choices", [{}])[0]
-            .get("message", {})
-            .get("content", "")
+        ai_result = await _parse_holdings_with_ai_vision(
+            user_id=user_id,
+            content=content,
+            content_type=file.content_type,
         )
-        parsed = _extract_json_payload(raw_content)
+        raw_holdings = ai_result.get("holdings") or []
+        notes = [
+            str(note).strip()
+            for note in (ai_result.get("notes") or [])
+            if str(note).strip()
+        ]
         prepared_rows, notes = _prepare_imported_holding_rows(
-            parsed.get("holdings") if isinstance(parsed, dict) else [],
-            parsed.get("notes") if isinstance(parsed, dict) else None,
+            raw_holdings,
+            notes,
         )
 
         matched_rows = [item for item in prepared_rows if item.get("status") == "matched"]
         unmatched_rows = [item for item in prepared_rows if item.get("status") != "matched"]
+        if prepared_rows:
+            notes.append(
+                f"已识别 {len(prepared_rows)} 条持仓，其中 {len(matched_rows)} 条已自动匹配代码，"
+                f"{len(unmatched_rows)} 条待确认。待确认不代表识别失败。"
+            )
 
         return {
             "status": "success",
@@ -1979,6 +2471,9 @@ async def parse_holdings_from_image(
                 "items": prepared_rows,
                 "matched_items": matched_rows,
                 "unmatched_items": unmatched_rows,
+                "recognition_backend": ai_result.get("backend") or "ai_multimodal",
+                "used_ai_fallback": False,
+                "local_ocr_available": False,
                 "notes": notes,
                 "summary": {
                     "total_items": len(prepared_rows),
@@ -2049,6 +2544,7 @@ async def batch_update_holdings(request: Request, body: HoldingsBatchUpdateReque
                     (user_id,),
                 ).fetchall()
             }
+            remaining_existing_codes = set(existing_codes)
 
             if body.replace_missing:
                 keep_codes = tuple(codes)
@@ -2063,30 +2559,34 @@ async def batch_update_holdings(request: Request, body: HoldingsBatchUpdateReque
                 else:
                     con.execute("DELETE FROM user_holdings WHERE user_id = ?", (user_id,))
                     deleted_count = len(existing_codes)
+                remaining_existing_codes = existing_codes & set(keep_codes)
 
+            update_params: list[tuple[Any, ...]] = []
+            insert_params: list[tuple[Any, ...]] = []
             for item in applied_items:
                 ts_code = item["ts_code"]
-                row = con.execute(
-                    "SELECT 1 FROM user_holdings WHERE user_id = ? AND ts_code = ?",
-                    (user_id, ts_code),
-                ).fetchone()
-                if row:
-                    con.execute(
-                        """
-                        UPDATE user_holdings
-                        SET shares = ?, avg_cost = ?, updated_at = CURRENT_TIMESTAMP
-                        WHERE user_id = ? AND ts_code = ?
-                        """,
-                        (item["shares"], item["avg_cost"], user_id, ts_code),
-                    )
+                if ts_code in remaining_existing_codes:
+                    update_params.append((item["shares"], item["avg_cost"], user_id, ts_code))
                 else:
-                    con.execute(
-                        """
-                        INSERT INTO user_holdings (user_id, ts_code, shares, avg_cost)
-                        VALUES (?, ?, ?, ?)
-                        """,
-                        (user_id, ts_code, item["shares"], item["avg_cost"]),
-                    )
+                    insert_params.append((user_id, ts_code, item["shares"], item["avg_cost"]))
+
+            if update_params:
+                con.executemany(
+                    """
+                    UPDATE user_holdings
+                    SET shares = ?, avg_cost = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE user_id = ? AND ts_code = ?
+                    """,
+                    update_params,
+                )
+            if insert_params:
+                con.executemany(
+                    """
+                    INSERT INTO user_holdings (user_id, ts_code, shares, avg_cost)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    insert_params,
+                )
 
             if body.sync_watchlist:
                 watchlist_added = _sync_watchlist_entries(con, user_id, applied_items)

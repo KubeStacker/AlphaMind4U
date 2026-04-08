@@ -1792,114 +1792,2326 @@ def _resolve_commentary_context(context: dict | None) -> dict:
     return resolved
 
 
+LEVEL_FAMILY_TEXT = {
+    "anchor": "短线锚点",
+    "trend": "均线成本",
+    "range": "区间极值",
+    "pivot": "摆动拐点",
+    "volume": "成交密集区",
+}
+
+
+def _describe_level_source(source: str, level_type: str) -> tuple[str, str, str, str]:
+    normalized = str(source or "").upper()
+    if normalized.startswith("MA"):
+        window = re.sub(r"[^0-9]", "", normalized) or normalized.replace("MA", "")
+        basis = f"{window}日均线"
+        definition = f"近{window}个交易日的平均成本线"
+        breach_rule = "收盘跌破说明均线支撑削弱" if level_type == "support" else "放量站上才算均线压力化解"
+        return basis, definition, breach_rule, "trend"
+
+    if normalized == "PRE_CLOSE":
+        basis = "昨收价"
+        definition = "上一交易日收盘价，代表短线多空分界"
+        breach_rule = "跌回昨收下方说明隔夜优势消失" if level_type == "support" else "重新站回昨收上方才算修复日内弱势"
+        return basis, definition, breach_rule, "anchor"
+
+    if normalized == "OPEN":
+        basis = "开盘价"
+        definition = "当日开盘成本区，适合作为盘中强弱分界"
+        breach_rule = "跌破开盘价说明日内承接转弱" if level_type == "support" else "重新站上开盘价才算日内回稳"
+        return basis, definition, breach_rule, "anchor"
+
+    if normalized.startswith("LOW_"):
+        window = re.sub(r"[^0-9]", "", normalized) or normalized.replace("LOW_", "")
+        basis = f"近{window}日最低价"
+        definition = f"近{window}日回撤低点"
+        breach_rule = "跌破意味着该时间窗防守区被击穿"
+        return basis, definition, breach_rule, "range"
+
+    if normalized.startswith("HIGH_"):
+        window = re.sub(r"[^0-9]", "", normalized) or normalized.replace("HIGH_", "")
+        basis = f"近{window}日最高价"
+        definition = f"近{window}日上方阻力区"
+        breach_rule = "放量站上才算有效突破"
+        return basis, definition, breach_rule, "range"
+
+    if normalized.startswith("PIVOT_LOW"):
+        basis = "近期确认摆动低点"
+        definition = "局部波段拐点，对应最近一次有效回踩结构"
+        breach_rule = "收盘跌破说明最近一轮摆动低点失守"
+        return basis, definition, breach_rule, "pivot"
+
+    if normalized.startswith("PIVOT_HIGH"):
+        basis = "近期确认摆动高点"
+        definition = "局部波段拐点，对应最近一次冲高受阻结构"
+        breach_rule = "放量站上说明最近一轮摆动高点被突破"
+        return basis, definition, breach_rule, "pivot"
+
+    if normalized.startswith("VP_SUPPORT") or normalized.startswith("VP_RESISTANCE"):
+        basis = "近60日成交密集区"
+        definition = "按典型价格与成交量聚合后的成本峰值，类似简化筹码峰"
+        breach_rule = "跌破说明密集成交区承接被击穿" if level_type == "support" else "放量站上说明上方密集成交区开始松动"
+        return basis, definition, breach_rule, "volume"
+
+    basis = normalized or ("支撑位" if level_type == "support" else "压力位")
+    definition = "历史量价形成的重要价格带"
+    breach_rule = "跌破说明支撑失效" if level_type == "support" else "放量站上才算压力化解"
+    return basis, definition, breach_rule, "range"
+
+
+def _latest_atr_value(df: pd.DataFrame, window: int = 14) -> float | None:
+    if "atr14" in df.columns:
+        atr_series = pd.to_numeric(df["atr14"], errors="coerce").dropna()
+        if not atr_series.empty:
+            value = _safe_number(atr_series.iloc[-1])
+            if value is not None and value > 0:
+                return value
+
+    if not {"high", "low", "close"}.issubset(df.columns):
+        return None
+
+    high = pd.to_numeric(df["high"], errors="coerce")
+    low = pd.to_numeric(df["low"], errors="coerce")
+    close = pd.to_numeric(df["close"], errors="coerce")
+    prev_close = close.shift(1).fillna(close)
+    tr = pd.concat(
+        [
+            high - low,
+            (high - prev_close).abs(),
+            (low - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    atr_series = tr.rolling(window, min_periods=min(5, window)).mean().dropna()
+    if atr_series.empty:
+        return None
+    return _safe_number(atr_series.iloc[-1])
+
+
+def _compute_level_bands(df: pd.DataFrame, close: float, atr_value: float | None) -> tuple[float, float, float, float, float]:
+    if close <= 0:
+        return 0.03, 0.05, 0.02, 0.0, 0.0
+
+    swing_pct = 0.0
+    if {"high", "low"}.issubset(df.columns):
+        recent = df.tail(min(len(df), 10))
+        swing = (
+            (pd.to_numeric(recent["high"], errors="coerce") - pd.to_numeric(recent["low"], errors="coerce"))
+            / pd.to_numeric(recent["close"], errors="coerce").replace(0, np.nan)
+        ) * 100.0
+        swing = swing.replace([np.inf, -np.inf], np.nan).dropna()
+        if not swing.empty:
+            swing_pct = float(swing.median())
+
+    atr_pct = (float(atr_value) / close * 100.0) if atr_value and atr_value > 0 else 0.0
+    volatility_pct = max(atr_pct, swing_pct, 1.0)
+
+    cluster_band = max(close * float(np.clip(volatility_pct * 0.45 / 100.0, 0.0055, 0.022)), 0.03)
+    selection_gap = max(close * float(np.clip(volatility_pct * 0.90 / 100.0, 0.011, 0.040)), 0.05)
+    touch_band = max(close * float(np.clip(volatility_pct * 0.35 / 100.0, 0.0045, 0.018)), 0.02)
+    return cluster_band, selection_gap, touch_band, atr_pct, swing_pct
+
+
+def _count_level_touches(
+    df: pd.DataFrame,
+    price: float,
+    level_type: str,
+    touch_band: float,
+    volume_col: str,
+) -> tuple[int, int | None, float]:
+    if df.empty:
+        return 0, None, 1.0
+
+    recent = df.tail(min(len(df), 30)).reset_index(drop=True)
+    close_series = pd.to_numeric(recent.get("close"), errors="coerce")
+    low_series = pd.to_numeric(recent.get("low"), errors="coerce")
+    high_series = pd.to_numeric(recent.get("high"), errors="coerce")
+    if level_type == "support":
+        ref_mask = (low_series >= price - touch_band * 1.35) & (low_series <= price + touch_band)
+    else:
+        ref_mask = (high_series <= price + touch_band * 1.35) & (high_series >= price - touch_band)
+    close_mask = (close_series - price).abs() <= touch_band * 0.8
+    touch_mask = (ref_mask.fillna(False) | close_mask.fillna(False))
+
+    positions = np.flatnonzero(touch_mask.to_numpy())
+    recency_days = int(len(recent) - 1 - positions[-1]) if positions.size else None
+
+    volume_ratio = 1.0
+    if volume_col and volume_col in recent.columns:
+        volume_series = pd.to_numeric(recent[volume_col], errors="coerce").fillna(0.0)
+        baseline = _safe_number(volume_series.replace(0, np.nan).mean(), 0.0) or 0.0
+        if baseline > 0 and positions.size:
+            touch_volume = _safe_number(volume_series.loc[touch_mask].replace(0, np.nan).mean(), baseline) or baseline
+            volume_ratio = touch_volume / baseline if baseline else 1.0
+
+    return int(touch_mask.sum()), recency_days, float(np.clip(volume_ratio, 0.6, 2.2))
+
+
 def _build_level_candidate(
+    df: pd.DataFrame,
     level_type: str,
     source: str,
     price: float | None,
     close: float,
-    weight: float,
+    base_weight: float,
+    touch_band: float,
+    volume_col: str,
+    extra_strength: float = 0.0,
 ) -> dict | None:
     value = _safe_number(price)
     if value is None or close <= 0:
         return None
-    if level_type == "support" and value > close:
+    if level_type == "support" and value > close * 1.002:
         return None
-    if level_type == "resistance" and value < close:
+    if level_type == "resistance" and value < close * 0.998:
         return None
 
-    distance_pct = abs(close - value) / close * 100
-    if source.startswith("MA"):
-        window = source.replace("MA", "")
-        basis = f"{window}日均线"
-        definition = f"近{window}个交易日平均成本线"
-        breach_rule = "收盘跌破说明均线支撑削弱" if level_type == "support" else "放量站上才算均线压力化解"
-    elif source == "PRE_CLOSE":
-        basis = "昨收价"
-        definition = "上一交易日收盘价，代表短线多空分界线"
-        breach_rule = "跌回昨收下方说明隔夜优势消失" if level_type == "support" else "站回昨收上方才算修复日内弱势"
-    elif source == "OPEN":
-        basis = "开盘价"
-        definition = "当日开盘成本区，适合作为盘中强弱分界"
-        breach_rule = "跌破开盘价说明日内承接转弱" if level_type == "support" else "重新站上开盘价才算日内回稳"
-    elif source.startswith("LOW_"):
-        window = source.replace("LOW_", "")
-        basis = f"近{window}日最低价"
-        definition = f"近{window}日回撤低点"
-        breach_rule = "跌破意味着该时间窗防守区被击穿"
-    else:
-        window = source.replace("HIGH_", "")
-        basis = f"近{window}日最高价" if source.startswith("HIGH_") else source
-        definition = f"近{window}日上方成交密集区" if source.startswith("HIGH_") else source
-        breach_rule = "放量站上才算有效突破"
+    distance_pct = abs(close - value) / close * 100.0
+    if distance_pct > 18.0:
+        return None
+
+    basis, definition, breach_rule, family = _describe_level_source(source, level_type)
+    touch_count, recency_days, touch_volume_ratio = _count_level_touches(
+        df,
+        value,
+        level_type=level_type,
+        touch_band=touch_band,
+        volume_col=volume_col,
+    )
 
     return {
         "type": level_type,
         "source": source,
+        "family": family,
         "price": round(value, 2),
         "distance_pct": round(distance_pct, 2),
-        "weight": float(weight),
+        "weight": round(float(base_weight) + float(extra_strength or 0.0), 3),
         "basis": basis,
         "definition": definition,
         "breach_rule": breach_rule,
+        "touch_count": int(touch_count),
+        "recency_days": recency_days,
+        "touch_volume_ratio": round(touch_volume_ratio, 2),
     }
 
 
-def _select_key_levels(close: float, candidates: Sequence[dict], level_type: str, top_n: int = 2) -> list[dict]:
+def _collect_pivot_level_candidates(
+    df: pd.DataFrame,
+    close: float,
+    level_type: str,
+    touch_band: float,
+    volume_col: str,
+) -> list[dict]:
+    if len(df) < 7 or not {"close", "high", "low"}.issubset(df.columns):
+        return []
+
+    window = df.tail(min(len(df), 60)).reset_index(drop=True)
+    price_series = pd.to_numeric(window["low" if level_type == "support" else "high"], errors="coerce")
+    close_series = pd.to_numeric(window["close"], errors="coerce")
+    candidates: list[dict] = []
+    min_move_pct = max(0.8, touch_band / max(close, EPS) * 100.0)
+
+    for idx in range(2, len(window) - 2):
+        value = _safe_number(price_series.iloc[idx])
+        if value is None:
+            continue
+
+        neighborhood = price_series.iloc[idx - 2: idx + 3]
+        if neighborhood.isna().any():
+            continue
+
+        if level_type == "support":
+            if value > float(neighborhood.min()) + EPS:
+                continue
+            after = close_series.iloc[idx + 1: min(len(window), idx + 6)]
+            move_away_pct = ((after.max() - value) / max(value, EPS) * 100.0) if not after.empty else 0.0
+            source = f"PIVOT_LOW_{len(window) - 1 - idx}"
+        else:
+            if value < float(neighborhood.max()) - EPS:
+                continue
+            after = close_series.iloc[idx + 1: min(len(window), idx + 6)]
+            move_away_pct = ((value - after.min()) / max(value, EPS) * 100.0) if not after.empty else 0.0
+            source = f"PIVOT_HIGH_{len(window) - 1 - idx}"
+
+        if move_away_pct < min_move_pct:
+            continue
+
+        age = len(window) - 1 - idx
+        if age > 45:
+            continue
+
+        extra_strength = min(move_away_pct / 6.0, 0.55) + max(0.0, 0.18 - age * 0.004)
+        candidate = _build_level_candidate(
+            df,
+            level_type=level_type,
+            source=source,
+            price=value,
+            close=close,
+            base_weight=1.02,
+            touch_band=touch_band,
+            volume_col=volume_col,
+            extra_strength=extra_strength,
+        )
+        if candidate:
+            candidates.append(candidate)
+
+    selected: list[dict] = []
+    for item in sorted(
+        candidates,
+        key=lambda candidate: (
+            candidate.get("recency_days") if candidate.get("recency_days") is not None else 999,
+            candidate["distance_pct"],
+        ),
+    ):
+        if any(abs(float(item["price"]) - float(prev["price"])) <= touch_band for prev in selected):
+            continue
+        selected.append(item)
+        if len(selected) >= 4:
+            break
+    return selected
+
+
+def _collect_volume_profile_level_candidates(
+    df: pd.DataFrame,
+    close: float,
+    level_type: str,
+    cluster_band: float,
+    touch_band: float,
+    volume_col: str,
+) -> list[dict]:
+    if len(df) < 12 or not volume_col or volume_col not in df.columns or not {"close", "high", "low"}.issubset(df.columns):
+        return []
+
+    window = df.tail(min(len(df), 60)).copy()
+    typical_price = (
+        pd.to_numeric(window["high"], errors="coerce")
+        + pd.to_numeric(window["low"], errors="coerce")
+        + pd.to_numeric(window["close"], errors="coerce")
+    ) / 3.0
+    volume = pd.to_numeric(window[volume_col], errors="coerce").fillna(0.0)
+    mask = typical_price.notna() & volume.gt(0)
+    if int(mask.sum()) < 8:
+        return []
+
+    bins = int(np.clip(np.sqrt(mask.sum()) * 2.2, 12, 24))
+    weights, edges = np.histogram(typical_price.loc[mask], bins=bins, weights=np.maximum(volume.loc[mask], 1.0))
+    if not np.any(weights > 0):
+        return []
+
+    centers = (edges[:-1] + edges[1:]) / 2.0
+    nonzero_weights = weights[weights > 0]
+    weight_threshold = float(np.percentile(nonzero_weights, 60)) if len(nonzero_weights) >= 4 else float(nonzero_weights.mean())
+
+    raw_nodes: list[dict[str, float]] = []
+    for idx, weight in enumerate(weights):
+        if weight <= 0:
+            continue
+
+        center = float(centers[idx])
+        if level_type == "support" and center > close + cluster_band * 0.35:
+            continue
+        if level_type == "resistance" and center < close - cluster_band * 0.35:
+            continue
+
+        neighbor_weight = max(
+            float(weights[idx - 1]) if idx > 0 else 0.0,
+            float(weights[idx + 1]) if idx + 1 < len(weights) else 0.0,
+        )
+        prominence = float(weight / max(neighbor_weight, 1.0))
+        if float(weight) < weight_threshold and prominence < 1.15:
+            continue
+
+        raw_nodes.append(
+            {
+                "price": center,
+                "strength": float(weight / max(nonzero_weights.mean(), 1.0)),
+                "prominence": prominence,
+            }
+        )
+
+    selected_nodes: list[dict[str, float]] = []
+    for node in sorted(raw_nodes, key=lambda item: (-item["strength"], abs(item["price"] - close))):
+        if any(abs(node["price"] - prev["price"]) <= cluster_band for prev in selected_nodes):
+            continue
+        selected_nodes.append(node)
+        if len(selected_nodes) >= 3:
+            break
+
+    candidates: list[dict] = []
+    prefix = "VP_SUPPORT" if level_type == "support" else "VP_RESISTANCE"
+    for idx, node in enumerate(selected_nodes, start=1):
+        extra_strength = min(
+            max(node["strength"] - 1.0, 0.0) * 0.28 + max(node["prominence"] - 1.0, 0.0) * 0.18,
+            0.75,
+        )
+        candidate = _build_level_candidate(
+            df,
+            level_type=level_type,
+            source=f"{prefix}_{idx}",
+            price=node["price"],
+            close=close,
+            base_weight=1.18,
+            touch_band=touch_band,
+            volume_col=volume_col,
+            extra_strength=extra_strength,
+        )
+        if candidate:
+            candidates.append(candidate)
+    return candidates
+
+
+def _merge_level_clusters(candidates: Sequence[dict], cluster_band: float) -> list[dict]:
     if not candidates:
         return []
 
-    tolerance = max(close * 0.0035, 0.03)
-    ordered = sorted(
-        candidates,
-        key=lambda item: (item["distance_pct"], -item["weight"]),
-    )
+    ordered = sorted(candidates, key=lambda item: float(item["price"]))
     merged: list[dict] = []
     for item in ordered:
         existing = next(
             (
                 level for level in merged
-                if abs(float(level["price"]) - float(item["price"])) <= tolerance
+                if abs(float(level["price"]) - float(item["price"])) <= cluster_band
             ),
             None,
         )
-        if existing:
-            if item["weight"] > existing["weight"]:
-                existing["price"] = item["price"]
-                existing["basis"] = item["basis"]
-                existing["definition"] = item["definition"]
-                existing["breach_rule"] = item["breach_rule"]
-            existing["weight"] = max(float(existing["weight"]), float(item["weight"]))
-            existing["distance_pct"] = min(float(existing["distance_pct"]), float(item["distance_pct"]))
-            sources = set(existing.get("sources", []))
-            sources.add(item["source"])
-            existing["sources"] = sorted(sources)
+        if existing is None:
+            cloned = dict(item)
+            cloned["sources"] = [item["source"]]
+            cloned["basis_list"] = [item["basis"]]
+            cloned["definitions"] = [item["definition"]]
+            cloned["breach_rules"] = [item["breach_rule"]]
+            cloned["families"] = [item["family"]]
+            cloned["dominant_basis"] = item["basis"]
+            cloned["dominant_weight"] = float(item["weight"])
+            cloned["dominant_family"] = item["family"]
+            merged.append(cloned)
             continue
 
-        cloned = dict(item)
-        cloned["sources"] = [item["source"]]
-        merged.append(cloned)
+        current_weight = float(existing["weight"])
+        incoming_weight = float(item["weight"])
+        total_weight = current_weight + incoming_weight
+        if total_weight > 0:
+            existing["price"] = round(
+                (float(existing["price"]) * current_weight + float(item["price"]) * incoming_weight) / total_weight,
+                2,
+            )
+        existing["weight"] = round(total_weight, 3)
+        existing["distance_pct"] = min(float(existing["distance_pct"]), float(item["distance_pct"]))
+        existing["touch_count"] = max(int(existing.get("touch_count") or 0), int(item.get("touch_count") or 0))
+        existing["touch_volume_ratio"] = max(float(existing.get("touch_volume_ratio") or 1.0), float(item.get("touch_volume_ratio") or 1.0))
 
-    selected = []
-    for idx, item in enumerate(merged[:max(1, int(top_n))], start=1):
-        source_text = "、".join(item.get("sources", []))
+        recencies = [value for value in (existing.get("recency_days"), item.get("recency_days")) if value is not None]
+        existing["recency_days"] = min(recencies) if recencies else None
+
+        for key, field in (
+            ("sources", "source"),
+            ("basis_list", "basis"),
+            ("definitions", "definition"),
+            ("breach_rules", "breach_rule"),
+            ("families", "family"),
+        ):
+            values = set(existing.get(key, []))
+            values.add(item[field])
+            existing[key] = sorted(values)
+
+        if incoming_weight > float(existing.get("dominant_weight", 0.0)):
+            existing["dominant_weight"] = incoming_weight
+            existing["dominant_basis"] = item["basis"]
+            existing["dominant_family"] = item["family"]
+
+    for item in merged:
+        recency_days = item.get("recency_days")
+        recency_score = 0.2 if recency_days is None else max(0.0, 1.0 - min(float(recency_days), 25.0) / 22.0)
+        touch_score = min(float(item.get("touch_count") or 0) / 4.0, 1.6)
+        volume_bonus = max(0.0, min(float(item.get("touch_volume_ratio") or 1.0), 2.2) - 0.9)
+        distance_score = max(0.0, 1.0 - min(float(item["distance_pct"]), 14.0) / 12.0)
+        family_bonus = min(0.24 * len(item.get("families", [])), 0.72)
+        item["strength_score"] = round(
+            float(item["weight"]) + touch_score * 0.55 + recency_score * 0.40 + volume_bonus * 0.35 + family_bonus,
+            3,
+        )
+        item["selection_score"] = round(float(item["strength_score"]) + distance_score * 0.95, 3)
+    return merged
+
+
+def _select_key_levels(
+    close: float,
+    candidates: Sequence[dict],
+    level_type: str,
+    top_n: int = 2,
+    cluster_band: float | None = None,
+    selection_gap: float | None = None,
+) -> list[dict]:
+    if not candidates or close <= 0:
+        return []
+
+    cluster_band = cluster_band or max(close * 0.006, 0.03)
+    selection_gap = selection_gap or max(close * 0.012, 0.05)
+    clusters = _merge_level_clusters(candidates, cluster_band=cluster_band)
+    if not clusters:
+        return []
+
+    ranked = sorted(
+        clusters,
+        key=lambda item: (
+            -float(item["selection_score"]),
+            float(item["distance_pct"]),
+            -float(item["price"]) if level_type == "support" else float(item["price"]),
+        ),
+    )
+
+    picked: list[dict] = []
+    for item in ranked:
+        if any(abs(float(item["price"]) - float(prev["price"])) < selection_gap for prev in picked):
+            continue
+        picked.append(item)
+        if len(picked) >= max(1, int(top_n)):
+            break
+
+    if not picked:
+        nearest = sorted(clusters, key=lambda item: (float(item["distance_pct"]), -float(item["weight"])))
+        picked = nearest[:1]
+
+    ordered = sorted(picked, key=lambda item: float(item["price"]), reverse=level_type == "support")
+    selected: list[dict] = []
+    for idx, item in enumerate(ordered[:max(1, int(top_n))], start=1):
+        basis_text = "、".join(item.get("basis_list", [])[:3]) or str(item.get("dominant_basis") or "")
+        family_text = "、".join(
+            LEVEL_FAMILY_TEXT.get(family, family) for family in item.get("families", [])
+        )
+        breach_rules = [str(rule).strip() for rule in item.get("breach_rules", []) if str(rule).strip()]
+        breach_rule = breach_rules[0] if breach_rules else ("跌破说明支撑失效" if level_type == "support" else "放量站上才算压力化解")
         direction_text = "下方" if level_type == "support" else "上方"
-        role_text = "多头防守位" if level_type == "support" else "突破确认位"
+        role_text = (
+            "首要防守位" if level_type == "support" and idx == 1 else
+            "次级缓冲位" if level_type == "support" else
+            "首个突破确认位" if idx == 1 else
+            "第二道阻力位"
+        )
+        family_suffix = f"（{family_text}）" if family_text else ""
         selected.append(
             {
                 "label": f"{'支撑' if level_type == 'support' else '压力'}{idx}",
-                "price": item["price"],
+                "price": round(float(item["price"]), 2),
                 "type": level_type,
-                "source": item["basis"],
+                "source": item.get("dominant_basis") or basis_text,
                 "sources": item.get("sources", []),
+                "families": item.get("families", []),
+                "dominant_family": item.get("dominant_family"),
                 "distance_pct": round(float(item["distance_pct"]), 2),
-                "definition": item["definition"],
+                "strength_score": round(float(item.get("strength_score") or 0.0), 2),
+                "definition": " / ".join(item.get("definitions", [])[:2]),
                 "note": (
-                    f"来源：{item['basis']}（{source_text}）；定义：{item['definition']}，"
-                    f"距离现价{direction_text}约 {item['distance_pct']:.2f}%，属于{role_text}。{item['breach_rule']}。"
+                    f"来源共振：{basis_text}{family_suffix}；近30日触碰 {int(item.get('touch_count') or 0)} 次，"
+                    f"距现价{direction_text}约 {float(item['distance_pct']):.2f}%，按 ATR/振幅带去重后保留为{role_text}。{breach_rule}。"
                 ),
             }
         )
     return selected
+
+
+def build_structural_price_levels_legacy(df: pd.DataFrame, top_n: int = 2) -> dict[str, Any]:
+    if df is None or df.empty or "close" not in df.columns:
+        return {
+            "support_levels": [],
+            "resistance_levels": [],
+            "level_methodology": [],
+            "atr14": None,
+            "atr_pct": None,
+            "cluster_band": None,
+            "selection_gap": None,
+        }
+
+    work = _ensure_volume_col(df.copy())
+    for col in ("open", "high", "low", "close", "volume", "amount"):
+        if col in work.columns:
+            work[col] = pd.to_numeric(work[col], errors="coerce")
+
+    for ma in (5, 10, 20, 60):
+        col = f"ma{ma}"
+        if col not in work.columns:
+            work[col] = work["close"].rolling(ma, min_periods=1).mean()
+        else:
+            work[col] = pd.to_numeric(work[col], errors="coerce")
+
+    close = _safe_number(work.iloc[-1].get("close"))
+    if close is None or close <= 0:
+        return {
+            "support_levels": [],
+            "resistance_levels": [],
+            "level_methodology": [],
+            "atr14": None,
+            "atr_pct": None,
+            "cluster_band": None,
+            "selection_gap": None,
+        }
+
+    atr_value = _latest_atr_value(work)
+    cluster_band, selection_gap, touch_band, atr_pct, swing_pct = _compute_level_bands(work, close, atr_value)
+    volume_col = "volume" if "volume" in work.columns else ("amount" if "amount" in work.columns else "")
+    prev_close = _safe_number(work.iloc[-2]["close"] if len(work) >= 2 else close, close) or close
+    open_price = _safe_number(work.iloc[-1].get("open"), close) or close
+
+    last_5 = work.tail(5)
+    last_10 = work.tail(10)
+    last_20 = work.tail(20)
+    last_60 = work.tail(60) if len(work) >= 60 else work
+
+    support_specs = [
+        ("PRE_CLOSE", prev_close, 0.72),
+        ("OPEN", open_price, 0.66),
+        ("MA5", _safe_number(work.iloc[-1].get("ma5")), 0.76),
+        ("MA10", _safe_number(work.iloc[-1].get("ma10")), 0.92),
+        ("MA20", _safe_number(work.iloc[-1].get("ma20")), 1.06),
+        ("MA60", _safe_number(work.iloc[-1].get("ma60")), 1.14),
+        ("LOW_5", _safe_number(last_5["low"].min() if "low" in last_5.columns else None), 0.78),
+        ("LOW_10", _safe_number(last_10["low"].min() if "low" in last_10.columns else None), 0.92),
+        ("LOW_20", _safe_number(last_20["low"].min() if "low" in last_20.columns else None), 1.06),
+        ("LOW_60", _safe_number(last_60["low"].min() if "low" in last_60.columns else None), 1.12),
+    ]
+    resistance_specs = [
+        ("PRE_CLOSE", prev_close, 0.72),
+        ("OPEN", open_price, 0.66),
+        ("MA5", _safe_number(work.iloc[-1].get("ma5")), 0.76),
+        ("MA10", _safe_number(work.iloc[-1].get("ma10")), 0.92),
+        ("MA20", _safe_number(work.iloc[-1].get("ma20")), 1.06),
+        ("MA60", _safe_number(work.iloc[-1].get("ma60")), 1.14),
+        ("HIGH_5", _safe_number(last_5["high"].max() if "high" in last_5.columns else None), 0.78),
+        ("HIGH_10", _safe_number(last_10["high"].max() if "high" in last_10.columns else None), 0.92),
+        ("HIGH_20", _safe_number(last_20["high"].max() if "high" in last_20.columns else None), 1.06),
+        ("HIGH_60", _safe_number(last_60["high"].max() if "high" in last_60.columns else None), 1.12),
+    ]
+
+    support_candidates: list[dict] = []
+    for source, price, weight in support_specs:
+        candidate = _build_level_candidate(
+            work,
+            level_type="support",
+            source=source,
+            price=price,
+            close=close,
+            base_weight=weight,
+            touch_band=touch_band,
+            volume_col=volume_col,
+        )
+        if candidate:
+            support_candidates.append(candidate)
+
+    resistance_candidates: list[dict] = []
+    for source, price, weight in resistance_specs:
+        candidate = _build_level_candidate(
+            work,
+            level_type="resistance",
+            source=source,
+            price=price,
+            close=close,
+            base_weight=weight,
+            touch_band=touch_band,
+            volume_col=volume_col,
+        )
+        if candidate:
+            resistance_candidates.append(candidate)
+
+    support_candidates.extend(
+        _collect_pivot_level_candidates(
+            work,
+            close=close,
+            level_type="support",
+            touch_band=touch_band,
+            volume_col=volume_col,
+        )
+    )
+    resistance_candidates.extend(
+        _collect_pivot_level_candidates(
+            work,
+            close=close,
+            level_type="resistance",
+            touch_band=touch_band,
+            volume_col=volume_col,
+        )
+    )
+    support_candidates.extend(
+        _collect_volume_profile_level_candidates(
+            work,
+            close=close,
+            level_type="support",
+            cluster_band=cluster_band,
+            touch_band=touch_band,
+            volume_col=volume_col,
+        )
+    )
+    resistance_candidates.extend(
+        _collect_volume_profile_level_candidates(
+            work,
+            close=close,
+            level_type="resistance",
+            cluster_band=cluster_band,
+            touch_band=touch_band,
+            volume_col=volume_col,
+        )
+    )
+
+    support_levels = _select_key_levels(
+        close,
+        support_candidates,
+        "support",
+        top_n=top_n,
+        cluster_band=cluster_band,
+        selection_gap=selection_gap,
+    )
+    resistance_levels = _select_key_levels(
+        close,
+        resistance_candidates,
+        "resistance",
+        top_n=top_n,
+        cluster_band=cluster_band,
+        selection_gap=selection_gap,
+    )
+
+    level_methodology = [
+        "算法参考 qlib 常见的 rolling-window 特征工程思路：同时评估 MA5/10/20/60、近 5/10/20/60 日高低点、已确认摆动高低点和近 60 日成交密集区，不再只按离现价最近取值。",
+        "去重规则：先用 ATR14 与近 10 日真实振幅生成动态价格带，把过近候选合并为同一价位区，再要求相邻支撑/压力至少间隔一个波动单位，避免两个点位几乎重合。",
+        "排序规则：每个价位按来源共振、近 30 日触碰次数、触碰时成交量、最近性和距现价远近综合打分，优先保留更贴近当前博弈区的结构位。",
+    ]
+    if atr_pct > 0 or swing_pct > 0:
+        level_methodology.append(
+            f"当前波动刻度：ATR14 约 {atr_pct:.2f}% ，近10日中位振幅约 {swing_pct:.2f}% ，本次聚类带约 {cluster_band / close * 100.0:.2f}% 。"
+        )
+
+    return {
+        "support_levels": support_levels,
+        "resistance_levels": resistance_levels,
+        "level_methodology": level_methodology,
+        "atr14": round(float(atr_value), 2) if atr_value is not None else None,
+        "atr_pct": round(float(atr_pct), 2) if atr_pct else None,
+        "cluster_band": round(float(cluster_band), 2),
+        "selection_gap": round(float(selection_gap), 2),
+    }
+
+
+LEVEL_BOARD_PROFILES: dict[str, dict[str, Any]] = {
+    "default": {
+        "label": "主板/其他",
+        "cluster_pct_mult": 0.34,
+        "cluster_pct_floor": 0.0048,
+        "cluster_pct_cap": 0.0160,
+        "cluster_atr_min": 0.22,
+        "cluster_atr_max": 0.52,
+        "selection_pct_mult": 0.66,
+        "selection_pct_floor": 0.0085,
+        "selection_pct_cap": 0.0240,
+        "selection_atr_min": 0.68,
+        "selection_atr_max": 1.55,
+        "touch_pct_mult": 0.24,
+        "touch_pct_floor": 0.0038,
+        "touch_pct_cap": 0.0120,
+        "touch_atr_min": 0.16,
+        "touch_atr_max": 0.38,
+        "max_candidate_pct": 10.5,
+        "max_candidate_atr_scale": 3.2,
+        "primary_target_atr": 1.00,
+        "primary_tolerance_atr": 0.92,
+        "min_primary_atr": 0.42,
+        "max_primary_atr": 2.45,
+        "secondary_gap_target_atr": 1.15,
+        "min_secondary_gap_atr": 0.55,
+        "max_secondary_gap_atr": 2.45,
+        "secondary_max_atr": 4.40,
+        "touch_tolerance_atr": 0.20,
+        "break_tolerance_atr": 0.34,
+        "reaction_target_atr": 0.62,
+        "volatility_floor_pct": 0.9,
+        "family_weight": {
+            "anchor": 0.84,
+            "trend": 1.04,
+            "range": 1.00,
+            "pivot": 1.10,
+            "volume": 1.12,
+        },
+        "source_weight": {
+            "PRE_CLOSE": 0.76,
+            "OPEN": 0.72,
+            "MA5": 0.86,
+            "MA10": 0.96,
+            "MA20": 1.08,
+            "MA60": 1.12,
+            "LOW_5": 0.84,
+            "LOW_10": 0.94,
+            "LOW_20": 1.06,
+            "LOW_60": 1.10,
+            "HIGH_5": 0.84,
+            "HIGH_10": 0.94,
+            "HIGH_20": 1.06,
+            "HIGH_60": 1.10,
+        },
+        "pivot_weight": 1.10,
+        "volume_profile_weight": 1.12,
+    },
+    "growth": {
+        "label": "创业/科创",
+        "cluster_pct_mult": 0.30,
+        "cluster_pct_floor": 0.0056,
+        "cluster_pct_cap": 0.0175,
+        "cluster_atr_min": 0.18,
+        "cluster_atr_max": 0.46,
+        "selection_pct_mult": 0.58,
+        "selection_pct_floor": 0.0090,
+        "selection_pct_cap": 0.0260,
+        "selection_atr_min": 0.78,
+        "selection_atr_max": 1.80,
+        "touch_pct_mult": 0.21,
+        "touch_pct_floor": 0.0043,
+        "touch_pct_cap": 0.0130,
+        "touch_atr_min": 0.14,
+        "touch_atr_max": 0.32,
+        "max_candidate_pct": 13.5,
+        "max_candidate_atr_scale": 4.0,
+        "primary_target_atr": 1.30,
+        "primary_tolerance_atr": 1.05,
+        "min_primary_atr": 0.55,
+        "max_primary_atr": 3.10,
+        "secondary_gap_target_atr": 1.45,
+        "min_secondary_gap_atr": 0.75,
+        "max_secondary_gap_atr": 3.05,
+        "secondary_max_atr": 5.30,
+        "touch_tolerance_atr": 0.22,
+        "break_tolerance_atr": 0.40,
+        "reaction_target_atr": 0.78,
+        "volatility_floor_pct": 1.1,
+        "family_weight": {
+            "anchor": 0.78,
+            "trend": 1.05,
+            "range": 1.00,
+            "pivot": 1.14,
+            "volume": 1.18,
+        },
+        "source_weight": {
+            "PRE_CLOSE": 0.70,
+            "OPEN": 0.66,
+            "MA5": 0.82,
+            "MA10": 0.94,
+            "MA20": 1.10,
+            "MA60": 1.12,
+            "LOW_5": 0.82,
+            "LOW_10": 0.92,
+            "LOW_20": 1.08,
+            "LOW_60": 1.10,
+            "HIGH_5": 0.82,
+            "HIGH_10": 0.92,
+            "HIGH_20": 1.08,
+            "HIGH_60": 1.10,
+        },
+        "pivot_weight": 1.14,
+        "volume_profile_weight": 1.18,
+    },
+    "gem": {
+        "label": "创业板",
+        "cluster_pct_mult": 0.30,
+        "cluster_pct_floor": 0.0056,
+        "cluster_pct_cap": 0.0178,
+        "cluster_atr_min": 0.18,
+        "cluster_atr_max": 0.46,
+        "selection_pct_mult": 0.59,
+        "selection_pct_floor": 0.0092,
+        "selection_pct_cap": 0.0265,
+        "selection_atr_min": 0.78,
+        "selection_atr_max": 1.82,
+        "touch_pct_mult": 0.21,
+        "touch_pct_floor": 0.0043,
+        "touch_pct_cap": 0.0130,
+        "touch_atr_min": 0.14,
+        "touch_atr_max": 0.32,
+        "max_candidate_pct": 13.8,
+        "max_candidate_atr_scale": 4.0,
+        "primary_target_atr": 1.32,
+        "primary_tolerance_atr": 1.05,
+        "min_primary_atr": 0.56,
+        "max_primary_atr": 3.15,
+        "secondary_gap_target_atr": 1.46,
+        "min_secondary_gap_atr": 0.76,
+        "max_secondary_gap_atr": 3.08,
+        "secondary_max_atr": 5.40,
+        "touch_tolerance_atr": 0.22,
+        "break_tolerance_atr": 0.40,
+        "reaction_target_atr": 0.78,
+        "volatility_floor_pct": 1.1,
+        "family_weight": {
+            "anchor": 0.78,
+            "trend": 1.05,
+            "range": 1.00,
+            "pivot": 1.15,
+            "volume": 1.18,
+        },
+        "source_weight": {
+            "PRE_CLOSE": 0.70,
+            "OPEN": 0.66,
+            "MA5": 0.82,
+            "MA10": 0.94,
+            "MA20": 1.10,
+            "MA60": 1.12,
+            "LOW_5": 0.82,
+            "LOW_10": 0.92,
+            "LOW_20": 1.08,
+            "LOW_60": 1.10,
+            "HIGH_5": 0.82,
+            "HIGH_10": 0.92,
+            "HIGH_20": 1.08,
+            "HIGH_60": 1.10,
+        },
+        "pivot_weight": 1.15,
+        "volume_profile_weight": 1.18,
+    },
+    "star": {
+        "label": "科创板",
+        "cluster_pct_mult": 0.28,
+        "cluster_pct_floor": 0.0052,
+        "cluster_pct_cap": 0.0165,
+        "cluster_atr_min": 0.17,
+        "cluster_atr_max": 0.42,
+        "selection_pct_mult": 0.54,
+        "selection_pct_floor": 0.0085,
+        "selection_pct_cap": 0.0240,
+        "selection_atr_min": 0.66,
+        "selection_atr_max": 1.55,
+        "touch_pct_mult": 0.20,
+        "touch_pct_floor": 0.0040,
+        "touch_pct_cap": 0.0125,
+        "touch_atr_min": 0.14,
+        "touch_atr_max": 0.30,
+        "max_candidate_pct": 12.8,
+        "max_candidate_atr_scale": 3.7,
+        "primary_target_atr": 1.08,
+        "primary_tolerance_atr": 0.90,
+        "min_primary_atr": 0.48,
+        "max_primary_atr": 2.75,
+        "secondary_gap_target_atr": 1.28,
+        "min_secondary_gap_atr": 0.64,
+        "max_secondary_gap_atr": 2.65,
+        "secondary_max_atr": 4.80,
+        "touch_tolerance_atr": 0.22,
+        "break_tolerance_atr": 0.40,
+        "reaction_target_atr": 0.78,
+        "volatility_floor_pct": 1.0,
+        "family_weight": {
+            "anchor": 0.74,
+            "trend": 1.10,
+            "range": 0.96,
+            "pivot": 1.06,
+            "volume": 1.20,
+        },
+        "source_weight": {
+            "PRE_CLOSE": 0.68,
+            "OPEN": 0.62,
+            "MA5": 0.78,
+            "MA10": 0.94,
+            "MA20": 1.12,
+            "MA60": 1.16,
+            "LOW_5": 0.76,
+            "LOW_10": 0.90,
+            "LOW_20": 1.00,
+            "LOW_60": 1.08,
+            "HIGH_5": 0.76,
+            "HIGH_10": 0.90,
+            "HIGH_20": 1.00,
+            "HIGH_60": 1.08,
+        },
+        "pivot_weight": 1.08,
+        "volume_profile_weight": 1.22,
+    },
+}
+
+LEVEL_BACKTEST_BOARD_SCOPES = {
+    "growth": {
+        "label": "创业板+科创板",
+        "where_sql": "b.market IN ('创业板', '科创板')",
+    },
+    "gem": {
+        "label": "创业板",
+        "where_sql": "b.market = '创业板'",
+    },
+    "star": {
+        "label": "科创板",
+        "where_sql": "b.market = '科创板'",
+    },
+    "all": {
+        "label": "全市场",
+        "where_sql": "1 = 1",
+    },
+}
+
+
+def _infer_level_market_board(
+    df: pd.DataFrame | None = None,
+    ts_code: str | None = None,
+    market: str | None = None,
+) -> str:
+    market_text = str(market or "").strip()
+    if market_text == "创业板":
+        return "gem"
+    if market_text == "科创板":
+        return "star"
+
+    code = str(ts_code or "").strip().upper()
+    if not code and df is not None and not df.empty:
+        if "ts_code" in df.columns:
+            code = str(df.iloc[-1].get("ts_code") or "").strip().upper()
+        elif "symbol" in df.columns:
+            code = str(df.iloc[-1].get("symbol") or "").strip().upper()
+
+    symbol = code.split(".", 1)[0]
+    if symbol.startswith(("300", "301")):
+        return "gem"
+    if symbol.startswith("688"):
+        return "star"
+    return "default"
+
+
+def _resolve_level_board_profile(market_board: str | None = None) -> dict[str, Any]:
+    key = str(market_board or "default").strip().lower()
+    profile = dict(LEVEL_BOARD_PROFILES.get(key, LEVEL_BOARD_PROFILES["default"]))
+    profile["key"] = key if key in LEVEL_BOARD_PROFILES else "default"
+    return profile
+
+
+def _infer_level_regime(df: pd.DataFrame) -> dict[str, Any]:
+    work = _ensure_volume_col(df.copy())
+    for ma in (20, 60):
+        col = f"ma{ma}"
+        if col not in work.columns:
+            work[col] = pd.to_numeric(work["close"], errors="coerce").rolling(ma, min_periods=1).mean()
+        else:
+            work[col] = pd.to_numeric(work[col], errors="coerce")
+
+    close = _safe_number(work.iloc[-1].get("close"), 0.0) or 0.0
+    ma20 = _safe_number(work.iloc[-1].get("ma20"), close) or close
+    ma60 = _safe_number(work.iloc[-1].get("ma60"), ma20) or ma20
+    ma20_prev = _safe_number(work.iloc[-5].get("ma20"), ma20) if len(work) >= 5 else ma20
+    slope20 = ((ma20 - ma20_prev) / max(abs(ma20_prev), EPS) * 100.0) if ma20_prev else 0.0
+
+    trend_up = close >= ma20 and ma20 >= ma60 * 0.995 and slope20 >= 0
+    trend_down = close <= ma20 and ma20 <= ma60 * 1.005 and slope20 <= 0
+    return {
+        "trend_up": bool(trend_up),
+        "trend_down": bool(trend_down),
+        "slope20": round(float(slope20), 3),
+    }
+
+
+def _resolve_source_weight(source: str, family: str, market_profile: dict[str, Any]) -> float:
+    normalized = str(source or "").upper()
+    source_weight = market_profile.get("source_weight", {})
+    if normalized in source_weight:
+        return float(source_weight[normalized])
+    if normalized.startswith("PIVOT_"):
+        return float(market_profile.get("pivot_weight", market_profile.get("family_weight", {}).get("pivot", 1.10)))
+    if normalized.startswith("VP_"):
+        return float(market_profile.get("volume_profile_weight", market_profile.get("family_weight", {}).get("volume", 1.12)))
+    return float(market_profile.get("family_weight", {}).get(family, 1.0))
+
+
+def _resolve_trend_weight(
+    level_type: str,
+    family: str,
+    source: str,
+    regime: dict[str, Any],
+) -> float:
+    normalized = str(source or "").upper()
+    if regime.get("trend_up"):
+        if level_type == "support":
+            if family in {"trend", "pivot", "volume"}:
+                return 1.10
+            if family == "anchor" or normalized in {"MA5", "PRE_CLOSE", "OPEN"}:
+                return 0.82
+        if level_type == "resistance" and family == "anchor":
+            return 0.84
+    elif regime.get("trend_down"):
+        if level_type == "support":
+            if family == "anchor" or normalized in {"MA5", "PRE_CLOSE", "OPEN"}:
+                return 0.68
+            if family in {"trend", "range"}:
+                return 0.88
+            if family in {"pivot", "volume"}:
+                return 0.92
+        else:
+            if family in {"trend", "pivot", "volume"}:
+                return 1.10
+            if family == "anchor":
+                return 0.84
+    elif family == "anchor":
+        return 0.90
+    return 1.0
+
+
+def _compute_level_bands_adaptive(
+    df: pd.DataFrame,
+    close: float,
+    atr_value: float | None,
+    market_profile: dict[str, Any],
+) -> tuple[float, float, float, float, float, float]:
+    swing_pct = 0.0
+    if {"high", "low"}.issubset(df.columns):
+        recent = df.tail(min(len(df), 10))
+        swing = (
+            (pd.to_numeric(recent["high"], errors="coerce") - pd.to_numeric(recent["low"], errors="coerce"))
+            / pd.to_numeric(recent["close"], errors="coerce").replace(0, np.nan)
+        ) * 100.0
+        swing = swing.replace([np.inf, -np.inf], np.nan).dropna()
+        if not swing.empty:
+            swing_pct = float(swing.median())
+
+    atr_pct = (float(atr_value) / close * 100.0) if atr_value and atr_value > 0 and close > 0 else 0.0
+    volatility_pct = max(atr_pct, swing_pct, float(market_profile.get("volatility_floor_pct", 1.0)))
+
+    cluster_band = max(
+        close
+        * float(
+            np.clip(
+                volatility_pct * float(market_profile["cluster_pct_mult"]) / 100.0,
+                float(market_profile["cluster_pct_floor"]),
+                float(market_profile["cluster_pct_cap"]),
+            )
+        ),
+        0.03,
+    )
+    selection_gap = max(
+        close
+        * float(
+            np.clip(
+                volatility_pct * float(market_profile["selection_pct_mult"]) / 100.0,
+                float(market_profile["selection_pct_floor"]),
+                float(market_profile["selection_pct_cap"]),
+            )
+        ),
+        0.05,
+    )
+    touch_band = max(
+        close
+        * float(
+            np.clip(
+                volatility_pct * float(market_profile["touch_pct_mult"]) / 100.0,
+                float(market_profile["touch_pct_floor"]),
+                float(market_profile["touch_pct_cap"]),
+            )
+        ),
+        0.02,
+    )
+
+    if atr_value and atr_value > 0:
+        cluster_band = float(
+            np.clip(
+                cluster_band,
+                atr_value * float(market_profile["cluster_atr_min"]),
+                atr_value * float(market_profile["cluster_atr_max"]),
+            )
+        )
+        selection_gap = float(
+            np.clip(
+                selection_gap,
+                atr_value * float(market_profile["selection_atr_min"]),
+                atr_value * float(market_profile["selection_atr_max"]),
+            )
+        )
+        touch_band = float(
+            np.clip(
+                touch_band,
+                atr_value * float(market_profile["touch_atr_min"]),
+                atr_value * float(market_profile["touch_atr_max"]),
+            )
+        )
+
+    return cluster_band, selection_gap, touch_band, atr_pct, swing_pct, volatility_pct
+
+
+def _adaptive_distance_limit_pct(
+    atr_pct: float,
+    volatility_pct: float,
+    market_profile: dict[str, Any],
+) -> float:
+    base = max(
+        atr_pct * float(market_profile.get("max_candidate_atr_scale", 3.2)),
+        volatility_pct * 1.7,
+        float(market_profile.get("volatility_floor_pct", 1.0)) * 4.0,
+    )
+    return float(np.clip(base, 5.5, float(market_profile["max_candidate_pct"])))
+
+
+def _build_level_candidate_adaptive(
+    df: pd.DataFrame,
+    level_type: str,
+    source: str,
+    price: float | None,
+    close: float,
+    base_weight: float,
+    touch_band: float,
+    volume_col: str,
+    market_profile: dict[str, Any],
+    regime: dict[str, Any],
+    atr_value: float | None,
+    atr_pct: float,
+    volatility_pct: float,
+    extra_strength: float = 0.0,
+) -> dict | None:
+    candidate = _build_level_candidate(
+        df,
+        level_type=level_type,
+        source=source,
+        price=price,
+        close=close,
+        base_weight=base_weight,
+        touch_band=touch_band,
+        volume_col=volume_col,
+        extra_strength=extra_strength,
+    )
+    if not candidate:
+        return None
+
+    max_distance_pct = _adaptive_distance_limit_pct(atr_pct, volatility_pct, market_profile)
+    if float(candidate["distance_pct"]) > max_distance_pct:
+        return None
+
+    family = str(candidate.get("family") or "")
+    source_weight = _resolve_source_weight(source, family, market_profile)
+    trend_weight = _resolve_trend_weight(level_type, family, source, regime)
+    adjusted_weight = float(candidate["weight"]) * source_weight * trend_weight
+
+    distance_atr = None
+    if atr_value and atr_value > 0:
+        distance_atr = abs(close - float(candidate["price"])) / atr_value
+        if distance_atr < float(market_profile["min_primary_atr"]) * 0.35:
+            adjusted_weight *= 0.76
+        if distance_atr > float(market_profile["secondary_max_atr"]) * 1.12:
+            return None
+
+    candidate["distance_atr"] = round(float(distance_atr), 2) if distance_atr is not None else None
+    candidate["weight"] = round(float(adjusted_weight), 3)
+    candidate["market_board"] = market_profile.get("key")
+    return candidate
+
+
+def _distance_fit_bonus(distance_atr: float | None, market_profile: dict[str, Any]) -> float:
+    if distance_atr is None:
+        return 0.0
+    if distance_atr < float(market_profile["min_primary_atr"]) * 0.45:
+        return -0.85
+    if distance_atr > float(market_profile["secondary_max_atr"]) * 1.08:
+        return -0.85
+    target = float(market_profile["primary_target_atr"])
+    tolerance = max(float(market_profile["primary_tolerance_atr"]), 0.4)
+    deviation = abs(distance_atr - target)
+    score = 1.0 - deviation / tolerance
+    return float(np.clip(score, -0.75, 1.0) * 0.92)
+
+
+def _spacing_fit_bonus(spacing_atr: float | None, market_profile: dict[str, Any]) -> float:
+    if spacing_atr is None:
+        return 0.0
+    target = float(market_profile["secondary_gap_target_atr"])
+    tolerance = max(
+        (float(market_profile["max_secondary_gap_atr"]) - float(market_profile["min_secondary_gap_atr"])) / 1.9,
+        0.55,
+    )
+    deviation = abs(spacing_atr - target)
+    score = 1.0 - deviation / tolerance
+    return float(np.clip(score, -0.70, 1.0) * 0.75)
+
+
+def _select_key_levels_adaptive(
+    close: float,
+    candidates: Sequence[dict],
+    level_type: str,
+    market_profile: dict[str, Any],
+    atr_value: float | None,
+    top_n: int = 2,
+    cluster_band: float | None = None,
+    selection_gap: float | None = None,
+) -> list[dict]:
+    if not candidates or close <= 0:
+        return []
+
+    cluster_band = cluster_band or max(close * 0.006, 0.03)
+    selection_gap = selection_gap or max(close * 0.012, 0.05)
+    clusters = _merge_level_clusters(candidates, cluster_band=cluster_band)
+    if not clusters:
+        return []
+
+    for item in clusters:
+        distance_atr = None
+        if atr_value and atr_value > 0:
+            distance_atr = abs(close - float(item["price"])) / atr_value
+        item["distance_atr"] = round(float(distance_atr), 2) if distance_atr is not None else None
+        item["actionable_score"] = round(
+            float(item["selection_score"]) + _distance_fit_bonus(distance_atr, market_profile),
+            3,
+        )
+
+    ranked = sorted(
+        clusters,
+        key=lambda item: (
+            -float(item["actionable_score"]),
+            abs((item.get("distance_atr") or 99.0) - float(market_profile["primary_target_atr"])),
+            float(item["distance_pct"]),
+            -float(item["price"]) if level_type == "support" else float(item["price"]),
+        ),
+    )
+
+    picked: list[dict] = []
+    secondary_candidates: list[dict] = []
+    atr_gap_base = atr_value if atr_value and atr_value > 0 else max(close * 0.01, 0.01)
+
+    for item in ranked:
+        if not picked:
+            distance_atr = item.get("distance_atr")
+            if distance_atr is not None and distance_atr > float(market_profile["max_primary_atr"]) * 1.15:
+                continue
+            picked.append(item)
+            if len(picked) >= max(1, int(top_n)):
+                break
+            continue
+
+        if level_type == "support" and float(item["price"]) >= float(picked[-1]["price"]):
+            continue
+        if level_type == "resistance" and float(item["price"]) <= float(picked[-1]["price"]):
+            continue
+
+        if any(abs(float(item["price"]) - float(prev["price"])) < selection_gap for prev in picked):
+            continue
+
+        spacing_atr = abs(float(item["price"]) - float(picked[-1]["price"])) / atr_gap_base
+        if spacing_atr < float(market_profile["min_secondary_gap_atr"]):
+            continue
+
+        item["actionable_score"] = round(
+            float(item["actionable_score"]) + _spacing_fit_bonus(spacing_atr, market_profile),
+            3,
+        )
+        if spacing_atr > float(market_profile["max_secondary_gap_atr"]):
+            secondary_candidates.append(item)
+            continue
+
+        picked.append(item)
+        if len(picked) >= max(1, int(top_n)):
+            break
+
+    if picked and len(picked) < max(1, int(top_n)) and secondary_candidates:
+        secondary_candidates = sorted(
+            secondary_candidates,
+            key=lambda item: (
+                -float(item["actionable_score"]),
+                float(item["distance_pct"]),
+            ),
+        )
+        picked.append(secondary_candidates[0])
+
+    if not picked:
+        picked = ranked[:1]
+
+    ordered = sorted(picked, key=lambda item: float(item["price"]), reverse=level_type == "support")
+    selected: list[dict] = []
+    for idx, item in enumerate(ordered[:max(1, int(top_n))], start=1):
+        basis_text = "、".join(item.get("basis_list", [])[:3]) or str(item.get("dominant_basis") or "")
+        family_text = "、".join(
+            LEVEL_FAMILY_TEXT.get(family, family) for family in item.get("families", [])
+        )
+        breach_rules = [str(rule).strip() for rule in item.get("breach_rules", []) if str(rule).strip()]
+        breach_rule = breach_rules[0] if breach_rules else (
+            "跌破说明支撑失效" if level_type == "support" else "放量站上才算压力化解"
+        )
+        direction_text = "下方" if level_type == "support" else "上方"
+        role_text = (
+            "首要防守位" if level_type == "support" and idx == 1 else
+            "次级缓冲位" if level_type == "support" else
+            "首个突破确认位" if idx == 1 else
+            "第二道阻力位"
+        )
+        family_suffix = f"（{family_text}）" if family_text else ""
+        distance_atr = item.get("distance_atr")
+        board_label = market_profile.get("label", "当前板块")
+        distance_atr_text = f" / {distance_atr:.2f} ATR" if distance_atr is not None else ""
+        selected.append(
+            {
+                "label": f"{'支撑' if level_type == 'support' else '压力'}{idx}",
+                "price": round(float(item["price"]), 2),
+                "type": level_type,
+                "source": item.get("dominant_basis") or basis_text,
+                "sources": item.get("sources", []),
+                "families": item.get("families", []),
+                "dominant_family": item.get("dominant_family"),
+                "distance_pct": round(float(item["distance_pct"]), 2),
+                "distance_atr": round(float(distance_atr), 2) if distance_atr is not None else None,
+                "strength_score": round(float(item.get("strength_score") or 0.0), 2),
+                "definition": " / ".join(item.get("definitions", [])[:2]),
+                "note": (
+                    f"来源共振：{basis_text}{family_suffix}；近30日触碰 {int(item.get('touch_count') or 0)} 次，"
+                    f"距现价{direction_text}约 {float(item['distance_pct']):.2f}%{distance_atr_text}，"
+                    f"并按 {board_label} 波动画像约束首位/二位间距后保留为{role_text}。{breach_rule}。"
+                ),
+            }
+        )
+    return selected
+
+
+def build_structural_price_levels(
+    df: pd.DataFrame,
+    top_n: int = 2,
+    market_board: str | None = None,
+    profile: str = "adaptive",
+) -> dict[str, Any]:
+    normalized_market_board = str(market_board or "").strip().lower()
+    inferred_board = (
+        normalized_market_board
+        if normalized_market_board in LEVEL_BOARD_PROFILES
+        else _infer_level_market_board(df, market=market_board)
+    )
+    if str(profile or "adaptive").lower() in {"legacy", "baseline"}:
+        legacy = build_structural_price_levels_legacy(df, top_n=top_n)
+        legacy["market_board"] = inferred_board
+        return legacy
+
+    if df is None or df.empty or "close" not in df.columns:
+        return {
+            "support_levels": [],
+            "resistance_levels": [],
+            "level_methodology": [],
+            "atr14": None,
+            "atr_pct": None,
+            "cluster_band": None,
+            "selection_gap": None,
+            "market_board": inferred_board,
+        }
+
+    work = _ensure_volume_col(df.copy())
+    for col in ("open", "high", "low", "close", "volume", "amount"):
+        if col in work.columns:
+            work[col] = pd.to_numeric(work[col], errors="coerce")
+
+    for ma in (5, 10, 20, 60):
+        col = f"ma{ma}"
+        if col not in work.columns:
+            work[col] = work["close"].rolling(ma, min_periods=1).mean()
+        else:
+            work[col] = pd.to_numeric(work[col], errors="coerce")
+
+    close = _safe_number(work.iloc[-1].get("close"))
+    if close is None or close <= 0:
+        return build_structural_price_levels_legacy(df, top_n=top_n)
+
+    if normalized_market_board in LEVEL_BOARD_PROFILES:
+        inferred_market_board = normalized_market_board
+    else:
+        inferred_market_board = _infer_level_market_board(work, market=market_board)
+    market_profile = _resolve_level_board_profile(inferred_market_board)
+    regime = _infer_level_regime(work)
+    atr_value = _latest_atr_value(work)
+    (
+        cluster_band,
+        selection_gap,
+        touch_band,
+        atr_pct,
+        swing_pct,
+        volatility_pct,
+    ) = _compute_level_bands_adaptive(work, close, atr_value, market_profile)
+    volume_col = "volume" if "volume" in work.columns else ("amount" if "amount" in work.columns else "")
+    prev_close = _safe_number(work.iloc[-2]["close"] if len(work) >= 2 else close, close) or close
+    open_price = _safe_number(work.iloc[-1].get("open"), close) or close
+
+    last_5 = work.tail(5)
+    last_10 = work.tail(10)
+    last_20 = work.tail(20)
+    last_60 = work.tail(60) if len(work) >= 60 else work
+
+    support_specs = [
+        ("PRE_CLOSE", prev_close, 0.72),
+        ("OPEN", open_price, 0.66),
+        ("MA5", _safe_number(work.iloc[-1].get("ma5")), 0.76),
+        ("MA10", _safe_number(work.iloc[-1].get("ma10")), 0.92),
+        ("MA20", _safe_number(work.iloc[-1].get("ma20")), 1.06),
+        ("MA60", _safe_number(work.iloc[-1].get("ma60")), 1.14),
+        ("LOW_5", _safe_number(last_5["low"].min() if "low" in last_5.columns else None), 0.78),
+        ("LOW_10", _safe_number(last_10["low"].min() if "low" in last_10.columns else None), 0.92),
+        ("LOW_20", _safe_number(last_20["low"].min() if "low" in last_20.columns else None), 1.06),
+        ("LOW_60", _safe_number(last_60["low"].min() if "low" in last_60.columns else None), 1.12),
+    ]
+    resistance_specs = [
+        ("PRE_CLOSE", prev_close, 0.72),
+        ("OPEN", open_price, 0.66),
+        ("MA5", _safe_number(work.iloc[-1].get("ma5")), 0.76),
+        ("MA10", _safe_number(work.iloc[-1].get("ma10")), 0.92),
+        ("MA20", _safe_number(work.iloc[-1].get("ma20")), 1.06),
+        ("MA60", _safe_number(work.iloc[-1].get("ma60")), 1.14),
+        ("HIGH_5", _safe_number(last_5["high"].max() if "high" in last_5.columns else None), 0.78),
+        ("HIGH_10", _safe_number(last_10["high"].max() if "high" in last_10.columns else None), 0.92),
+        ("HIGH_20", _safe_number(last_20["high"].max() if "high" in last_20.columns else None), 1.06),
+        ("HIGH_60", _safe_number(last_60["high"].max() if "high" in last_60.columns else None), 1.12),
+    ]
+
+    support_candidates: list[dict] = []
+    for source, price, weight in support_specs:
+        candidate = _build_level_candidate_adaptive(
+            work,
+            level_type="support",
+            source=source,
+            price=price,
+            close=close,
+            base_weight=weight,
+            touch_band=touch_band,
+            volume_col=volume_col,
+            market_profile=market_profile,
+            regime=regime,
+            atr_value=atr_value,
+            atr_pct=atr_pct,
+            volatility_pct=volatility_pct,
+        )
+        if candidate:
+            support_candidates.append(candidate)
+
+    resistance_candidates: list[dict] = []
+    for source, price, weight in resistance_specs:
+        candidate = _build_level_candidate_adaptive(
+            work,
+            level_type="resistance",
+            source=source,
+            price=price,
+            close=close,
+            base_weight=weight,
+            touch_band=touch_band,
+            volume_col=volume_col,
+            market_profile=market_profile,
+            regime=regime,
+            atr_value=atr_value,
+            atr_pct=atr_pct,
+            volatility_pct=volatility_pct,
+        )
+        if candidate:
+            resistance_candidates.append(candidate)
+
+    for candidate in _collect_pivot_level_candidates(
+        work,
+        close=close,
+        level_type="support",
+        touch_band=touch_band,
+        volume_col=volume_col,
+    ):
+        adaptive_candidate = _build_level_candidate_adaptive(
+            work,
+            level_type="support",
+            source=str(candidate["source"]),
+            price=_safe_number(candidate["price"]),
+            close=close,
+            base_weight=float(candidate["weight"]),
+            touch_band=touch_band,
+            volume_col=volume_col,
+            market_profile=market_profile,
+            regime=regime,
+            atr_value=atr_value,
+            atr_pct=atr_pct,
+            volatility_pct=volatility_pct,
+        )
+        if adaptive_candidate:
+            support_candidates.append(adaptive_candidate)
+    for candidate in _collect_pivot_level_candidates(
+        work,
+        close=close,
+        level_type="resistance",
+        touch_band=touch_band,
+        volume_col=volume_col,
+    ):
+        adaptive_candidate = _build_level_candidate_adaptive(
+            work,
+            level_type="resistance",
+            source=str(candidate["source"]),
+            price=_safe_number(candidate["price"]),
+            close=close,
+            base_weight=float(candidate["weight"]),
+            touch_band=touch_band,
+            volume_col=volume_col,
+            market_profile=market_profile,
+            regime=regime,
+            atr_value=atr_value,
+            atr_pct=atr_pct,
+            volatility_pct=volatility_pct,
+        )
+        if adaptive_candidate:
+            resistance_candidates.append(adaptive_candidate)
+    for candidate in _collect_volume_profile_level_candidates(
+        work,
+        close=close,
+        level_type="support",
+        cluster_band=cluster_band,
+        touch_band=touch_band,
+        volume_col=volume_col,
+    ):
+        adaptive_candidate = _build_level_candidate_adaptive(
+            work,
+            level_type="support",
+            source=str(candidate["source"]),
+            price=_safe_number(candidate["price"]),
+            close=close,
+            base_weight=float(candidate["weight"]),
+            touch_band=touch_band,
+            volume_col=volume_col,
+            market_profile=market_profile,
+            regime=regime,
+            atr_value=atr_value,
+            atr_pct=atr_pct,
+            volatility_pct=volatility_pct,
+        )
+        if adaptive_candidate:
+            support_candidates.append(adaptive_candidate)
+    for candidate in _collect_volume_profile_level_candidates(
+        work,
+        close=close,
+        level_type="resistance",
+        cluster_band=cluster_band,
+        touch_band=touch_band,
+        volume_col=volume_col,
+    ):
+        adaptive_candidate = _build_level_candidate_adaptive(
+            work,
+            level_type="resistance",
+            source=str(candidate["source"]),
+            price=_safe_number(candidate["price"]),
+            close=close,
+            base_weight=float(candidate["weight"]),
+            touch_band=touch_band,
+            volume_col=volume_col,
+            market_profile=market_profile,
+            regime=regime,
+            atr_value=atr_value,
+            atr_pct=atr_pct,
+            volatility_pct=volatility_pct,
+        )
+        if adaptive_candidate:
+            resistance_candidates.append(adaptive_candidate)
+
+    support_levels = _select_key_levels_adaptive(
+        close,
+        support_candidates,
+        "support",
+        market_profile=market_profile,
+        atr_value=atr_value,
+        top_n=top_n,
+        cluster_band=cluster_band,
+        selection_gap=selection_gap,
+    )
+    resistance_levels = _select_key_levels_adaptive(
+        close,
+        resistance_candidates,
+        "resistance",
+        market_profile=market_profile,
+        atr_value=atr_value,
+        top_n=top_n,
+        cluster_band=cluster_band,
+        selection_gap=selection_gap,
+    )
+
+    if not support_levels and not resistance_levels:
+        legacy = build_structural_price_levels_legacy(df, top_n=top_n)
+        legacy["market_board"] = inferred_market_board
+        legacy["level_methodology"] = list(legacy.get("level_methodology") or [])
+        legacy["level_methodology"].append("自适应画像未产出有效结构位，本次回退 legacy 结果。")
+        return legacy
+
+    level_methodology = [
+        "算法仍同时评估 MA5/10/20/60、近 5/10/20/60 日高低点、已确认摆动高低点与近 60 日成交密集区，但不再只看离现价最近。",
+        f"自适应校准：按 {market_profile['label']} 波动画像，把聚类带、首要点位距离和二级间距统一换算到 ATR/振幅刻度，减少跨度过大或过小。",
+        "排序规则：候选价位先按来源共振、触碰次数、量能与最近性打分，再叠加“离现价是否处在可交易 ATR 区间”的约束，优先保留更像回踩/回落观察位的结构点。",
+    ]
+    if atr_pct > 0 or swing_pct > 0:
+        level_methodology.append(
+            f"当前波动刻度：ATR14 约 {atr_pct:.2f}% ，近10日中位振幅约 {swing_pct:.2f}% ，"
+            f"本次聚类带约 {cluster_band / close * 100.0:.2f}% ，相邻点位最小间距约 {selection_gap / close * 100.0:.2f}% 。"
+        )
+
+    return {
+        "support_levels": support_levels,
+        "resistance_levels": resistance_levels,
+        "level_methodology": level_methodology,
+        "atr14": round(float(atr_value), 2) if atr_value is not None else None,
+        "atr_pct": round(float(atr_pct), 2) if atr_pct else None,
+        "cluster_band": round(float(cluster_band), 2),
+        "selection_gap": round(float(selection_gap), 2),
+        "market_board": inferred_market_board,
+    }
+
+
+def _resolve_backtest_board_scope(board: str) -> tuple[str, dict[str, str]]:
+    key = str(board or "growth").strip().lower()
+    if key in {"gem_star", "growth", "growth_boards"}:
+        key = "growth"
+    scope = LEVEL_BACKTEST_BOARD_SCOPES.get(key, LEVEL_BACKTEST_BOARD_SCOPES["growth"])
+    return key, scope
+
+
+def _select_level_backtest_universe(
+    board: str = "growth",
+    sample_size: int = 60,
+    liquidity_days: int = 40,
+) -> list[dict[str, Any]]:
+    board_key, scope = _resolve_backtest_board_scope(board)
+    sample_size = max(10, min(int(sample_size or 60), 240))
+    liquidity_days = max(20, min(int(liquidity_days or 40), 90))
+    min_trade_days = max(10, int(liquidity_days * 0.7))
+
+    df = fetch_df(
+        f"""
+        WITH recent_dates AS (
+            SELECT trade_date
+            FROM daily_price
+            GROUP BY trade_date
+            ORDER BY trade_date DESC
+            LIMIT ?
+        )
+        SELECT
+            d.ts_code,
+            MAX(b.name) AS name,
+            MAX(b.market) AS market,
+            AVG(COALESCE(d.amount, 0)) AS avg_amount,
+            COUNT(*) AS trade_days
+        FROM daily_price d
+        JOIN stock_basic b ON d.ts_code = b.ts_code
+        WHERE d.trade_date IN (SELECT trade_date FROM recent_dates)
+          AND {scope['where_sql']}
+        GROUP BY d.ts_code
+        HAVING COUNT(*) >= ?
+        ORDER BY avg_amount DESC, ts_code
+        LIMIT ?
+        """,
+        params=[liquidity_days, min_trade_days, sample_size],
+    )
+    if df.empty:
+        return []
+    records = df.to_dict("records")
+    for item in records:
+        item["avg_amount"] = round(float(item.get("avg_amount") or 0.0), 2)
+        item["trade_days"] = int(item.get("trade_days") or 0)
+        item["board_scope"] = board_key
+    return records
+
+
+def _select_level_backtest_targets(
+    target_codes: Sequence[str],
+    liquidity_days: int = 40,
+) -> list[dict[str, Any]]:
+    codes = [str(code).strip().upper() for code in (target_codes or []) if str(code).strip()]
+    if not codes:
+        return []
+
+    placeholders = ",".join(["?"] * len(codes))
+    liquidity_days = max(20, min(int(liquidity_days or 40), 90))
+    order_cases = " ".join([f"WHEN ? THEN {idx}" for idx, _ in enumerate(codes)])
+    params = [liquidity_days, *codes, *codes]
+    df = fetch_df(
+        f"""
+        WITH recent_dates AS (
+            SELECT trade_date
+            FROM daily_price
+            GROUP BY trade_date
+            ORDER BY trade_date DESC
+            LIMIT ?
+        )
+        SELECT
+            d.ts_code,
+            MAX(b.name) AS name,
+            MAX(b.market) AS market,
+            AVG(COALESCE(d.amount, 0)) AS avg_amount,
+            COUNT(*) AS trade_days
+        FROM daily_price d
+        JOIN stock_basic b ON d.ts_code = b.ts_code
+        WHERE d.ts_code IN ({placeholders})
+          AND d.trade_date IN (SELECT trade_date FROM recent_dates)
+        GROUP BY d.ts_code
+        ORDER BY CASE d.ts_code {order_cases} ELSE {len(codes)} END
+        """,
+        params=params,
+    )
+    if df.empty:
+        return []
+
+    records = df.to_dict("records")
+    for item in records:
+        item["avg_amount"] = round(float(item.get("avg_amount") or 0.0), 2)
+        item["trade_days"] = int(item.get("trade_days") or 0)
+        item["board_scope"] = _infer_level_market_board(
+            ts_code=item.get("ts_code"),
+            market=item.get("market"),
+        )
+    return records
+
+
+def _load_level_backtest_history(
+    ts_codes: Sequence[str],
+    rows_per_stock: int,
+) -> dict[str, pd.DataFrame]:
+    codes = [str(code).strip().upper() for code in ts_codes if str(code).strip()]
+    if not codes:
+        return {}
+
+    placeholders = ",".join(["?"] * len(codes))
+    df = fetch_df(
+        f"""
+        SELECT *
+        FROM (
+            SELECT
+                d.ts_code,
+                b.market,
+                d.trade_date,
+                d.open,
+                d.high,
+                d.low,
+                d.close,
+                d.pre_close,
+                d.vol AS volume,
+                d.amount,
+                d.pct_chg,
+                ROW_NUMBER() OVER (PARTITION BY d.ts_code ORDER BY d.trade_date DESC) AS rn
+            FROM daily_price d
+            JOIN stock_basic b ON d.ts_code = b.ts_code
+            WHERE d.ts_code IN ({placeholders})
+        ) ranked
+        WHERE rn <= ?
+        ORDER BY ts_code, trade_date
+        """,
+        params=[*codes, max(80, int(rows_per_stock))],
+    )
+    if df.empty:
+        return {}
+
+    history_map: dict[str, pd.DataFrame] = {}
+    for ts_code, group in df.groupby("ts_code"):
+        work = group.drop(columns=["rn"], errors="ignore").sort_values("trade_date").reset_index(drop=True)
+        history_map[str(ts_code)] = _ensure_volume_col(work)
+    return history_map
+
+
+def _evaluate_level_reaction(
+    future_df: pd.DataFrame,
+    price: float | None,
+    level_type: str,
+    atr_value: float | None,
+    market_profile: dict[str, Any],
+) -> dict[str, Any]:
+    value = _safe_number(price)
+    if value is None or future_df is None or future_df.empty:
+        return {"status": "missing", "touch_index": None}
+
+    atr_ref = atr_value if atr_value and atr_value > 0 else max(value * 0.01, 0.01)
+    touch_band = max(
+        atr_ref * float(market_profile["touch_tolerance_atr"]),
+        value * 0.0026,
+    )
+    break_band = max(
+        atr_ref * float(market_profile["break_tolerance_atr"]),
+        value * 0.0042,
+    )
+    reaction_band = max(
+        atr_ref * float(market_profile["reaction_target_atr"]),
+        value * 0.0065,
+    )
+
+    highs = pd.to_numeric(future_df.get("high"), errors="coerce")
+    lows = pd.to_numeric(future_df.get("low"), errors="coerce")
+    closes = pd.to_numeric(future_df.get("close"), errors="coerce")
+
+    if level_type == "support":
+        touch_positions = np.flatnonzero((lows <= value + touch_band).fillna(False).to_numpy())
+        if not touch_positions.size:
+            return {"status": "untouched", "touch_index": None}
+        touch_idx = int(touch_positions[0])
+        after = future_df.iloc[touch_idx:].reset_index(drop=True)
+        after_highs = pd.to_numeric(after.get("high"), errors="coerce")
+        after_lows = pd.to_numeric(after.get("low"), errors="coerce")
+        after_closes = pd.to_numeric(after.get("close"), errors="coerce")
+        success_positions = np.flatnonzero(
+            ((after_highs >= value + reaction_band) | (after_closes >= value + reaction_band * 0.82))
+            .fillna(False)
+            .to_numpy()
+        )
+        fail_positions = np.flatnonzero(
+            ((after_closes <= value - break_band) | (after_lows <= value - break_band * 1.15))
+            .fillna(False)
+            .to_numpy()
+        )
+    else:
+        touch_positions = np.flatnonzero((highs >= value - touch_band).fillna(False).to_numpy())
+        if not touch_positions.size:
+            return {"status": "untouched", "touch_index": None}
+        touch_idx = int(touch_positions[0])
+        after = future_df.iloc[touch_idx:].reset_index(drop=True)
+        after_highs = pd.to_numeric(after.get("high"), errors="coerce")
+        after_lows = pd.to_numeric(after.get("low"), errors="coerce")
+        after_closes = pd.to_numeric(after.get("close"), errors="coerce")
+        success_positions = np.flatnonzero(
+            ((after_lows <= value - reaction_band) | (after_closes <= value - reaction_band * 0.82))
+            .fillna(False)
+            .to_numpy()
+        )
+        fail_positions = np.flatnonzero(
+            ((after_closes >= value + break_band) | (after_highs >= value + break_band * 1.15))
+            .fillna(False)
+            .to_numpy()
+        )
+
+    success_idx = int(success_positions[0]) if success_positions.size else None
+    fail_idx = int(fail_positions[0]) if fail_positions.size else None
+    if success_idx is not None and (fail_idx is None or success_idx <= fail_idx):
+        return {"status": "success", "touch_index": touch_idx, "resolve_index": success_idx}
+    if fail_idx is not None:
+        return {"status": "fail", "touch_index": touch_idx, "resolve_index": fail_idx}
+    return {"status": "touched_open", "touch_index": touch_idx}
+
+
+def _append_metric(values: list[float], value: float | None) -> None:
+    number = _safe_number(value)
+    if number is None:
+        return
+    values.append(float(number))
+
+
+def _update_family_stats(bucket: dict[str, Any], family: str | None, status: str) -> None:
+    family_key = str(family or "unknown")
+    stats = bucket["family_stats"].setdefault(
+        family_key,
+        {"cases": 0, "touched": 0, "success": 0, "fail": 0},
+    )
+    stats["cases"] += 1
+    if status in {"success", "fail", "touched_open"}:
+        stats["touched"] += 1
+    if status == "success":
+        stats["success"] += 1
+    elif status == "fail":
+        stats["fail"] += 1
+
+
+def _summarize_family_stats(family_stats: dict[str, dict[str, int]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for family, stats in family_stats.items():
+        touched = int(stats.get("touched", 0))
+        success = int(stats.get("success", 0))
+        rows.append(
+            {
+                "family": family,
+                "cases": int(stats.get("cases", 0)),
+                "touched": touched,
+                "success": success,
+                "fail": int(stats.get("fail", 0)),
+                "reaction_rate": round(success / touched, 4) if touched else None,
+            }
+        )
+    rows.sort(
+        key=lambda item: (
+            -(item.get("reaction_rate") or -1.0),
+            -int(item.get("touched") or 0),
+            str(item.get("family") or ""),
+        )
+    )
+    return rows[:4]
+
+
+def _summarize_backtest_bucket(bucket: dict[str, Any]) -> dict[str, Any]:
+    touched = int(bucket["touched"])
+    cases = int(bucket["cases"])
+    success = int(bucket["success"])
+    fail = int(bucket["fail"])
+    median_distance_atr = (
+        round(float(np.median(bucket["distance_atr"])), 3) if bucket["distance_atr"] else None
+    )
+    median_gap_atr = round(float(np.median(bucket["gap_atr"])), 3) if bucket["gap_atr"] else None
+    return {
+        "cases": cases,
+        "missing": int(bucket["missing"]),
+        "touched": touched,
+        "success": success,
+        "fail": fail,
+        "open": int(bucket["touched_open"]),
+        "untouched": int(bucket["untouched"]),
+        "touch_rate": round(touched / cases, 4) if cases else None,
+        "reaction_rate": round(success / touched, 4) if touched else None,
+        "fail_rate": round(fail / touched, 4) if touched else None,
+        "primary_tight_ratio": round(bucket["primary_tight"] / cases, 4) if cases else None,
+        "primary_wide_ratio": round(bucket["primary_wide"] / cases, 4) if cases else None,
+        "gap_tight_ratio": round(bucket["gap_tight"] / cases, 4) if cases else None,
+        "gap_wide_ratio": round(bucket["gap_wide"] / cases, 4) if cases else None,
+        "median_distance_atr": median_distance_atr,
+        "median_gap_atr": median_gap_atr,
+        "top_families": _summarize_family_stats(bucket["family_stats"]),
+    }
+
+
+def _run_level_backtest_profile(
+    history_map: dict[str, pd.DataFrame],
+    profile_name: str,
+    lookback_days: int,
+    eval_days: int,
+    horizon: int,
+) -> dict[str, Any]:
+    lookback_days = max(60, min(int(lookback_days or 120), 240))
+    eval_days = max(20, min(int(eval_days or 60), 160))
+    horizon = max(3, min(int(horizon or 7), 15))
+
+    result = {
+        "profile": profile_name,
+        "support": {
+            "cases": 0,
+            "missing": 0,
+            "touched": 0,
+            "success": 0,
+            "fail": 0,
+            "touched_open": 0,
+            "untouched": 0,
+            "primary_tight": 0,
+            "primary_wide": 0,
+            "gap_tight": 0,
+            "gap_wide": 0,
+            "distance_atr": [],
+            "gap_atr": [],
+            "family_stats": {},
+        },
+        "resistance": {
+            "cases": 0,
+            "missing": 0,
+            "touched": 0,
+            "success": 0,
+            "fail": 0,
+            "touched_open": 0,
+            "untouched": 0,
+            "primary_tight": 0,
+            "primary_wide": 0,
+            "gap_tight": 0,
+            "gap_wide": 0,
+            "distance_atr": [],
+            "gap_atr": [],
+            "family_stats": {},
+        },
+        "window_count": 0,
+        "stock_count": 0,
+        "per_stock": {},
+    }
+
+    for ts_code, history_df in history_map.items():
+        if history_df is None or history_df.empty or len(history_df) < lookback_days + horizon + 5:
+            continue
+
+        stock_bucket = {
+            "support": {
+                "cases": 0,
+                "missing": 0,
+                "touched": 0,
+                "success": 0,
+                "fail": 0,
+                "touched_open": 0,
+                "untouched": 0,
+                "primary_tight": 0,
+                "primary_wide": 0,
+                "gap_tight": 0,
+                "gap_wide": 0,
+                "distance_atr": [],
+                "gap_atr": [],
+                "family_stats": {},
+            },
+            "resistance": {
+                "cases": 0,
+                "missing": 0,
+                "touched": 0,
+                "success": 0,
+                "fail": 0,
+                "touched_open": 0,
+                "untouched": 0,
+                "primary_tight": 0,
+                "primary_wide": 0,
+                "gap_tight": 0,
+                "gap_wide": 0,
+                "distance_atr": [],
+                "gap_atr": [],
+                "family_stats": {},
+            },
+            "window_count": 0,
+        }
+        work = history_df.sort_values("trade_date").reset_index(drop=True)
+        start_idx = max(lookback_days, len(work) - eval_days - horizon)
+        end_idx = len(work) - horizon
+        if end_idx <= start_idx:
+            continue
+
+        used_this_stock = False
+        for idx in range(start_idx, end_idx):
+            window_df = work.iloc[max(0, idx - lookback_days + 1): idx + 1].reset_index(drop=True)
+            future_df = work.iloc[idx + 1: idx + 1 + horizon].reset_index(drop=True)
+            if len(window_df) < 60 or future_df.empty:
+                continue
+
+            bundle = build_structural_price_levels(
+                window_df,
+                top_n=2,
+                market_board=_infer_level_market_board(window_df, ts_code=ts_code, market=window_df.iloc[-1].get("market")),
+                profile=profile_name,
+            )
+            atr_value = _safe_number(bundle.get("atr14")) or _latest_atr_value(window_df)
+            market_profile = _resolve_level_board_profile(
+                bundle.get("market_board")
+                or _infer_level_market_board(window_df, ts_code=ts_code, market=window_df.iloc[-1].get("market"))
+            )
+
+            for level_type in ("support", "resistance"):
+                bucket = result[level_type]
+                stock_side = stock_bucket[level_type]
+                bucket["cases"] += 1
+                stock_side["cases"] += 1
+                levels = list(bundle.get(f"{level_type}_levels") or [])
+                primary = levels[0] if levels else None
+                secondary = levels[1] if len(levels) > 1 else None
+                if not primary:
+                    bucket["missing"] += 1
+                    stock_side["missing"] += 1
+                    continue
+
+                distance_atr = _safe_number(primary.get("distance_atr"))
+                if distance_atr is None and atr_value and atr_value > 0:
+                    distance_atr = abs(float(primary["price"]) - float(window_df.iloc[-1]["close"])) / atr_value
+                _append_metric(bucket["distance_atr"], distance_atr)
+                _append_metric(stock_side["distance_atr"], distance_atr)
+
+                if distance_atr is not None:
+                    if distance_atr < float(market_profile["min_primary_atr"]):
+                        bucket["primary_tight"] += 1
+                        stock_side["primary_tight"] += 1
+                    elif distance_atr > float(market_profile["max_primary_atr"]):
+                        bucket["primary_wide"] += 1
+                        stock_side["primary_wide"] += 1
+
+                if secondary and atr_value and atr_value > 0:
+                    gap_atr = abs(float(primary["price"]) - float(secondary["price"])) / atr_value
+                    _append_metric(bucket["gap_atr"], gap_atr)
+                    _append_metric(stock_side["gap_atr"], gap_atr)
+                    if gap_atr < float(market_profile["min_secondary_gap_atr"]):
+                        bucket["gap_tight"] += 1
+                        stock_side["gap_tight"] += 1
+                    elif gap_atr > float(market_profile["max_secondary_gap_atr"]):
+                        bucket["gap_wide"] += 1
+                        stock_side["gap_wide"] += 1
+
+                outcome = _evaluate_level_reaction(
+                    future_df,
+                    price=_safe_number(primary.get("price")),
+                    level_type=level_type,
+                    atr_value=atr_value,
+                    market_profile=market_profile,
+                )
+                status = str(outcome.get("status") or "missing")
+                if status == "success":
+                    bucket["touched"] += 1
+                    bucket["success"] += 1
+                    stock_side["touched"] += 1
+                    stock_side["success"] += 1
+                elif status == "fail":
+                    bucket["touched"] += 1
+                    bucket["fail"] += 1
+                    stock_side["touched"] += 1
+                    stock_side["fail"] += 1
+                elif status == "touched_open":
+                    bucket["touched"] += 1
+                    bucket["touched_open"] += 1
+                    stock_side["touched"] += 1
+                    stock_side["touched_open"] += 1
+                elif status == "untouched":
+                    bucket["untouched"] += 1
+                    stock_side["untouched"] += 1
+                else:
+                    bucket["missing"] += 1
+                    stock_side["missing"] += 1
+
+                _update_family_stats(bucket, primary.get("dominant_family"), status)
+                _update_family_stats(stock_side, primary.get("dominant_family"), status)
+
+            result["window_count"] += 1
+            stock_bucket["window_count"] += 1
+            used_this_stock = True
+
+        if used_this_stock:
+            result["stock_count"] += 1
+            result["per_stock"][str(ts_code)] = {
+                "window_count": int(stock_bucket["window_count"]),
+                "support": _summarize_backtest_bucket(stock_bucket["support"]),
+                "resistance": _summarize_backtest_bucket(stock_bucket["resistance"]),
+            }
+
+    support_summary = _summarize_backtest_bucket(result["support"])
+    resistance_summary = _summarize_backtest_bucket(result["resistance"])
+    reaction_scores = [
+        item for item in [support_summary.get("reaction_rate"), resistance_summary.get("reaction_rate")]
+        if item is not None
+    ]
+    span_penalties = [
+        item
+        for item in [
+            support_summary.get("primary_tight_ratio"),
+            support_summary.get("primary_wide_ratio"),
+            support_summary.get("gap_tight_ratio"),
+            support_summary.get("gap_wide_ratio"),
+            resistance_summary.get("primary_tight_ratio"),
+            resistance_summary.get("primary_wide_ratio"),
+            resistance_summary.get("gap_tight_ratio"),
+            resistance_summary.get("gap_wide_ratio"),
+        ]
+        if item is not None
+    ]
+    composite_score = None
+    if reaction_scores:
+        composite_score = float(np.mean(reaction_scores))
+        if span_penalties:
+            composite_score -= float(np.mean(span_penalties)) * 0.35
+        composite_score = round(composite_score, 4)
+
+    return {
+        "profile": profile_name,
+        "window_count": int(result["window_count"]),
+        "stock_count": int(result["stock_count"]),
+        "support": support_summary,
+        "resistance": resistance_summary,
+        "composite_score": composite_score,
+        "per_stock": result["per_stock"],
+    }
+
+
+def backtest_structural_price_levels(
+    board: str = "growth",
+    sample_size: int = 60,
+    lookback_days: int = 120,
+    eval_days: int = 60,
+    horizon: int = 7,
+    include_legacy: bool = True,
+    target_codes: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    board_key, scope = _resolve_backtest_board_scope(board)
+    explicit_codes = [str(code).strip().upper() for code in (target_codes or []) if str(code).strip()]
+    universe = (
+        _select_level_backtest_targets(explicit_codes)
+        if explicit_codes
+        else _select_level_backtest_universe(board=board_key, sample_size=sample_size)
+    )
+    codes = [str(item.get("ts_code") or "").strip().upper() for item in universe if item.get("ts_code")]
+    if not codes:
+        return {
+            "scope": {
+                "board": board_key,
+                "label": scope["label"],
+                "sample_size": 0,
+                "lookback_days": lookback_days,
+                "eval_days": eval_days,
+                "horizon": horizon,
+                "explicit_codes": explicit_codes,
+            },
+            "profiles": {},
+            "comparison": {},
+        }
+
+    rows_per_stock = max(lookback_days + eval_days + horizon + 20, 120)
+    history_map = _load_level_backtest_history(codes, rows_per_stock=rows_per_stock)
+    profiles: dict[str, Any] = {}
+    if include_legacy:
+        profiles["legacy"] = _run_level_backtest_profile(
+            history_map,
+            profile_name="legacy",
+            lookback_days=lookback_days,
+            eval_days=eval_days,
+            horizon=horizon,
+        )
+    profiles["adaptive"] = _run_level_backtest_profile(
+        history_map,
+        profile_name="adaptive",
+        lookback_days=lookback_days,
+        eval_days=eval_days,
+        horizon=horizon,
+    )
+
+    comparison: dict[str, Any] = {}
+    if "legacy" in profiles and "adaptive" in profiles:
+        legacy = profiles["legacy"]
+        adaptive = profiles["adaptive"]
+        comparison = {
+            "winner": (
+                "adaptive"
+                if (adaptive.get("composite_score") or -999) >= (legacy.get("composite_score") or -999)
+                else "legacy"
+            ),
+            "composite_uplift": round(
+                float((adaptive.get("composite_score") or 0.0) - (legacy.get("composite_score") or 0.0)),
+                4,
+            ),
+            "support_reaction_uplift": round(
+                float(
+                    (adaptive.get("support", {}).get("reaction_rate") or 0.0)
+                    - (legacy.get("support", {}).get("reaction_rate") or 0.0)
+                ),
+                4,
+            ),
+            "resistance_reaction_uplift": round(
+                float(
+                    (adaptive.get("resistance", {}).get("reaction_rate") or 0.0)
+                    - (legacy.get("resistance", {}).get("reaction_rate") or 0.0)
+                ),
+                4,
+            ),
+            "primary_span_wide_reduction": round(
+                float(
+                    (
+                        (legacy.get("support", {}).get("primary_wide_ratio") or 0.0)
+                        + (legacy.get("resistance", {}).get("primary_wide_ratio") or 0.0)
+                    )
+                    - (
+                        (adaptive.get("support", {}).get("primary_wide_ratio") or 0.0)
+                        + (adaptive.get("resistance", {}).get("primary_wide_ratio") or 0.0)
+                    )
+                ),
+                4,
+            ),
+            "secondary_gap_anomaly_reduction": round(
+                float(
+                    (
+                        (legacy.get("support", {}).get("gap_tight_ratio") or 0.0)
+                        + (legacy.get("support", {}).get("gap_wide_ratio") or 0.0)
+                        + (legacy.get("resistance", {}).get("gap_tight_ratio") or 0.0)
+                        + (legacy.get("resistance", {}).get("gap_wide_ratio") or 0.0)
+                    )
+                    - (
+                        (adaptive.get("support", {}).get("gap_tight_ratio") or 0.0)
+                        + (adaptive.get("support", {}).get("gap_wide_ratio") or 0.0)
+                        + (adaptive.get("resistance", {}).get("gap_tight_ratio") or 0.0)
+                        + (adaptive.get("resistance", {}).get("gap_wide_ratio") or 0.0)
+                    )
+                ),
+                4,
+            ),
+        }
+
+    latest_trade_date = None
+    if history_map:
+        latest_dates = [
+            str(df.iloc[-1].get("trade_date"))[:10]
+            for df in history_map.values()
+            if df is not None and not df.empty and df.iloc[-1].get("trade_date") is not None
+        ]
+        if latest_dates:
+            latest_trade_date = max(latest_dates)
+
+    return {
+        "scope": {
+            "board": board_key,
+            "label": scope["label"],
+            "sample_size": len(history_map),
+            "lookback_days": max(60, min(int(lookback_days or 120), 240)),
+            "eval_days": max(20, min(int(eval_days or 60), 160)),
+            "horizon": max(3, min(int(horizon or 7), 15)),
+            "latest_trade_date": latest_trade_date,
+            "explicit_codes": explicit_codes or None,
+        },
+        "universe": {
+            "sample_codes": [item["ts_code"] for item in universe[:12]],
+            "top_samples": universe[:8],
+        },
+        "profiles": profiles,
+        "comparison": comparison,
+    }
 
 
 def get_professional_commentary(df: pd.DataFrame, patterns: list, context: dict | None = None) -> str:
@@ -2630,34 +4842,19 @@ def get_professional_commentary_detailed(
     )
     bias, action, confidence, style = _decision_bucket(score)
 
-    high_5 = _safe_number(last_5["high"].max() if "high" in last_5.columns else None)
-    high_10 = _safe_number(last_10["high"].max() if "high" in last_10.columns else None)
-    high_20 = _safe_number(last_20["high"].max() if "high" in last_20.columns else None)
-    low_5 = _safe_number(last_5["low"].min() if "low" in last_5.columns else None)
-    low_10 = _safe_number(last_10["low"].min() if "low" in last_10.columns else None)
     low_20 = _safe_number(last_20["low"].min() if "low" in last_20.columns else None)
 
-    support_candidates = [
-        _build_level_candidate("support", "PRE_CLOSE", prev_close, close, 0.98),
-        _build_level_candidate("support", "OPEN", open_price, close, 0.96),
-        _build_level_candidate("support", "MA5", ma5, close, 0.95),
-        _build_level_candidate("support", "MA10", ma10, close, 1.08),
-        _build_level_candidate("support", "MA20", ma20, close, 1.22),
-        _build_level_candidate("support", "MA60", ma60, close, 1.25),
-        _build_level_candidate("support", "LOW_5", low_5, close, 0.94),
-        _build_level_candidate("support", "LOW_10", low_10, close, 1.1),
-        _build_level_candidate("support", "LOW_20", low_20, close, 1.24),
-    ]
-    resistance_candidates = [
-        _build_level_candidate("resistance", "PRE_CLOSE", prev_close, close, 0.98),
-        _build_level_candidate("resistance", "OPEN", open_price, close, 0.96),
-        _build_level_candidate("resistance", "HIGH_5", high_5, close, 0.95),
-        _build_level_candidate("resistance", "HIGH_10", high_10, close, 1.08),
-        _build_level_candidate("resistance", "HIGH_20", high_20, close, 1.22),
-        _build_level_candidate("resistance", "MA60", ma60, close, 1.15),
-    ]
-    support_levels = _select_key_levels(close, [item for item in support_candidates if item], "support")
-    resistance_levels = _select_key_levels(close, [item for item in resistance_candidates if item], "resistance")
+    level_bundle = build_structural_price_levels(
+        df,
+        top_n=2,
+        market_board=_infer_level_market_board(
+            df,
+            ts_code=commentary_context.get("ts_code"),
+            market=commentary_context.get("market"),
+        ),
+    )
+    support_levels = list(level_bundle.get("support_levels") or [])
+    resistance_levels = list(level_bundle.get("resistance_levels") or [])
 
     support_1 = support_levels[0]["price"] if support_levels else None
     support_2 = support_levels[1]["price"] if len(support_levels) > 1 else None
@@ -2675,8 +4872,15 @@ def get_professional_commentary_detailed(
 
     dist_support = distance_pct(support_1)
     dist_resistance = distance_pct(resistance_1)
-    near_support = dist_support is not None and dist_support <= 1.8
-    near_resistance = dist_resistance is not None and dist_resistance <= 1.8
+    near_band_pct = min(
+        2.2,
+        max(
+            1.0,
+            ((_safe_number(level_bundle.get("selection_gap"), close * 0.015) or (close * 0.015)) / close) * 100.0,
+        ),
+    )
+    near_support = dist_support is not None and dist_support <= near_band_pct
+    near_resistance = dist_resistance is not None and dist_resistance <= near_band_pct
 
     if near_support and near_resistance:
         zone_label = "窄区间"
@@ -2786,11 +4990,8 @@ def get_professional_commentary_detailed(
             )
             item["note"] = f"{item['note']} 操作：{item['trigger']}"
 
-    level_methodology = [
-        "支撑位定义：优先从 MA10/20/60、昨收价、开盘价与近 5/10/20 日低点里找离现价最近且有多来源共振的防守位。",
-        "压力位定义：优先从昨收价、开盘价、近 5/10/20 日高点及 MA60 里找上方最先遇到的抛压/突破确认位。",
-        "信号定义：交易结论以趋势、量价、主力资金、量比/换手和实时位置主导，K 线形态只做辅助参考。",
-    ]
+    level_methodology = list(level_bundle.get("level_methodology") or [])
+    level_methodology.append("信号定义：交易结论以趋势、量价、主力资金、量比/换手和实时位置主导，K 线形态只做辅助参考。")
 
     signal_reasons: list[dict[str, Any]] = []
 

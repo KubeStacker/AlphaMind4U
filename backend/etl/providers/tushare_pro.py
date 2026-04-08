@@ -339,3 +339,22 @@ class TushareProvider(DataProvider):
     def fx_daily(self) -> pd.DataFrame:
         """ 外汇/宏观数据 """
         return self._rate_limited_call(self.pro.fx_daily)
+
+    def us_tycr(
+        self,
+        date: str = None,
+        start_date: str = None,
+        end_date: str = None,
+        fields: str = None,
+    ) -> pd.DataFrame:
+        """美国国债收益率曲线。"""
+        params = {}
+        if date:
+            params["date"] = date.replace("-", "")
+        if start_date:
+            params["start_date"] = start_date.replace("-", "")
+        if end_date:
+            params["end_date"] = end_date.replace("-", "")
+        if fields:
+            params["fields"] = fields
+        return self._rate_limited_call(self.pro.us_tycr, **params)

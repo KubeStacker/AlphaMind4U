@@ -76,9 +76,9 @@
           </div>
 
           <div class="rounded-lg border border-slate-700 bg-slate-900/45 px-3 py-2.5">
-            <div class="text-[10px] text-slate-500">上证实时</div>
-            <div class="mt-1 text-base font-bold" :class="sseClass">{{ sseText }}</div>
-            <div class="mt-1 text-[10px] text-slate-500">{{ sseSubtext }}</div>
+            <div class="text-[10px] text-slate-500">上证 / 创业板</div>
+            <div class="mt-1 text-base font-bold" :class="indexCompositeClass">{{ indexCompositeText }}</div>
+            <div class="mt-1 text-[10px] text-slate-500">{{ indexCompositeSubtext }}</div>
           </div>
 
           <div class="rounded-lg border border-slate-700 bg-slate-900/45 px-3 py-2.5">
@@ -215,19 +215,21 @@ const sentimentBaseScoreText = computed(() => {
 });
 
 const sentimentDeltaText = computed(() => {
+  if ((sentimentLive.value?.market_status || '') !== 'TRADING') return '收盘不做盘中叠加';
   const delta = Number(sentimentLive.value?.delta);
   if (!Number.isFinite(delta) || Math.abs(delta) < 0.05) return '盘中叠加 0.0';
   return `盘中叠加 ${delta >= 0 ? '+' : ''}${delta.toFixed(1)}`;
 });
 
 const sentimentDeltaClass = computed(() => {
+  if ((sentimentLive.value?.market_status || '') !== 'TRADING') return 'text-slate-400';
   const delta = Number(sentimentLive.value?.delta);
   if (!Number.isFinite(delta) || Math.abs(delta) < 0.05) return 'text-slate-400';
   return delta > 0 ? 'text-red-300' : 'text-emerald-300';
 });
 
 const sentimentOverlaySummary = computed(() => (
-  sentimentLive.value?.overlay_summary || '收盘情绪会在交易时段自动叠加盘中指数和外部风险信号。'
+  sentimentLive.value?.overlay_summary || '交易时段按上证/创业板实时修正；收盘后直接展示最新收盘情绪。'
 ));
 
 const sentimentMacroUpdatedText = computed(() => {
@@ -255,24 +257,39 @@ const limitDownCount = computed(() => {
   return factors.limit_down ?? factors.failure ?? '-';
 });
 
-const sseSnapshot = computed(() => sentimentLive.value?.sse_snapshot || {});
+const sseSnapshot = computed(() => sentimentLive.value?.sse_snapshot || sentimentLive.value?.indices?.quotes?.['000001.SH'] || {});
+const cybSnapshot = computed(() => sentimentLive.value?.cyb_snapshot || sentimentLive.value?.indices?.quotes?.['399006.SZ'] || {});
 
-const sseText = computed(() => {
-  const pct = Number(sseSnapshot.value?.pct);
-  if (!Number.isFinite(pct)) return '-';
+const formatPct = (value) => {
+  const pct = Number(value);
+  if (!Number.isFinite(pct)) return null;
   return `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`;
+};
+
+const indexCompositeText = computed(() => {
+  const sseText = formatPct(sseSnapshot.value?.pct);
+  const cybText = formatPct(cybSnapshot.value?.pct);
+  if (sseText && cybText) return `上证 ${sseText} / 创业板 ${cybText}`;
+  if (sseText) return `上证 ${sseText}`;
+  if (cybText) return `创业板 ${cybText}`;
+  return '-';
 });
 
-const sseClass = computed(() => {
-  const pct = Number(sseSnapshot.value?.pct);
-  if (!Number.isFinite(pct)) return 'text-slate-400';
-  return pct >= 0 ? 'text-red-400' : 'text-emerald-400';
+const indexCompositeClass = computed(() => {
+  const values = [Number(sseSnapshot.value?.pct), Number(cybSnapshot.value?.pct)].filter((item) => Number.isFinite(item));
+  if (!values.length) return 'text-slate-400';
+  const allPositive = values.every((item) => item >= 0);
+  const allNegative = values.every((item) => item < 0);
+  if (allPositive) return 'text-red-400';
+  if (allNegative) return 'text-emerald-400';
+  return 'text-slate-100';
 });
 
-const sseSubtext = computed(() => {
-  const quoteTime = sseSnapshot.value?.quote_time;
-  if (quoteTime) return `上证 · ${quoteTime}`;
-  return '上证指数盘中方向';
+const indexCompositeSubtext = computed(() => {
+  const mode = sentimentLive.value?.indices?.mode === 'live' ? '盘中实时' : '收盘口径';
+  const quoteTime = sseSnapshot.value?.quote_time || cybSnapshot.value?.quote_time || sentimentLive.value?.trade_date || '';
+  if (quoteTime) return `${mode} · ${quoteTime}`;
+  return `${mode} · 等待指数快照`;
 });
 
 const tenYearSignal = computed(() => sentimentLive.value?.external_signals?.ten_year_yield || {});
@@ -295,11 +312,12 @@ const tenYearClass = computed(() => {
 const tenYearSubtext = computed(() => {
   const source = tenYearSignal.value?.source || '10Y';
   const value = Number(tenYearSignal.value?.yield);
-  if (!Number.isFinite(value)) return `${source} 未取到`;
-  if (value >= 4.4) return `${source} · 高于 4.4% 风险线`;
-  if (value >= 4.38) return `${source} · 逼近 4.4% 风险线`;
-  if (value <= 4.3) return `${source} · 靠近 4.3% 观察带`;
-  return `${source} · 常规波动区间`;
+  const asOf = tenYearSignal.value?.as_of || tenYearSignal.value?.quote_time || '最近可用日';
+  if (!Number.isFinite(value)) return `${source} · 未取到`;
+  if (value >= 4.4) return `${source} · ${asOf} · 高于 4.4% 风险线`;
+  if (value >= 4.38) return `${source} · ${asOf} · 逼近 4.4% 风险线`;
+  if (value <= 4.3) return `${source} · ${asOf} · 靠近 4.3% 观察带`;
+  return `${source} · ${asOf}`;
 });
 
 const pizzaSignal = computed(() => sentimentLive.value?.external_signals?.pizza_index || {});
@@ -321,9 +339,10 @@ const pizzaClass = computed(() => {
 });
 
 const pizzaSubtext = computed(() => {
+  const asOf = pizzaSignal.value?.as_of || '最近快照';
   const spike = Number(pizzaSignal.value?.max_spike_pct);
-  if (Number.isFinite(spike)) return `低置信度旁证 · ${Math.round(spike)}% 峰值`;
-  return '低置信度地缘旁证';
+  if (Number.isFinite(spike)) return `${asOf} · 低置信度旁证 · ${Math.round(spike)}% 峰值`;
+  return `${asOf} · 低置信度地缘旁证`;
 });
 
 const sentimentRisk = computed(() => sentimentLive.value?.risk_prediction || {});
@@ -361,7 +380,7 @@ const sentimentRiskReasons = computed(() => (
 ));
 
 const sentimentMonitorHint = computed(() => (
-  '10Y 以 4.4% 为上沿风险线、4.3% 为下沿观察线；Pizza 指数只作弱旁证，不单独决定仓位。'
+  '盘中只用上证/创业板实时修正；10Y 与 Pizza 只作外部风险旁证，不直接改写情绪分。'
 ));
 
 const historyChartOption = computed(() => {
