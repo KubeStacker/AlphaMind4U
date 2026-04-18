@@ -206,6 +206,13 @@ def _run_sentiment_task(task_id, params):
         sync_engine.sync_core_market_indices(years=0, days=max(int(days), 30))
     sync_engine.calculate_market_sentiment(days=days)
 
+
+def _run_strategy_plaza_task(task_id, params):
+    sync_engine.run_strategy_plaza_refresh(
+        trade_date=params.get("trade_date"),
+        strategy_key=params.get("strategy_key"),
+    )
+
 def _run_kline_train_task(task_id, params):
     """
     优化的 K 线训练任务：
@@ -318,6 +325,8 @@ async def task_worker():
                 await asyncio.to_thread(_run_sync_task, task_id, params)
             elif task_type == "SENTIMENT":
                 await asyncio.to_thread(_run_sentiment_task, task_id, params)
+            elif task_type == "STRATEGY_PLAZA":
+                await asyncio.to_thread(_run_strategy_plaza_task, task_id, params)
             else:
                 raise ValueError(f"未知任务类型: {task_type}")
                 
@@ -428,6 +437,10 @@ def get_data_dashboard():
             "stock_fina_indicator": {"date_col": "end_date", "label": "财务指标"},
             "stock_income": {"date_col": "end_date", "label": "季度利润表"},
             "stock_factor_daily": {"date_col": "trade_date", "label": "股票因子宽表"},
+            "strategy_definitions": {"date_col": "updated_at", "label": "策略广场策略定义"},
+            "strategy_observations": {"date_col": "observation_date", "label": "策略广场观察归档"},
+            "strategy_backtest_runs": {"date_col": "observation_date", "label": "策略广场回测结果"},
+            "strategy_daily_summaries": {"date_col": "trade_date", "label": "策略广场每日汇总"},
         }
         
         for table, config in table_queries.items():

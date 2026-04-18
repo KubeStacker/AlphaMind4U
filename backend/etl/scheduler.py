@@ -53,6 +53,17 @@ def start_scheduler():
     
     # 4. 每日收盘后更新兜底任务（18:30）
     scheduler.add_job(
+        sync_engine.run_strategy_plaza_refresh,
+        CronTrigger(hour=18, minute=0, timezone=SHANGHAI_TZ),
+        id="strategy_plaza_refresh",
+        name="策略广场每日刷新",
+        misfire_grace_time=3600,
+        coalesce=True,
+        max_instances=1,
+        replace_existing=True,
+    )
+
+    scheduler.add_job(
         sync_engine.perform_daily_data_update,
         CronTrigger(hour=18, minute=30, timezone=SHANGHAI_TZ),
         id="daily_data_update_fallback",

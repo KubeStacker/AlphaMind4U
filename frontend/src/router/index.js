@@ -4,6 +4,7 @@ import { useAuthStore } from '@/stores/auth'
 // 懒加载导入所有视图
 const Login = () => import('@/views/Login.vue')
 const Dashboard = () => import('@/views/Dashboard.vue')
+const Strategies = () => import('@/views/Strategies.vue')
 const Watchlist = () => import('@/views/Watchlist.vue')
 const Settings = () => import('@/views/Settings.vue')
 const AppLayout = () => import('@/components/AppLayout.vue')
@@ -26,6 +27,12 @@ const router = createRouter({
             path: '',
             name: 'watchlist',
             component: Watchlist,
+            meta: { requiresAuth: true }
+        },
+        {
+            path: 'strategies',
+            name: 'strategies',
+            component: Strategies,
             meta: { requiresAuth: true }
         },
         {

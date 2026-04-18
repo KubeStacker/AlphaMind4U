@@ -1795,9 +1795,12 @@ def _resolve_commentary_context(context: dict | None) -> dict:
 LEVEL_FAMILY_TEXT = {
     "anchor": "短线锚点",
     "trend": "均线成本",
+    "trendline": "趋势线",
     "range": "区间极值",
     "pivot": "摆动拐点",
     "volume": "成交密集区",
+    "gap": "缺口",
+    "structure": "结构触线",
 }
 
 
@@ -1809,6 +1812,20 @@ def _describe_level_source(source: str, level_type: str) -> tuple[str, str, str,
         definition = f"近{window}个交易日的平均成本线"
         breach_rule = "收盘跌破说明均线支撑削弱" if level_type == "support" else "放量站上才算均线压力化解"
         return basis, definition, breach_rule, "trend"
+
+    if normalized.startswith("TRENDLINE_SUPPORT_"):
+        window = re.sub(r"[^0-9]", "", normalized) or "20"
+        basis = f"{window}日低点趋势线"
+        definition = f"按近{window}日低点斜率拟合的动态支撑线"
+        breach_rule = "跌破说明上升趋势线被破坏"
+        return basis, definition, breach_rule, "trendline"
+
+    if normalized.startswith("TRENDLINE_RESISTANCE_"):
+        window = re.sub(r"[^0-9]", "", normalized) or "20"
+        basis = f"{window}日高点趋势线"
+        definition = f"按近{window}日高点斜率拟合的动态压力线"
+        breach_rule = "放量站上说明下降/横向趋势线被突破"
+        return basis, definition, breach_rule, "trendline"
 
     if normalized == "PRE_CLOSE":
         basis = "昨收价"
@@ -1853,6 +1870,36 @@ def _describe_level_source(source: str, level_type: str) -> tuple[str, str, str,
         definition = "按典型价格与成交量聚合后的成本峰值，类似简化筹码峰"
         breach_rule = "跌破说明密集成交区承接被击穿" if level_type == "support" else "放量站上说明上方密集成交区开始松动"
         return basis, definition, breach_rule, "volume"
+
+    if normalized.startswith("GAP_UP_SUPPORT"):
+        basis = "未补上跳缺口"
+        definition = "上跳缺口上沿/下沿对应的承接带，未完全回补前通常仍有支撑意义"
+        breach_rule = "有效回补缺口后，上跳缺口支撑失效"
+        return basis, definition, breach_rule, "gap"
+
+    if normalized.startswith("GAP_DOWN_RESISTANCE"):
+        basis = "未补下跳缺口"
+        definition = "下跳缺口下沿/上沿对应的套牢带，未回补前通常仍有压力意义"
+        breach_rule = "放量回补缺口后，下跳缺口压力才算化解"
+        return basis, definition, breach_rule, "gap"
+
+    if normalized.startswith("STRUCT_SUPPORT"):
+        basis = "四次承接结构"
+        definition = "至少四次下探同价带，含阴线收盘/阳线开盘锚点、两次下影试探，并在第4次或之后出现放量小阳确认"
+        breach_rule = "跌破说明多次承接位失守"
+        return basis, definition, breach_rule, "structure"
+
+    if normalized.startswith("STRUCT_RESISTANCE"):
+        basis = "三触顶结构压力"
+        definition = "至少一次阳线收盘价锚定，加两次上影摸线；该结构只作为触线证据之一，最终仍需与趋势线、均线、缺口或成交密集区共振确认"
+        breach_rule = "放量站上说明三触顶结构被化解"
+        return basis, definition, breach_rule, "structure"
+
+    if normalized == "ATR_SUPPORT":
+        basis = "近端波动防守位"
+        definition = "按当前 ATR 折算的近端回踩容忍区，适合扩张日先看短线承接"
+        breach_rule = "跌破说明短线强势节奏被破坏"
+        return basis, definition, breach_rule, "anchor"
 
     basis = normalized or ("支撑位" if level_type == "support" else "压力位")
     definition = "历史量价形成的重要价格带"
@@ -2161,6 +2208,346 @@ def _collect_volume_profile_level_candidates(
     return candidates
 
 
+def _touch_tick_allowance(price: float, touch_band: float) -> float:
+    return max(0.01, min(max(price * 0.0008, 0.01), max(touch_band * 0.35, 0.01)))
+
+
+def _small_bullish_confirmation(
+    row: pd.Series,
+    volume: float,
+    vol_base: float,
+) -> bool:
+    open_price = _safe_number(row.get("open"))
+    close = _safe_number(row.get("close"))
+    high = _safe_number(row.get("high"))
+    low = _safe_number(row.get("low"))
+    if None in (open_price, close, high, low) or close is None or open_price is None:
+        return False
+    total_range = max(high - low, EPS)
+    body_ratio = abs(close - open_price) / total_range
+    close_pos = (close - low) / total_range
+    volume_ok = volume > 0 and (
+        (vol_base > 0 and volume >= vol_base * 1.08)
+        or (vol_base <= 0 and volume >= 1.0)
+    )
+    return (
+        close > open_price
+        and 0.12 <= body_ratio <= 0.58
+        and close_pos >= 0.55
+        and volume_ok
+    )
+
+
+def _collect_structural_reaction_level_candidates(
+    df: pd.DataFrame,
+    close: float,
+    level_type: str,
+    touch_band: float,
+    volume_col: str,
+) -> list[dict]:
+    if len(df) < 16 or not {"open", "high", "low", "close"}.issubset(df.columns):
+        return []
+
+    window = df.tail(min(len(df), 60)).reset_index(drop=True).copy()
+    for col in ("open", "high", "low", "close"):
+        window[col] = pd.to_numeric(window[col], errors="coerce")
+    if volume_col and volume_col in window.columns:
+        window[volume_col] = pd.to_numeric(window[volume_col], errors="coerce").fillna(0.0)
+    else:
+        window["_tmp_volume"] = 0.0
+        volume_col = "_tmp_volume"
+
+    open_series = window["open"]
+    close_series = window["close"]
+    high_series = window["high"]
+    low_series = window["low"]
+    body_top = np.maximum(open_series, close_series)
+    body_bottom = np.minimum(open_series, close_series)
+    total_range = (high_series - low_series).replace(0, np.nan)
+    upper_shadow = (high_series - body_top).clip(lower=0.0)
+    lower_shadow = (body_bottom - low_series).clip(lower=0.0)
+    bullish = close_series >= open_series
+    bearish = close_series < open_series
+
+    seed_prices: list[float] = []
+    if level_type == "resistance":
+        seed_prices.extend(
+            close_series.loc[bullish & close_series.notna()].tail(12).round(2).tolist()
+        )
+        seed_prices.extend(
+            high_series.loc[(upper_shadow > 0) & high_series.notna()].tail(18).round(2).tolist()
+        )
+    else:
+        seed_prices.extend(
+            close_series.loc[bearish & close_series.notna()].tail(12).round(2).tolist()
+        )
+        seed_prices.extend(
+            open_series.loc[bullish & open_series.notna()].tail(12).round(2).tolist()
+        )
+        seed_prices.extend(
+            low_series.loc[(lower_shadow > 0) & low_series.notna()].tail(20).round(2).tolist()
+        )
+
+    ordered_seeds: list[float] = []
+    cluster_tol = max(touch_band * 0.7, 0.03)
+    for price in sorted({_safe_number(item) for item in seed_prices if _safe_number(item) is not None}):
+        if price is None:
+            continue
+        if any(abs(price - prev) <= cluster_tol for prev in ordered_seeds):
+            continue
+        ordered_seeds.append(price)
+
+    candidates: list[dict] = []
+    vol_ma5 = pd.to_numeric(window[volume_col], errors="coerce").rolling(5, min_periods=1).mean()
+
+    for raw_price in ordered_seeds:
+        price = _safe_number(raw_price)
+        if price is None:
+            continue
+        tick_band = _touch_tick_allowance(price, touch_band)
+        price_band = touch_band + tick_band
+
+        if level_type == "resistance":
+            if price < close * 0.996 or price > close * 1.14:
+                continue
+            bull_close_mask = bullish & ((close_series - price).abs() <= price_band * 0.85)
+            upper_shadow_mask = (
+                (upper_shadow > np.maximum((close_series - open_series).abs() * 0.20, price_band * 0.15))
+                & (high_series >= price - tick_band)
+                & (high_series <= price + price_band)
+                & (body_top <= price + price_band * 0.55)
+            )
+            bull_close_hits = np.flatnonzero(bull_close_mask.fillna(False).to_numpy())
+            shadow_hits = np.flatnonzero(upper_shadow_mask.fillna(False).to_numpy())
+            if bull_close_hits.size < 1 or shadow_hits.size < 2:
+                continue
+            bull_anchor = int(bull_close_hits[0])
+            if not any(int(idx) > bull_anchor for idx in shadow_hits):
+                continue
+            hit_indices = sorted(set(int(idx) for idx in [*bull_close_hits.tolist(), *shadow_hits.tolist()]))
+            if len(hit_indices) < 3:
+                continue
+            structural_prices = [float(close_series.iloc[bull_anchor])] + [
+                float(high_series.iloc[int(idx)]) for idx in shadow_hits.tolist()
+            ]
+            candidate_price = float(np.median(structural_prices))
+            extra_strength = min(0.75, 0.22 * len(hit_indices) + 0.12 * len(shadow_hits))
+            candidate = _build_level_candidate(
+                df,
+                level_type="resistance",
+                source="STRUCT_RESISTANCE",
+                price=candidate_price,
+                close=close,
+                base_weight=1.34,
+                touch_band=touch_band,
+                volume_col=volume_col,
+                extra_strength=extra_strength,
+            )
+            if candidate:
+                candidate["touch_count"] = max(int(candidate.get("touch_count") or 0), len(hit_indices))
+                candidate["definition"] = (
+                    f"{candidate['definition']}；本次识别到阳线收盘锚点 1 次、上影摸线 {len(shadow_hits)} 次"
+                )
+                candidates.append(candidate)
+            continue
+
+        if price > close * 1.004 or price < close * 0.88:
+            continue
+        bear_close_mask = bearish & ((close_series - price).abs() <= price_band * 0.85)
+        bull_open_mask = bullish & ((open_series - price).abs() <= price_band * 0.85)
+        lower_shadow_mask = (
+            (lower_shadow > np.maximum((close_series - open_series).abs() * 0.20, price_band * 0.15))
+            & (low_series <= price + tick_band)
+            & (low_series >= price - price_band)
+            & (body_bottom >= price - price_band * 0.55)
+        )
+        anchor_mask = bear_close_mask | bull_open_mask
+        anchor_hits = np.flatnonzero(anchor_mask.fillna(False).to_numpy())
+        shadow_hits = np.flatnonzero(lower_shadow_mask.fillna(False).to_numpy())
+        if anchor_hits.size < 1 or shadow_hits.size < 2:
+            continue
+        hit_indices = sorted(set(int(idx) for idx in [*anchor_hits.tolist(), *shadow_hits.tolist()]))
+        if len(hit_indices) < 4:
+            continue
+
+        fourth_idx = hit_indices[3]
+        confirm_found = False
+        confirm_strength = 0.0
+        for idx in range(fourth_idx, min(len(window), fourth_idx + 6)):
+            row = window.iloc[idx]
+            volume = float(window.iloc[idx][volume_col] or 0.0)
+            vol_base = float(vol_ma5.iloc[idx] or 0.0)
+            if _small_bullish_confirmation(row, volume, vol_base):
+                confirm_found = True
+                confirm_strength = max(confirm_strength, 0.22 + max(volume / max(vol_base, 1.0) - 1.0, 0.0) * 0.16)
+        if not confirm_found:
+            continue
+
+        structural_prices = [
+            *close_series.loc[bear_close_mask.fillna(False)].astype(float).tolist(),
+            *open_series.loc[bull_open_mask.fillna(False)].astype(float).tolist(),
+            *low_series.loc[lower_shadow_mask.fillna(False)].astype(float).tolist(),
+        ]
+        candidate_price = float(np.median(structural_prices))
+        extra_strength = min(0.95, 0.18 * len(hit_indices) + 0.10 * len(shadow_hits) + confirm_strength)
+        candidate = _build_level_candidate(
+            df,
+            level_type="support",
+            source="STRUCT_SUPPORT",
+            price=candidate_price,
+            close=close,
+            base_weight=1.42,
+            touch_band=touch_band,
+            volume_col=volume_col,
+            extra_strength=extra_strength,
+        )
+        if candidate:
+            candidate["touch_count"] = max(int(candidate.get("touch_count") or 0), len(hit_indices))
+            candidate["definition"] = (
+                f"{candidate['definition']}；本次识别到锚点 {len(anchor_hits)} 次、下影试探 {len(shadow_hits)} 次，并出现放量小阳确认"
+            )
+            candidates.append(candidate)
+
+    selected: list[dict] = []
+    for item in sorted(candidates, key=lambda candidate: (candidate["distance_pct"], -candidate["weight"])):
+        if any(abs(float(item["price"]) - float(prev["price"])) <= cluster_tol for prev in selected):
+            continue
+        selected.append(item)
+        if len(selected) >= 3:
+            break
+    return selected
+
+
+def _collect_trendline_level_candidates(
+    df: pd.DataFrame,
+    close: float,
+    level_type: str,
+    touch_band: float,
+    volume_col: str,
+) -> list[dict]:
+    if len(df) < 18 or not {"high", "low", "close"}.issubset(df.columns):
+        return []
+
+    candidates: list[dict] = []
+    for window_size in (20, 40):
+        if len(df) < window_size:
+            continue
+        window = df.tail(window_size).reset_index(drop=True)
+        x = np.arange(len(window), dtype=float)
+        series = pd.to_numeric(
+            window["low" if level_type == "support" else "high"],
+            errors="coerce",
+        )
+        if series.isna().sum() > len(window) * 0.2:
+            continue
+        filled = series.interpolate(limit_direction="both")
+        slope, intercept = np.polyfit(x, filled.to_numpy(dtype=float), 1)
+        projected = slope * x + intercept
+        end_price = float(projected[-1])
+        if end_price <= 0:
+            continue
+        if level_type == "support" and slope <= 0:
+            continue
+        if level_type == "resistance" and slope >= 0 and end_price < close * 1.01:
+            continue
+
+        tolerance = max(touch_band * 1.15, _touch_tick_allowance(end_price, touch_band))
+        touches = int(np.sum(np.abs(filled.to_numpy(dtype=float) - projected) <= tolerance))
+        if touches < 3:
+            continue
+
+        extra_strength = min(0.72, touches * 0.11 + min(abs(slope) / max(end_price, EPS) * window_size * 10.0, 0.28))
+        candidate = _build_level_candidate(
+            df,
+            level_type=level_type,
+            source=f"TRENDLINE_{'SUPPORT' if level_type == 'support' else 'RESISTANCE'}_{window_size}",
+            price=end_price,
+            close=close,
+            base_weight=1.12,
+            touch_band=touch_band,
+            volume_col=volume_col,
+            extra_strength=extra_strength,
+        )
+        if candidate:
+            candidate["touch_count"] = max(int(candidate.get("touch_count") or 0), touches)
+            candidates.append(candidate)
+
+    return candidates
+
+
+def _collect_gap_level_candidates(
+    df: pd.DataFrame,
+    close: float,
+    level_type: str,
+    touch_band: float,
+    volume_col: str,
+) -> list[dict]:
+    if len(df) < 6 or not {"high", "low"}.issubset(df.columns):
+        return []
+
+    window = df.tail(min(len(df), 40)).reset_index(drop=True).copy()
+    high_series = pd.to_numeric(window["high"], errors="coerce")
+    low_series = pd.to_numeric(window["low"], errors="coerce")
+    candidates: list[dict] = []
+
+    for idx in range(1, len(window)):
+        prev_high = _safe_number(high_series.iloc[idx - 1])
+        prev_low = _safe_number(low_series.iloc[idx - 1])
+        cur_high = _safe_number(high_series.iloc[idx])
+        cur_low = _safe_number(low_series.iloc[idx])
+        if None in (prev_high, prev_low, cur_high, cur_low):
+            continue
+
+        gap_threshold = max(touch_band * 0.7, prev_high * 0.0035)
+        if level_type == "support" and cur_low > prev_high + gap_threshold:
+            subsequent_lows = low_series.iloc[idx:].dropna()
+            if subsequent_lows.empty or float(subsequent_lows.min()) < prev_high - touch_band * 0.35:
+                continue
+            edge_price = prev_high
+            extra_strength = min(0.62, ((cur_low - prev_high) / max(prev_high, EPS)) * 30.0 + 0.12)
+            candidate = _build_level_candidate(
+                df,
+                level_type="support",
+                source=f"GAP_UP_SUPPORT_{len(window) - idx}",
+                price=edge_price,
+                close=close,
+                base_weight=1.08,
+                touch_band=touch_band,
+                volume_col=volume_col,
+                extra_strength=extra_strength,
+            )
+            if candidate:
+                candidates.append(candidate)
+        elif level_type == "resistance" and cur_high < prev_low - gap_threshold:
+            subsequent_highs = high_series.iloc[idx:].dropna()
+            if subsequent_highs.empty or float(subsequent_highs.max()) > prev_low + touch_band * 0.35:
+                continue
+            edge_price = prev_low
+            extra_strength = min(0.62, ((prev_low - cur_high) / max(prev_low, EPS)) * 30.0 + 0.12)
+            candidate = _build_level_candidate(
+                df,
+                level_type="resistance",
+                source=f"GAP_DOWN_RESISTANCE_{len(window) - idx}",
+                price=edge_price,
+                close=close,
+                base_weight=1.08,
+                touch_band=touch_band,
+                volume_col=volume_col,
+                extra_strength=extra_strength,
+            )
+            if candidate:
+                candidates.append(candidate)
+
+    selected: list[dict] = []
+    for item in sorted(candidates, key=lambda candidate: (candidate["distance_pct"], -candidate["weight"])):
+        if any(abs(float(item["price"]) - float(prev["price"])) <= touch_band for prev in selected):
+            continue
+        selected.append(item)
+        if len(selected) >= 3:
+            break
+    return selected
+
+
 def _merge_level_clusters(candidates: Sequence[dict], cluster_band: float) -> list[dict]:
     if not candidates:
         return []
@@ -2221,14 +2608,35 @@ def _merge_level_clusters(candidates: Sequence[dict], cluster_band: float) -> li
             existing["dominant_family"] = item["family"]
 
     for item in merged:
+        families = {str(family) for family in item.get("families", []) if family}
+        level_type = str(item.get("type") or "")
+        strategic_families = families.intersection({"trend", "trendline", "pivot", "volume", "gap", "structure"})
+        emphasis_families = families.intersection({"trendline", "volume", "gap", "trend"})
+        multi_factor_bonus = min(len(strategic_families) * 0.16, 0.80) + min(len(emphasis_families) * 0.10, 0.32)
+        if level_type == "resistance":
+            if len(strategic_families) >= 2:
+                multi_factor_bonus += 0.24
+            if strategic_families.intersection({"trendline", "volume", "gap"}):
+                multi_factor_bonus += 0.16
+            if families == {"anchor"}:
+                multi_factor_bonus -= 0.55
+        elif families == {"anchor"}:
+            multi_factor_bonus -= 0.28
+
         recency_days = item.get("recency_days")
         recency_score = 0.2 if recency_days is None else max(0.0, 1.0 - min(float(recency_days), 25.0) / 22.0)
         touch_score = min(float(item.get("touch_count") or 0) / 4.0, 1.6)
         volume_bonus = max(0.0, min(float(item.get("touch_volume_ratio") or 1.0), 2.2) - 0.9)
         distance_score = max(0.0, 1.0 - min(float(item["distance_pct"]), 14.0) / 12.0)
         family_bonus = min(0.24 * len(item.get("families", [])), 0.72)
+        item["multi_factor_score"] = round(max(multi_factor_bonus, 0.0), 3)
         item["strength_score"] = round(
-            float(item["weight"]) + touch_score * 0.55 + recency_score * 0.40 + volume_bonus * 0.35 + family_bonus,
+            float(item["weight"])
+            + touch_score * 0.55
+            + recency_score * 0.40
+            + volume_bonus * 0.35
+            + family_bonus
+            + multi_factor_bonus,
             3,
         )
         item["selection_score"] = round(float(item["strength_score"]) + distance_score * 0.95, 3)
@@ -2276,6 +2684,7 @@ def _select_key_levels(
     ordered = sorted(picked, key=lambda item: float(item["price"]), reverse=level_type == "support")
     selected: list[dict] = []
     for idx, item in enumerate(ordered[:max(1, int(top_n))], start=1):
+        item["distance_pct"] = round(abs(close - float(item["price"])) / close * 100.0, 2)
         basis_text = "、".join(item.get("basis_list", [])[:3]) or str(item.get("dominant_basis") or "")
         family_text = "、".join(
             LEVEL_FAMILY_TEXT.get(family, family) for family in item.get("families", [])
@@ -2451,6 +2860,60 @@ def build_structural_price_levels_legacy(df: pd.DataFrame, top_n: int = 2) -> di
             volume_col=volume_col,
         )
     )
+    support_candidates.extend(
+        _collect_structural_reaction_level_candidates(
+            work,
+            close=close,
+            level_type="support",
+            touch_band=touch_band,
+            volume_col=volume_col,
+        )
+    )
+    resistance_candidates.extend(
+        _collect_structural_reaction_level_candidates(
+            work,
+            close=close,
+            level_type="resistance",
+            touch_band=touch_band,
+            volume_col=volume_col,
+        )
+    )
+    support_candidates.extend(
+        _collect_trendline_level_candidates(
+            work,
+            close=close,
+            level_type="support",
+            touch_band=touch_band,
+            volume_col=volume_col,
+        )
+    )
+    resistance_candidates.extend(
+        _collect_trendline_level_candidates(
+            work,
+            close=close,
+            level_type="resistance",
+            touch_band=touch_band,
+            volume_col=volume_col,
+        )
+    )
+    support_candidates.extend(
+        _collect_gap_level_candidates(
+            work,
+            close=close,
+            level_type="support",
+            touch_band=touch_band,
+            volume_col=volume_col,
+        )
+    )
+    resistance_candidates.extend(
+        _collect_gap_level_candidates(
+            work,
+            close=close,
+            level_type="resistance",
+            touch_band=touch_band,
+            volume_col=volume_col,
+        )
+    )
 
     support_levels = _select_key_levels(
         close,
@@ -2470,7 +2933,8 @@ def build_structural_price_levels_legacy(df: pd.DataFrame, top_n: int = 2) -> di
     )
 
     level_methodology = [
-        "算法参考 qlib 常见的 rolling-window 特征工程思路：同时评估 MA5/10/20/60、近 5/10/20/60 日高低点、已确认摆动高低点和近 60 日成交密集区，不再只按离现价最近取值。",
+        "算法参考 qlib 常见的 rolling-window 特征工程思路：同时评估 MA5/10/20/60、近 5/10/20/60 日高低点、已确认摆动高低点、趋势线、未补缺口和近 60 日成交密集区，不再只按离现价最近取值。",
+        "结构触线规则：压力要求至少 1 次阳线收盘锚定 + 2 次上影摸线，且至少 1 次上影发生在阳线收盘之后；支撑要求至少 4 次下探承接，含阴线收盘/阳线开盘锚点、2 次下影试探，并在第 4 次或之后出现放量小阳确认。",
         "去重规则：先用 ATR14 与近 10 日真实振幅生成动态价格带，把过近候选合并为同一价位区，再要求相邻支撑/压力至少间隔一个波动单位，避免两个点位几乎重合。",
         "排序规则：每个价位按来源共振、近 30 日触碰次数、触碰时成交量、最近性和距现价远近综合打分，优先保留更贴近当前博弈区的结构位。",
     ]
@@ -2510,14 +2974,14 @@ LEVEL_BOARD_PROFILES: dict[str, dict[str, Any]] = {
         "touch_atr_max": 0.38,
         "max_candidate_pct": 10.5,
         "max_candidate_atr_scale": 3.2,
-        "primary_target_atr": 1.00,
-        "primary_tolerance_atr": 0.92,
-        "min_primary_atr": 0.42,
-        "max_primary_atr": 2.45,
-        "secondary_gap_target_atr": 1.15,
-        "min_secondary_gap_atr": 0.55,
-        "max_secondary_gap_atr": 2.45,
-        "secondary_max_atr": 4.40,
+        "primary_target_atr": 0.72,
+        "primary_tolerance_atr": 0.58,
+        "min_primary_atr": 0.20,
+        "max_primary_atr": 1.55,
+        "secondary_gap_target_atr": 0.92,
+        "min_secondary_gap_atr": 0.38,
+        "max_secondary_gap_atr": 1.85,
+        "secondary_max_atr": 3.10,
         "touch_tolerance_atr": 0.20,
         "break_tolerance_atr": 0.34,
         "reaction_target_atr": 0.62,
@@ -2525,9 +2989,12 @@ LEVEL_BOARD_PROFILES: dict[str, dict[str, Any]] = {
         "family_weight": {
             "anchor": 0.84,
             "trend": 1.04,
+            "trendline": 1.08,
             "range": 1.00,
             "pivot": 1.10,
             "volume": 1.12,
+            "gap": 1.10,
+            "structure": 1.22,
         },
         "source_weight": {
             "PRE_CLOSE": 0.76,
@@ -2567,14 +3034,14 @@ LEVEL_BOARD_PROFILES: dict[str, dict[str, Any]] = {
         "touch_atr_max": 0.32,
         "max_candidate_pct": 13.5,
         "max_candidate_atr_scale": 4.0,
-        "primary_target_atr": 1.30,
-        "primary_tolerance_atr": 1.05,
-        "min_primary_atr": 0.55,
-        "max_primary_atr": 3.10,
-        "secondary_gap_target_atr": 1.45,
-        "min_secondary_gap_atr": 0.75,
-        "max_secondary_gap_atr": 3.05,
-        "secondary_max_atr": 5.30,
+        "primary_target_atr": 0.82,
+        "primary_tolerance_atr": 0.64,
+        "min_primary_atr": 0.22,
+        "max_primary_atr": 1.80,
+        "secondary_gap_target_atr": 1.02,
+        "min_secondary_gap_atr": 0.44,
+        "max_secondary_gap_atr": 2.10,
+        "secondary_max_atr": 3.50,
         "touch_tolerance_atr": 0.22,
         "break_tolerance_atr": 0.40,
         "reaction_target_atr": 0.78,
@@ -2582,9 +3049,12 @@ LEVEL_BOARD_PROFILES: dict[str, dict[str, Any]] = {
         "family_weight": {
             "anchor": 0.78,
             "trend": 1.05,
+            "trendline": 1.10,
             "range": 1.00,
             "pivot": 1.14,
             "volume": 1.18,
+            "gap": 1.12,
+            "structure": 1.26,
         },
         "source_weight": {
             "PRE_CLOSE": 0.70,
@@ -2624,14 +3094,14 @@ LEVEL_BOARD_PROFILES: dict[str, dict[str, Any]] = {
         "touch_atr_max": 0.32,
         "max_candidate_pct": 13.8,
         "max_candidate_atr_scale": 4.0,
-        "primary_target_atr": 1.32,
-        "primary_tolerance_atr": 1.05,
-        "min_primary_atr": 0.56,
-        "max_primary_atr": 3.15,
-        "secondary_gap_target_atr": 1.46,
-        "min_secondary_gap_atr": 0.76,
-        "max_secondary_gap_atr": 3.08,
-        "secondary_max_atr": 5.40,
+        "primary_target_atr": 0.84,
+        "primary_tolerance_atr": 0.64,
+        "min_primary_atr": 0.22,
+        "max_primary_atr": 1.85,
+        "secondary_gap_target_atr": 1.04,
+        "min_secondary_gap_atr": 0.46,
+        "max_secondary_gap_atr": 2.12,
+        "secondary_max_atr": 3.55,
         "touch_tolerance_atr": 0.22,
         "break_tolerance_atr": 0.40,
         "reaction_target_atr": 0.78,
@@ -2639,9 +3109,12 @@ LEVEL_BOARD_PROFILES: dict[str, dict[str, Any]] = {
         "family_weight": {
             "anchor": 0.78,
             "trend": 1.05,
+            "trendline": 1.10,
             "range": 1.00,
             "pivot": 1.15,
             "volume": 1.18,
+            "gap": 1.12,
+            "structure": 1.28,
         },
         "source_weight": {
             "PRE_CLOSE": 0.70,
@@ -2681,14 +3154,14 @@ LEVEL_BOARD_PROFILES: dict[str, dict[str, Any]] = {
         "touch_atr_max": 0.30,
         "max_candidate_pct": 12.8,
         "max_candidate_atr_scale": 3.7,
-        "primary_target_atr": 1.08,
-        "primary_tolerance_atr": 0.90,
-        "min_primary_atr": 0.48,
-        "max_primary_atr": 2.75,
-        "secondary_gap_target_atr": 1.28,
-        "min_secondary_gap_atr": 0.64,
-        "max_secondary_gap_atr": 2.65,
-        "secondary_max_atr": 4.80,
+        "primary_target_atr": 0.78,
+        "primary_tolerance_atr": 0.60,
+        "min_primary_atr": 0.20,
+        "max_primary_atr": 1.70,
+        "secondary_gap_target_atr": 0.96,
+        "min_secondary_gap_atr": 0.42,
+        "max_secondary_gap_atr": 1.95,
+        "secondary_max_atr": 3.25,
         "touch_tolerance_atr": 0.22,
         "break_tolerance_atr": 0.40,
         "reaction_target_atr": 0.78,
@@ -2696,9 +3169,12 @@ LEVEL_BOARD_PROFILES: dict[str, dict[str, Any]] = {
         "family_weight": {
             "anchor": 0.74,
             "trend": 1.10,
+            "trendline": 1.12,
             "range": 0.96,
             "pivot": 1.06,
             "volume": 1.20,
+            "gap": 1.14,
+            "structure": 1.24,
         },
         "source_weight": {
             "PRE_CLOSE": 0.68,
@@ -2803,10 +3279,18 @@ def _resolve_source_weight(source: str, family: str, market_profile: dict[str, A
     source_weight = market_profile.get("source_weight", {})
     if normalized in source_weight:
         return float(source_weight[normalized])
+    if normalized.startswith("ATR_"):
+        return max(float(market_profile.get("family_weight", {}).get("anchor", 0.84)), 0.98)
     if normalized.startswith("PIVOT_"):
         return float(market_profile.get("pivot_weight", market_profile.get("family_weight", {}).get("pivot", 1.10)))
     if normalized.startswith("VP_"):
         return float(market_profile.get("volume_profile_weight", market_profile.get("family_weight", {}).get("volume", 1.12)))
+    if normalized.startswith("TRENDLINE_"):
+        return float(market_profile.get("family_weight", {}).get("trendline", 1.08))
+    if normalized.startswith("GAP_"):
+        return float(market_profile.get("family_weight", {}).get("gap", 1.10))
+    if normalized.startswith("STRUCT_"):
+        return float(market_profile.get("family_weight", {}).get("structure", 1.22))
     return float(market_profile.get("family_weight", {}).get(family, 1.0))
 
 
@@ -2819,6 +3303,14 @@ def _resolve_trend_weight(
     normalized = str(source or "").upper()
     if regime.get("trend_up"):
         if level_type == "support":
+            if normalized == "ATR_SUPPORT":
+                return 1.08
+            if normalized.startswith("STRUCT_SUPPORT"):
+                return 1.14
+            if normalized.startswith("TRENDLINE_SUPPORT_"):
+                return 1.12
+            if normalized.startswith("GAP_UP_SUPPORT"):
+                return 1.08
             if family in {"trend", "pivot", "volume"}:
                 return 1.10
             if family == "anchor" or normalized in {"MA5", "PRE_CLOSE", "OPEN"}:
@@ -2827,6 +3319,8 @@ def _resolve_trend_weight(
             return 0.84
     elif regime.get("trend_down"):
         if level_type == "support":
+            if normalized.startswith("STRUCT_SUPPORT"):
+                return 0.92
             if family == "anchor" or normalized in {"MA5", "PRE_CLOSE", "OPEN"}:
                 return 0.68
             if family in {"trend", "range"}:
@@ -2834,6 +3328,12 @@ def _resolve_trend_weight(
             if family in {"pivot", "volume"}:
                 return 0.92
         else:
+            if normalized.startswith("STRUCT_RESISTANCE"):
+                return 1.14
+            if normalized.startswith("TRENDLINE_RESISTANCE_"):
+                return 1.10
+            if normalized.startswith("GAP_DOWN_RESISTANCE"):
+                return 1.08
             if family in {"trend", "pivot", "volume"}:
                 return 1.10
             if family == "anchor":
@@ -2989,18 +3489,69 @@ def _build_level_candidate_adaptive(
     return candidate
 
 
+def _collect_expansion_guard_candidates(
+    df: pd.DataFrame,
+    close: float,
+    prev_close: float,
+    open_price: float,
+    atr_value: float | None,
+    touch_band: float,
+    volume_col: str,
+    market_profile: dict[str, Any],
+    regime: dict[str, Any],
+) -> list[dict]:
+    if close <= 0 or atr_value is None or atr_value <= 0:
+        return []
+
+    ma5 = _safe_number(df.iloc[-1].get("ma5"))
+    ma10 = _safe_number(df.iloc[-1].get("ma10"))
+    breakout_extension = close >= prev_close * 1.03 or (
+        ma5 is not None and ma5 > 0 and close >= ma5 * 1.05
+    )
+    if not breakout_extension:
+        return []
+
+    guard_floor = max(prev_close, open_price)
+    guard_price = max(guard_floor, close - atr_value * 0.72)
+    if ma5 is not None and ma5 > 0:
+        guard_price = max(guard_price, ma5)
+    if ma10 is not None and ma10 > 0 and close >= ma10:
+        guard_price = max(guard_price, ma10 * 0.998)
+    guard_ceiling = close - max(atr_value * 0.28, close * 0.0035)
+    if guard_ceiling > 0:
+        guard_price = min(guard_price, guard_ceiling)
+
+    candidate = _build_level_candidate_adaptive(
+        df,
+        level_type="support",
+        source="ATR_SUPPORT",
+        price=guard_price,
+        close=close,
+        base_weight=1.02,
+        touch_band=touch_band,
+        volume_col=volume_col,
+        market_profile=market_profile,
+        regime=regime,
+        atr_value=atr_value,
+        atr_pct=(float(atr_value) / close * 100.0) if close > 0 else 0.0,
+        volatility_pct=max(float(market_profile.get("volatility_floor_pct", 1.0)), (float(atr_value) / close * 100.0)),
+        extra_strength=0.12,
+    )
+    return [candidate] if candidate else []
+
+
 def _distance_fit_bonus(distance_atr: float | None, market_profile: dict[str, Any]) -> float:
     if distance_atr is None:
         return 0.0
     if distance_atr < float(market_profile["min_primary_atr"]) * 0.45:
-        return -0.85
+        return -0.95
     if distance_atr > float(market_profile["secondary_max_atr"]) * 1.08:
-        return -0.85
+        return -1.15
     target = float(market_profile["primary_target_atr"])
     tolerance = max(float(market_profile["primary_tolerance_atr"]), 0.4)
     deviation = abs(distance_atr - target)
     score = 1.0 - deviation / tolerance
-    return float(np.clip(score, -0.75, 1.0) * 0.92)
+    return float(np.clip(score, -1.0, 1.0) * 1.18)
 
 
 def _spacing_fit_bonus(spacing_atr: float | None, market_profile: dict[str, Any]) -> float:
@@ -3036,6 +3587,7 @@ def _select_key_levels_adaptive(
         return []
 
     for item in clusters:
+        item["distance_pct"] = round(abs(close - float(item["price"])) / close * 100.0, 2)
         distance_atr = None
         if atr_value and atr_value > 0:
             distance_atr = abs(close - float(item["price"])) / atr_value
@@ -3058,17 +3610,46 @@ def _select_key_levels_adaptive(
     picked: list[dict] = []
     secondary_candidates: list[dict] = []
     atr_gap_base = atr_value if atr_value and atr_value > 0 else max(close * 0.01, 0.01)
+    target_atr = float(market_profile["primary_target_atr"])
+    tolerance_atr = max(float(market_profile["primary_tolerance_atr"]), 0.4)
+    preferred_primary_limit = max(
+        float(market_profile["min_primary_atr"]) + 0.45,
+        target_atr + tolerance_atr * 0.82,
+    )
+    max_primary_limit = float(market_profile["max_primary_atr"])
 
-    for item in ranked:
+    primary_pool = [
+        item
+        for item in ranked
+        if item.get("distance_atr") is not None and float(item["distance_atr"]) <= preferred_primary_limit
+    ]
+    if not primary_pool:
+        primary_pool = [
+            item
+            for item in ranked
+            if item.get("distance_atr") is not None and float(item["distance_atr"]) <= max_primary_limit
+        ]
+    if not primary_pool:
+        primary_pool = list(ranked)
+
+    for item in primary_pool:
         if not picked:
             distance_atr = item.get("distance_atr")
-            if distance_atr is not None and distance_atr > float(market_profile["max_primary_atr"]) * 1.15:
+            if distance_atr is not None and distance_atr > max_primary_limit:
                 continue
             picked.append(item)
             if len(picked) >= max(1, int(top_n)):
                 break
             continue
 
+    for item in ranked:
+        if picked and any(item is chosen for chosen in picked):
+            continue
+        if not picked:
+            picked.append(item)
+            if len(picked) >= max(1, int(top_n)):
+                break
+            continue
         if level_type == "support" and float(item["price"]) >= float(picked[-1]["price"]):
             continue
         if level_type == "resistance" and float(item["price"]) <= float(picked[-1]["price"]):
@@ -3144,11 +3725,45 @@ def _select_key_levels_adaptive(
                 "note": (
                     f"来源共振：{basis_text}{family_suffix}；近30日触碰 {int(item.get('touch_count') or 0)} 次，"
                     f"距现价{direction_text}约 {float(item['distance_pct']):.2f}%{distance_atr_text}，"
-                    f"并按 {board_label} 波动画像约束首位/二位间距后保留为{role_text}。{breach_rule}。"
+                    f"并按 {board_label} 波动画像约束首位/二位间距后保留为{role_text}。"
+                    f"{' 压力位优先看趋势线、缺口、均线与成交密集区的共振，不再只由单根K线开收盘锚点决定。' if level_type == 'resistance' else ''}"
+                    f"{breach_rule}。"
                 ),
             }
         )
     return selected
+
+
+def _augment_selected_level(
+    item: dict[str, Any],
+    close: float,
+    selection_gap: float,
+    level_role: str,
+    fail_threshold_price: float | None = None,
+) -> dict[str, Any]:
+    price = float(item.get("price") or 0.0)
+    distance_pct = round(abs(price - close) / close * 100.0, 2) if close > 0 and price > 0 else None
+    base_strength = float(item.get("strength_score") or item.get("level_strength_score") or 0.0)
+    sources = item.get("sources") or []
+    source_count = len(sources) if sources else (1 if item.get("source") else 0)
+    touch_count = int(item.get("touch_count") or 0)
+    age = float(item.get("age") or 0.0)
+    expected_move_pct = round(max(selection_gap / max(close, 0.01) * 100.0 * 2.2, 1.2), 2) if close > 0 else None
+    confirm_price = round(price + selection_gap * 0.25, 2) if level_role == "resistance" and price > 0 else None
+    fail_price = round(
+        float(fail_threshold_price if fail_threshold_price is not None else price - selection_gap * 0.25),
+        2,
+    ) if level_role == "support" and price > 0 else None
+    item["level_role"] = level_role
+    item["level_strength_score"] = round(max(base_strength, 0.0), 2)
+    item["distance_pct"] = distance_pct
+    item["source_resonance"] = source_count
+    item["touch_quality"] = round(min(max(touch_count * 12.0, 0.0), 100.0), 2)
+    item["freshness_score"] = round(max(0.0, 100.0 - age * 2.5), 2)
+    item["break_confirm_price"] = confirm_price
+    item["fail_threshold_price"] = fail_price
+    item["expected_move_pct"] = expected_move_pct
+    return item
 
 
 def build_structural_price_levels(
@@ -3285,6 +3900,20 @@ def build_structural_price_levels(
         if candidate:
             resistance_candidates.append(candidate)
 
+    support_candidates.extend(
+        _collect_expansion_guard_candidates(
+            work,
+            close=close,
+            prev_close=prev_close,
+            open_price=open_price,
+            atr_value=atr_value,
+            touch_band=touch_band,
+            volume_col=volume_col,
+            market_profile=market_profile,
+            regime=regime,
+        )
+    )
+
     for candidate in _collect_pivot_level_candidates(
         work,
         close=close,
@@ -3358,11 +3987,171 @@ def build_structural_price_levels(
         )
         if adaptive_candidate:
             support_candidates.append(adaptive_candidate)
+    for candidate in _collect_structural_reaction_level_candidates(
+        work,
+        close=close,
+        level_type="support",
+        touch_band=touch_band,
+        volume_col=volume_col,
+    ):
+        adaptive_candidate = _build_level_candidate_adaptive(
+            work,
+            level_type="support",
+            source=str(candidate["source"]),
+            price=_safe_number(candidate["price"]),
+            close=close,
+            base_weight=float(candidate["weight"]),
+            touch_band=touch_band,
+            volume_col=volume_col,
+            market_profile=market_profile,
+            regime=regime,
+            atr_value=atr_value,
+            atr_pct=atr_pct,
+            volatility_pct=volatility_pct,
+        )
+        if adaptive_candidate:
+            adaptive_candidate["touch_count"] = max(
+                int(adaptive_candidate.get("touch_count") or 0),
+                int(candidate.get("touch_count") or 0),
+            )
+            support_candidates.append(adaptive_candidate)
     for candidate in _collect_volume_profile_level_candidates(
         work,
         close=close,
         level_type="resistance",
         cluster_band=cluster_band,
+        touch_band=touch_band,
+        volume_col=volume_col,
+    ):
+        adaptive_candidate = _build_level_candidate_adaptive(
+            work,
+            level_type="resistance",
+            source=str(candidate["source"]),
+            price=_safe_number(candidate["price"]),
+            close=close,
+            base_weight=float(candidate["weight"]),
+            touch_band=touch_band,
+            volume_col=volume_col,
+            market_profile=market_profile,
+            regime=regime,
+            atr_value=atr_value,
+            atr_pct=atr_pct,
+            volatility_pct=volatility_pct,
+        )
+        if adaptive_candidate:
+            resistance_candidates.append(adaptive_candidate)
+    for candidate in _collect_structural_reaction_level_candidates(
+        work,
+        close=close,
+        level_type="resistance",
+        touch_band=touch_band,
+        volume_col=volume_col,
+    ):
+        adaptive_candidate = _build_level_candidate_adaptive(
+            work,
+            level_type="resistance",
+            source=str(candidate["source"]),
+            price=_safe_number(candidate["price"]),
+            close=close,
+            base_weight=float(candidate["weight"]),
+            touch_band=touch_band,
+            volume_col=volume_col,
+            market_profile=market_profile,
+            regime=regime,
+            atr_value=atr_value,
+            atr_pct=atr_pct,
+            volatility_pct=volatility_pct,
+        )
+        if adaptive_candidate:
+            adaptive_candidate["touch_count"] = max(
+                int(adaptive_candidate.get("touch_count") or 0),
+                int(candidate.get("touch_count") or 0),
+            )
+            resistance_candidates.append(adaptive_candidate)
+    for candidate in _collect_trendline_level_candidates(
+        work,
+        close=close,
+        level_type="support",
+        touch_band=touch_band,
+        volume_col=volume_col,
+    ):
+        adaptive_candidate = _build_level_candidate_adaptive(
+            work,
+            level_type="support",
+            source=str(candidate["source"]),
+            price=_safe_number(candidate["price"]),
+            close=close,
+            base_weight=float(candidate["weight"]),
+            touch_band=touch_band,
+            volume_col=volume_col,
+            market_profile=market_profile,
+            regime=regime,
+            atr_value=atr_value,
+            atr_pct=atr_pct,
+            volatility_pct=volatility_pct,
+        )
+        if adaptive_candidate:
+            adaptive_candidate["touch_count"] = max(
+                int(adaptive_candidate.get("touch_count") or 0),
+                int(candidate.get("touch_count") or 0),
+            )
+            support_candidates.append(adaptive_candidate)
+    for candidate in _collect_trendline_level_candidates(
+        work,
+        close=close,
+        level_type="resistance",
+        touch_band=touch_band,
+        volume_col=volume_col,
+    ):
+        adaptive_candidate = _build_level_candidate_adaptive(
+            work,
+            level_type="resistance",
+            source=str(candidate["source"]),
+            price=_safe_number(candidate["price"]),
+            close=close,
+            base_weight=float(candidate["weight"]),
+            touch_band=touch_band,
+            volume_col=volume_col,
+            market_profile=market_profile,
+            regime=regime,
+            atr_value=atr_value,
+            atr_pct=atr_pct,
+            volatility_pct=volatility_pct,
+        )
+        if adaptive_candidate:
+            adaptive_candidate["touch_count"] = max(
+                int(adaptive_candidate.get("touch_count") or 0),
+                int(candidate.get("touch_count") or 0),
+            )
+            resistance_candidates.append(adaptive_candidate)
+    for candidate in _collect_gap_level_candidates(
+        work,
+        close=close,
+        level_type="support",
+        touch_band=touch_band,
+        volume_col=volume_col,
+    ):
+        adaptive_candidate = _build_level_candidate_adaptive(
+            work,
+            level_type="support",
+            source=str(candidate["source"]),
+            price=_safe_number(candidate["price"]),
+            close=close,
+            base_weight=float(candidate["weight"]),
+            touch_band=touch_band,
+            volume_col=volume_col,
+            market_profile=market_profile,
+            regime=regime,
+            atr_value=atr_value,
+            atr_pct=atr_pct,
+            volatility_pct=volatility_pct,
+        )
+        if adaptive_candidate:
+            support_candidates.append(adaptive_candidate)
+    for candidate in _collect_gap_level_candidates(
+        work,
+        close=close,
+        level_type="resistance",
         touch_band=touch_band,
         volume_col=volume_col,
     ):
@@ -3404,6 +4193,31 @@ def build_structural_price_levels(
         cluster_band=cluster_band,
         selection_gap=selection_gap,
     )
+    primary_support_price = float(support_levels[0]["price"]) if support_levels else None
+    support_fail_price = (
+        round(primary_support_price - float(selection_gap) * 0.25, 2)
+        if primary_support_price is not None
+        else None
+    )
+    support_levels = [
+        _augment_selected_level(
+            item,
+            close=close,
+            selection_gap=float(selection_gap),
+            level_role="support",
+            fail_threshold_price=support_fail_price,
+        )
+        for item in support_levels
+    ]
+    resistance_levels = [
+        _augment_selected_level(
+            item,
+            close=close,
+            selection_gap=float(selection_gap),
+            level_role="resistance",
+        )
+        for item in resistance_levels
+    ]
 
     if not support_levels and not resistance_levels:
         legacy = build_structural_price_levels_legacy(df, top_n=top_n)
@@ -3413,9 +4227,10 @@ def build_structural_price_levels(
         return legacy
 
     level_methodology = [
-        "算法仍同时评估 MA5/10/20/60、近 5/10/20/60 日高低点、已确认摆动高低点与近 60 日成交密集区，但不再只看离现价最近。",
+        "算法仍同时评估 MA5/10/20/60、近 5/10/20/60 日高低点、已确认摆动高低点、趋势线、未补缺口与近 60 日成交密集区，但不再只看离现价最近。",
         f"自适应校准：按 {market_profile['label']} 波动画像，把聚类带、首要点位距离和二级间距统一换算到 ATR/振幅刻度，减少跨度过大或过小。",
-        "排序规则：候选价位先按来源共振、触碰次数、量能与最近性打分，再叠加“离现价是否处在可交易 ATR 区间”的约束，优先保留更像回踩/回落观察位的结构点。",
+        "结构触线规则：压力要求至少 1 次阳线收盘锚定 + 2 次上影摸线，且至少 1 次上影发生在阳线收盘之后；支撑要求至少 4 次下探承接，含阴线收盘/阳线开盘锚点、2 次下影试探，并在第 4 次或之后出现放量小阳确认。",
+        "排序规则：候选价位先按来源共振、触碰次数、量能与最近性打分，再叠加“离现价是否处在可交易 ATR 区间”的约束；压力位会额外提高趋势线、缺口、均线、成交密集区等多源共振的优先级，降低纯开收盘锚点的主导权重。",
     ]
     if atr_pct > 0 or swing_pct > 0:
         level_methodology.append(

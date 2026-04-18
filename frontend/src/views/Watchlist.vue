@@ -1,5 +1,5 @@
 <template>
-  <div class="space-y-4 md:space-y-5 max-w-5xl mx-auto pb-8 relative animate-fade-in">
+  <div class="space-y-4 md:space-y-5 max-w-5xl mx-auto pb-24 md:pb-8 relative animate-fade-in">
     <div v-if="!zenMode" class="relative z-30 glass-card rounded-xl md:rounded-2xl noise-overlay p-3 md:p-5">
       <div class="flex items-center justify-between gap-3">
         <div class="min-w-0">
@@ -14,6 +14,14 @@
           <button @click="openImageHoldingModal" class="btn-ghost border-signal-data/30 text-signal-data hover:bg-signal-data/10 hover:text-signal-data">
             <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
             <span class="hidden md:inline">图片更新</span><span class="md:hidden">图片</span>
+          </button>
+          <button @click="togglePrivacyMode" class="btn-ghost border-white/[0.08] text-slate-300 hover:bg-white/[0.05] hover:text-white">
+            <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path v-if="privacyMode" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 3l18 18M10.585 10.587A2 2 0 0013.414 13.414M9.88 5.09A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.542 7a9.97 9.97 0 01-4.042 5.135M6.228 6.228C4.12 7.495 2.671 9.53 2.458 12c1.274 4.057 5.064 7 9.542 7 1.562 0 3.038-.359 4.351-.998M14.12 14.121A3 3 0 019.88 9.88" />
+              <path v-else stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              <path v-if="!privacyMode" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+            </svg>
+            <span class="hidden md:inline">{{ privacyMode ? '显示持仓' : '隐藏持仓' }}</span><span class="md:hidden">隐私</span>
           </button>
           <button @click="toggleZenMode" class="btn-ghost border-signal-accent/30 text-signal-accent/80 hover:bg-signal-accent/10 hover:text-signal-accent">
             <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
@@ -58,12 +66,13 @@
             <h3 class="section-title">持仓跟踪</h3>
             <span class="chip chip-data">{{ filteredHoldingRows.length }}<span class="text-slate-600">/{{ holdingRows.length }}</span></span>
             <span v-if="riskyHoldingCount > 0" class="chip chip-bear">{{ riskyHoldingCount }} 风险</span>
+            <span v-if="privacyMode" class="chip border-white/[0.08] bg-white/[0.03] text-slate-400">隐私模式</span>
           </div>
           <div v-if="totalPortfolioValue > 0" class="flex items-center gap-3 text-[10px]">
-            <span class="md:hidden"><span class="text-slate-500">盈亏</span><span class="ml-1 font-mono mono-value" :class="totalPnL >= 0 ? 'price-up' : 'price-down'">{{ totalPnL >= 0 ? '+' : '' }}{{ fmt(totalPnLPct, 2, '%') }}</span></span>
-            <span class="hidden md:inline"><span class="text-slate-500">总市值</span><span class="ml-1 font-mono mono-value text-slate-200">{{ fmt(totalPortfolioValue, 0) }}</span></span>
-            <span class="hidden md:inline"><span class="text-slate-500">盈亏</span><span class="ml-1 font-mono mono-value" :class="totalPnL >= 0 ? 'price-up' : 'price-down'">{{ totalPnL >= 0 ? '+' : '' }}{{ fmt(totalPnL, 0) }}</span></span>
-            <span class="hidden md:inline"><span class="text-slate-500">收益率</span><span class="ml-1 font-mono mono-value" :class="totalPnLPct >= 0 ? 'price-up' : 'price-down'">{{ totalPnLPct >= 0 ? '+' : '' }}{{ fmt(totalPnLPct, 2, '%') }}</span></span>
+            <span class="md:hidden"><span class="text-slate-500">盈亏</span><span class="ml-1 font-mono mono-value" :class="privacyMode ? 'text-slate-300' : (totalPnL >= 0 ? 'price-up' : 'price-down')">{{ maskPrivacyText(totalPnLPct >= 0 ? `+${fmt(totalPnLPct, 2, '%')}` : fmt(totalPnLPct, 2, '%')) }}</span></span>
+            <span class="hidden md:inline"><span class="text-slate-500">总市值</span><span class="ml-1 font-mono mono-value text-slate-200">{{ maskPrivacyText(fmt(totalPortfolioValue, 0)) }}</span></span>
+            <span class="hidden md:inline"><span class="text-slate-500">盈亏</span><span class="ml-1 font-mono mono-value" :class="privacyMode ? 'text-slate-300' : (totalPnL >= 0 ? 'price-up' : 'price-down')">{{ maskPrivacyText(totalPnL >= 0 ? `+${fmt(totalPnL, 0)}` : fmt(totalPnL, 0)) }}</span></span>
+            <span class="hidden md:inline"><span class="text-slate-500">收益率</span><span class="ml-1 font-mono mono-value" :class="privacyMode ? 'text-slate-300' : (totalPnLPct >= 0 ? 'price-up' : 'price-down')">{{ maskPrivacyText(totalPnLPct >= 0 ? `+${fmt(totalPnLPct, 2, '%')}` : fmt(totalPnLPct, 2, '%')) }}</span></span>
           </div>
         </div>
         <div v-if="filteredHoldingRows.length" class="p-2 md:p-4 grid grid-cols-1 lg:grid-cols-2 gap-2">
@@ -84,7 +93,7 @@
                   <span class="chip" :class="watchSignalClass(item)">{{ getSignalText(item) }}</span>
                   <span v-if="getAggressiveLabel(item)" class="chip chip-bear">{{ getAggressiveLabel(item) }}</span>
                 </div>
-                <div v-if="holdings[item.ts_code]?.shares > 0" class="text-[10px] font-mono mono-value" :class="calcPnL(item)?.pnl >= 0 ? 'price-up' : 'price-down'">{{ calcPnL(item)?.pnl >= 0 ? '+' : '' }}{{ fmt(calcPnL(item)?.pnlPct, 2, '%') }}</div>
+                <div v-if="holdings[item.ts_code]?.shares > 0" class="text-[10px] font-mono mono-value" :class="privacyMode ? 'text-slate-300' : (calcPnL(item)?.pnl >= 0 ? 'price-up' : 'price-down')">{{ maskPrivacyText(calcPnL(item)?.pnl >= 0 ? `+${fmt(calcPnL(item)?.pnlPct, 2, '%')}` : fmt(calcPnL(item)?.pnlPct, 2, '%')) }}</div>
                 <div class="flex items-center gap-0.5 shrink-0 ml-1">
                   <button @click.stop="openDetailModal(item)" class="p-1.5 text-slate-600 hover:text-slate-300 transition-colors rounded-lg hover:bg-white/[0.03]"><svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg></button>
                   <button @click.stop="openHoldingModal(item)" class="p-1.5 text-signal-accent/60 hover:text-signal-accent transition-colors rounded-lg hover:bg-signal-accent/5"><svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg></button>
@@ -115,8 +124,8 @@
                   <div class="mt-1.5 flex items-center gap-2.5"><span class="text-[15px] font-mono font-bold text-white mono-value">{{ fmt(item.price, 2) }}</span><span class="text-[11px] font-mono font-bold mono-value" :class="numColor(item.pct)">{{ item.pct >= 0 ? '+' : '' }}{{ fmt(item.pct, 2, '%') }}</span></div>
                 </div>
                 <div class="shrink-0 text-[10px] text-slate-500 text-right whitespace-nowrap">
-                  <div>{{ holdings[item.ts_code]?.shares || 0 }}股 @ <span class="mono-value">{{ fmt(holdings[item.ts_code]?.avg_cost, 2) }}</span></div>
-                  <template v-if="calcPnL(item)"><div class="mt-0.5 font-mono mono-value" :class="calcPnL(item)?.pnl >= 0 ? 'price-up' : 'price-down'">{{ calcPnL(item)?.pnl >= 0 ? '+' : '' }}{{ fmt(calcPnL(item)?.pnl, 0) }} ({{ calcPnL(item)?.pnlPct >= 0 ? '+' : '' }}{{ fmt(calcPnL(item)?.pnlPct, 2, '%') }})</div></template>
+                  <div>{{ privacyMode ? '•••• @ ••••' : `${holdings[item.ts_code]?.shares || 0}股 @ ${fmt(holdings[item.ts_code]?.avg_cost, 2)}` }}</div>
+                  <template v-if="calcPnL(item)"><div class="mt-0.5 font-mono mono-value" :class="privacyMode ? 'text-slate-300' : (calcPnL(item)?.pnl >= 0 ? 'price-up' : 'price-down')">{{ maskPrivacyText(`${calcPnL(item)?.pnl >= 0 ? '+' : ''}${fmt(calcPnL(item)?.pnl, 0)} (${calcPnL(item)?.pnlPct >= 0 ? '+' : ''}${fmt(calcPnL(item)?.pnlPct, 2, '%')})`) }}</div></template>
                 </div>
               </div>
               <div class="mt-2.5 flex flex-wrap items-center gap-1.5">
@@ -160,12 +169,12 @@
           <div class="flex items-center gap-2.5">
             <h3 class="section-title">观察列表</h3>
             <span class="chip chip-neutral">{{ filteredObservationRows.length }}<span class="text-slate-600">/{{ observationRows.length }}</span></span>
-            <span v-if="aggressiveObservationCount > 0" class="chip chip-bear">{{ aggressiveObservationCount }}红标</span>
+            <span v-if="readyObservationCount > 0" class="chip chip-bear">{{ readyObservationCount }}候选</span>
           </div>
           <div class="flex items-center gap-2">
             <button @click="refreshObservationPanel" :disabled="observationRefreshing || observationCollapsed || !observationRows.length" class="btn-ghost text-[9px] disabled:opacity-40" :class="observationRefreshing ? 'border-signal-data/30 text-signal-data' : ''"><svg class="w-3 h-3" :class="{ 'animate-spin': observationRefreshing }" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>{{ observationRefreshing ? '刷新中' : '刷新价格' }}</button>
             <button @click="toggleObservationPanel" class="btn-ghost text-[9px]">{{ observationCollapsed ? '展开' : '折叠' }}</button>
-            <span v-if="!observationCollapsed && filteredObservationRows.length > 1 && focusFilter === 'all'" class="text-[9px] text-slate-700">拖拽可调整顺序</span>
+            <span class="text-[9px] text-slate-700">自动排序</span>
           </div>
         </div>
         <div v-if="observationCollapsed" class="px-5 py-4 text-[11px] text-slate-500 flex items-center justify-between">
@@ -173,14 +182,14 @@
           <button @click="expandAndRefreshObservation" :disabled="observationRefreshing || !observationRows.length" class="btn-ghost text-[10px] disabled:opacity-40" :class="observationRefreshing ? 'border-signal-data/30 text-signal-data' : 'border-signal-data/20 text-signal-data/70 hover:bg-signal-data/5'">{{ observationRefreshing ? '加载中...' : '展开并刷新' }}</button>
         </div>
         <div v-else-if="filteredObservationRows.length" class="p-2 md:p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-          <div v-for="(item, index) in filteredObservationRows" :key="`observation-${item.ts_code}`" :draggable="focusFilter === 'all'" @dragstart="handleDragStart($event, index)" @dragover="handleDragOver($event, index)" @dragleave="handleDragLeave" @drop="handleDrop($event, index)" @dragend="handleDragEnd" class="rounded-xl border px-3 py-2 transition-all duration-200 cursor-grab active:cursor-grabbing animate-fade-in-up noise-overlay" :style="{ animationDelay: `${index * 0.03}s` }" :class="[watchCardClass(item, 'observation'), dragOverIndex === index ? 'ring-2 ring-signal-accent/40 border-signal-accent/30' : '']">
+          <div v-for="(item, index) in filteredObservationRows" :key="`observation-${item.ts_code}`" class="rounded-xl border px-3 py-2 transition-all duration-200 animate-fade-in-up noise-overlay" :style="{ animationDelay: `${index * 0.03}s` }" :class="watchCardClass(item, 'observation')">
             <div class="md:hidden">
               <div class="flex items-center justify-between">
                 <button class="text-left min-w-0" data-kline-trigger="1" @click.stop="toggleKline(item, $event)"><span class="truncate text-xs font-bold text-white">{{ item.name || '-' }}</span><span class="ml-1 text-[9px] font-mono text-slate-600 mono-value">{{ item.ts_code?.replace('.SH','').replace('.SZ','') }}</span></button>
                 <div class="flex items-center gap-1.5 shrink-0"><span class="text-xs font-mono font-bold text-white mono-value">{{ fmt(item.price, 2) }}</span><span class="text-[10px] font-mono font-bold mono-value" :class="numColor(item.pct)">{{ item.pct >= 0 ? '+' : '' }}{{ fmt(item.pct, 2, '%') }}</span></div>
               </div>
               <div class="flex items-center justify-between mt-1.5">
-                <div class="flex items-center gap-1.5 min-w-0"><span class="chip" :class="watchSignalClass(item)">{{ getSignalText(item) }}</span><span v-if="getAggressiveLabel(item)" class="chip chip-bear">{{ getAggressiveLabel(item) }}</span></div>
+                <div class="flex items-center gap-1.5 min-w-0"><span class="chip" :class="watchStateClass(item)">{{ getStateBucketLabel(item) }}</span><span class="chip chip-data">推 {{ fmt(getRecommendationScore(item), 1) }}</span></div>
                 <div class="flex items-center gap-0.5 shrink-0 ml-1">
                   <button @click.stop="openDetailModal(item)" class="p-1.5 text-slate-600 hover:text-slate-300 transition-colors rounded-lg hover:bg-white/[0.03]"><svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg></button>
                   <button @click.stop="openHoldingModal(item)" class="p-1.5 text-signal-accent/60 hover:text-signal-accent transition-colors rounded-lg hover:bg-signal-accent/5"><svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" /></svg></button>
@@ -188,10 +197,17 @@
                   <button @click.stop="handleRemove(item.ts_code)" class="p-1.5 text-rose-400/40 hover:text-rose-300 transition-colors rounded-lg hover:bg-rose-500/5"><svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg></button>
                 </div>
               </div>
-              <div v-if="getSignalReasons(item).length || getVolumeRatio(item) !== null" class="mt-1.5 flex flex-wrap gap-1">
+              <div class="mt-1.5 flex flex-wrap gap-1">
+                <span class="chip chip-data">突破 {{ fmt(getBreakoutScore(item), 0) }}/{{ fmt(getBreakoutStrength(item), 0) }}</span>
+                <span class="chip chip-data">位置 {{ fmt(getEntryQualityScore(item), 0) }}</span>
                 <span v-for="(reason, ridx) in getSignalReasons(item)" :key="`obs-m-reason-${item.ts_code}-${ridx}`" class="chip" :class="signalReasonChipClass(reason.kind)">{{ reason.title }}</span>
                 <span v-if="getVolumeRatio(item) !== null" class="chip chip-data">量比 {{ fmt(getVolumeRatio(item), 2) }}</span>
                 <span v-if="getTurnoverRate(item) !== null" class="chip chip-data">换手 {{ fmt(getTurnoverRate(item), 1, '%') }}</span>
+              </div>
+              <p v-if="getRankReason(item)" class="mt-1 text-[9px] leading-4 text-slate-400 line-clamp-1">{{ getRankReason(item) }}</p>
+              <div class="mt-1 flex flex-wrap gap-1">
+                <span v-if="Number.isFinite(getBreakConfirmPrice(item))" class="chip chip-resistance">破 {{ fmt(getBreakConfirmPrice(item), 2) }}</span>
+                <span v-if="Number.isFinite(getFailPrice(item))" class="chip chip-support">失 {{ fmt(getFailPrice(item), 2) }}</span>
               </div>
               <div v-if="getKeyLevels(item).length" class="mt-1.5 flex flex-wrap gap-1"><span class="text-[8px] text-slate-600 mr-0.5 self-center">目标位</span><span v-for="level in getKeyLevels(item)" :key="level.label" class="chip" :class="level.isSupport ? 'chip-support' : 'chip-resistance'"><span class="text-[6px] opacity-60">{{ level.shortLabel }}</span>{{ level.priceText }}</span></div>
             </div>
@@ -201,12 +217,19 @@
                 <div class="flex items-center gap-2 shrink-0"><span class="text-[12px] font-mono font-bold text-slate-200 mono-value">{{ fmt(item.price, 2) }}</span><span class="text-[10px] font-mono font-bold mono-value" :class="numColor(item.pct)">{{ item.pct >= 0 ? '+' : '' }}{{ fmt(item.pct, 2, '%') }}</span></div>
               </div>
               <div class="mt-1.5">
-                <div v-if="getSignalReasons(item).length || getVolumeRatio(item) !== null" class="flex flex-wrap gap-1">
-                  <span class="chip" :class="watchSignalClass(item)">{{ getSignalText(item) }}</span>
-                  <span v-if="getAggressiveLabel(item)" class="chip chip-bear">{{ getAggressiveLabel(item) }}</span>
+                <div class="flex flex-wrap gap-1">
+                  <span class="chip" :class="watchStateClass(item)">{{ getStateBucketLabel(item) }}</span>
+                  <span class="chip chip-data">推 {{ fmt(getRecommendationScore(item), 1) }}</span>
+                  <span class="chip chip-data">突破 {{ fmt(getBreakoutScore(item), 0) }}/{{ fmt(getBreakoutStrength(item), 0) }}</span>
+                  <span class="chip chip-data">位置 {{ fmt(getEntryQualityScore(item), 0) }}</span>
                   <span v-for="(reason, ridx) in getSignalReasons(item)" :key="`obs-d-reason-${item.ts_code}-${ridx}`" class="chip" :class="signalReasonChipClass(reason.kind)">{{ reason.title }}</span>
                   <span v-if="getVolumeRatio(item) !== null" class="chip chip-data">量比 {{ fmt(getVolumeRatio(item), 2) }}</span>
                   <span v-if="getTurnoverRate(item) !== null" class="chip chip-data">换手 {{ fmt(getTurnoverRate(item), 1, '%') }}</span>
+                </div>
+                <p v-if="getRankReason(item)" class="mt-1 text-[10px] leading-4 text-slate-400">{{ getRankReason(item) }}</p>
+                <div class="mt-1 flex flex-wrap gap-1">
+                  <span v-if="Number.isFinite(getBreakConfirmPrice(item))" class="chip chip-resistance">破 {{ fmt(getBreakConfirmPrice(item), 2) }}</span>
+                  <span v-if="Number.isFinite(getFailPrice(item))" class="chip chip-support">失 {{ fmt(getFailPrice(item), 2) }}</span>
                 </div>
                 <div v-if="getKeyLevels(item).length" class="flex flex-wrap items-center gap-1 mt-1.5"><span class="text-[8px] uppercase text-slate-600 mr-0.5">目标位</span><span v-for="level in getKeyLevels(item)" :key="level.label" class="chip" :class="level.isSupport ? 'chip-support' : 'chip-resistance'"><span class="text-[7px] opacity-60">{{ level.shortLabel }}</span>{{ level.priceText }}</span></div>
               </div>
@@ -224,37 +247,43 @@
       </section>
     </div>
 
-    <div v-if="zenMode" class="fixed inset-0 z-50 bg-obsidian-950 flex flex-col items-center justify-center" @click="exitZenMode">
-      <div class="text-center" @click.stop>
-        <div class="text-[10px] text-slate-700 mb-12 tracking-widest uppercase">轻触空白处退出</div>
-        <div class="flex flex-wrap justify-center gap-12 max-w-4xl">
-          <div v-for="item in holdingRows" :key="item.ts_code" class="flex flex-col items-center min-w-[100px]">
-            <div class="text-[10px] text-slate-600 mb-2 mono-value tracking-wider">{{ item.ts_code.replace('.SH', '').replace('.SZ', '') }}</div>
-            <div class="text-3xl font-mono text-white mono-value">{{ fmt(item.price, 2) }}</div>
-            <div class="text-sm font-mono mt-1 mono-value" :class="item.pct >= 0 ? 'price-up' : 'price-down'">{{ item.pct >= 0 ? '+' : '' }}{{ fmt(item.pct, 2, '%') }}</div>
+    <div v-if="zenMode" class="fixed inset-0 z-50 overflow-y-auto bg-obsidian-950/98 px-3 py-5 md:px-6 md:py-6" @click="exitZenMode">
+      <div class="mx-auto flex min-h-full w-full max-w-5xl flex-col justify-center" @click.stop>
+        <div class="mb-4 text-center text-[9px] text-slate-700 tracking-[0.24em] uppercase">轻触空白处退出</div>
+        <div v-if="holdingRows.length" class="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
+          <div v-for="item in holdingRows" :key="item.ts_code" class="rounded-xl border border-white/[0.05] bg-white/[0.02] px-2.5 py-2.5 md:px-3 md:py-3">
+            <div class="text-[10px] text-slate-600 mono-value tracking-[0.24em]">{{ item.ts_code.replace('.SH', '').replace('.SZ', '') }}</div>
+            <div class="mt-1.5 text-[22px] leading-none font-mono text-white mono-value md:text-[26px]">{{ fmt(item.price, 2) }}</div>
+            <div class="mt-1.5 text-[9px] uppercase tracking-[0.14em] text-slate-400 md:text-[10px]">{{ getSignalText(item) }}</div>
+            <div v-if="getZenFocusTokens(item).length" class="mt-2 grid grid-cols-2 gap-1 text-[9px] md:text-[10px]">
+              <div v-for="token in getZenFocusTokens(item)" :key="`${item.ts_code}-${token.key}`" class="min-w-0 rounded-xl border border-white/[0.06] bg-white/[0.02] px-2 py-1.5">
+                <div class="text-[9px] text-slate-600">{{ token.label }}</div>
+                <div class="mt-0.5 truncate font-mono text-[11px] leading-4 text-slate-200 md:text-xs">{{ token.value }}</div>
+              </div>
+            </div>
           </div>
         </div>
-        <div v-if="!holdingRows.length" class="text-slate-700 text-lg mt-20">暂无持仓股</div>
+        <div v-else class="text-slate-700 text-lg text-center py-20">暂无持仓股</div>
       </div>
     </div>
 
-    <div ref="klinePopupRef" v-if="hoverInfo.visible && !zenMode" class="fixed z-40 left-0 right-0 bottom-0 md:left-auto md:right-4 md:bottom-4 md:w-[70vw] md:max-w-3xl bg-obsidian-800 border-t md:border border-white/[0.06] md:rounded-2xl p-2 md:p-4 shadow-2xl shadow-black/50 max-h-[70vh] md:max-h-[78vh] overflow-y-auto animate-slide-up" @click.stop>
-      <div class="flex items-center justify-between gap-2 mb-3">
+    <div ref="klinePopupRef" v-if="hoverInfo.visible && !zenMode" class="fixed z-40 left-0 right-0 bottom-0 md:left-auto md:right-4 md:bottom-4 md:w-[78vw] md:max-w-5xl bg-obsidian-800 border-t md:border border-white/[0.06] md:rounded-2xl p-2 md:p-4 shadow-2xl shadow-black/50 max-h-[75vh] md:max-h-[82vh] overflow-y-auto animate-slide-up" @click.stop>
+      <div class="flex items-center justify-between gap-2 mb-2">
         <div class="min-w-0"><h3 class="text-xs font-bold text-slate-200">K线分析</h3><p class="text-[10px] text-slate-600 truncate">{{ hoverInfo.stock?.name || '-' }} · {{ hoverInfo.stock?.ts_code || '-' }}</p></div>
         <button @click="hideKline" class="md:hidden shrink-0 p-1.5 text-slate-500 hover:text-white transition-colors rounded-lg hover:bg-white/[0.04]"><svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg></button>
       </div>
-      <div v-if="klineLoading" class="h-[200px] md:h-[340px] flex items-center justify-center text-slate-600 text-xs"><div class="flex items-center gap-2"><div class="w-4 h-4 border-2 border-signal-accent/40 border-t-signal-accent rounded-full animate-spin"></div><span>加载中...</span></div></div>
+      <div v-if="klineLoading" class="h-[180px] md:h-[340px] flex items-center justify-center text-slate-600 text-xs"><div class="flex items-center gap-2"><div class="w-4 h-4 border-2 border-signal-accent/40 border-t-signal-accent rounded-full animate-spin"></div><span>加载中...</span></div></div>
       <div v-else-if="klineError" class="rounded-xl border border-signal-bear/20 bg-signal-bear/5 px-3 py-2 text-xs text-signal-bear/80">{{ klineError }}</div>
       <template v-else>
-        <div class="grid grid-cols-3 md:grid-cols-6 gap-1.5 md:gap-2 mb-3 text-[9px] md:text-[10px]" v-if="latestKlineData">
+        <div class="grid grid-cols-3 md:grid-cols-6 gap-1.5 md:gap-2 mb-2 text-[9px] md:text-[10px]" v-if="latestKlineData">
           <div class="rounded-lg border border-white/[0.04] bg-white/[0.02] px-2 py-1.5 md:px-2.5 md:py-2"><span class="text-slate-600">收盘</span><p class="text-slate-200 mt-0.5 font-mono mono-value">{{ fmt(latestKlineData.close, 2) }}</p></div>
-          <div class="rounded-lg border border-white/[0.04] bg-white/[0.02] px-2 py-1.5 md:px-2.5 md:py-2"><span class="text-slate-600">成交额</span><p class="text-slate-200 mt-0.5 font-mono mono-value">{{ fmtAmount(latestKlineData.amount) }}</p></div>
-          <div class="rounded-lg border border-white/[0.04] bg-white/[0.02] px-2 py-1.5 md:px-2.5 md:py-2"><span class="text-slate-600">主力</span><p class="mt-0.5 font-mono mono-value" :class="latestKlineData.net_mf_vol >= 0 ? 'text-signal-data' : 'text-signal-bear/80'">{{ fmtMf(latestKlineData.net_mf_vol) }}</p></div>
-          <div class="hidden md:block rounded-lg border border-white/[0.04] bg-white/[0.02] px-2.5 py-2"><span class="text-slate-600">成交量</span><p class="text-slate-200 mt-0.5 font-mono mono-value">{{ fmtVol(latestKlineData.vol) }}</p></div>
+          <div class="rounded-lg border border-white/[0.04] bg-white/[0.02] px-2 py-1.5 md:px-2.5 md:py-2"><span class="text-slate-600">成交额(亿)</span><p class="text-slate-200 mt-0.5 font-mono mono-value">{{ fmtAmount(latestKlineData.amount) }}</p></div>
+          <div class="rounded-lg border border-white/[0.04] bg-white/[0.02] px-2 py-1.5 md:px-2.5 md:py-2"><span class="text-slate-600">主力(亿)</span><p class="mt-0.5 font-mono mono-value" :class="latestKlineData.net_mf_vol >= 0 ? 'text-signal-data' : 'text-signal-bear/80'">{{ fmtMf(latestKlineData.net_mf_vol) }}</p></div>
+          <div class="hidden md:block rounded-lg border border-white/[0.04] bg-white/[0.02] px-2.5 py-2"><span class="text-slate-600">成交量(手)</span><p class="text-slate-200 mt-0.5 font-mono mono-value">{{ fmtVol(latestKlineData.vol) }}</p></div>
           <div class="hidden md:block rounded-lg border border-white/[0.04] bg-white/[0.02] px-2.5 py-2"><span class="text-slate-600">MA5/10/20</span><p class="text-slate-200 mt-0.5 font-mono mono-value text-[9px]">{{ fmt(latestKlineData.ma5, 2) }} / {{ fmt(latestKlineData.ma10, 2) }} / {{ fmt(latestKlineData.ma20, 2) }}</p></div>
-          <div class="hidden md:block rounded-lg border border-white/[0.04] bg-white/[0.02] px-2.5 py-2"><span class="text-slate-600">融资余额</span><p class="text-slate-200 mt-0.5 font-mono mono-value">{{ latestKlineData.rzye ? fmtRzye(latestKlineData.rzye) : '-' }}</p></div>
+          <div class="hidden md:block rounded-lg border border-white/[0.04] bg-white/[0.02] px-2.5 py-2"><span class="text-slate-600">融资余额(亿)</span><p class="text-slate-200 mt-0.5 font-mono mono-value">{{ latestKlineData.rzye ? fmtRzye(latestKlineData.rzye) : '-' }}</p></div>
         </div>
-        <div class="h-[200px] md:h-[340px] lg:h-[380px]"><v-chart :option="klineOption" autoresize @updateAxisPointer="handleUpdateAxisPointer" /></div>
+        <div class="h-[180px] md:h-[340px] lg:h-[380px]"><v-chart :option="klineOption" autoresize @updateAxisPointer="handleUpdateAxisPointer" /></div>
       </template>
     </div>
 
@@ -322,7 +351,7 @@
           <div class="text-center"><div class="text-white font-bold">{{ holdingStock?.name }}</div><div class="text-slate-600 text-xs mono-value">{{ holdingStock?.ts_code }}</div></div>
           <div class="space-y-2"><label class="block text-[10px] font-bold text-slate-600 uppercase tracking-wider">持仓数量</label><input v-model.number="holdingForm.shares" type="number" min="0" step="100" class="w-full bg-obsidian-950/60 border border-white/[0.06] rounded-xl px-4 py-2.5 text-xs font-medium text-white focus:outline-none focus:ring-1 focus:ring-signal-accent/30 focus:border-signal-accent/30 transition-all" /></div>
           <div class="space-y-2"><label class="block text-[10px] font-bold text-slate-600 uppercase tracking-wider">成本价</label><input v-model.number="holdingForm.avg_cost" type="number" min="0" step="0.01" class="w-full bg-obsidian-950/60 border border-white/[0.06] rounded-xl px-4 py-2.5 text-xs font-medium text-white focus:outline-none focus:ring-1 focus:ring-signal-accent/30 focus:border-signal-accent/30 transition-all" /></div>
-          <div v-if="holdingForm.shares > 0 && holdingForm.avg_cost > 0 && holdingStock?.price" class="bg-white/[0.02] rounded-lg p-3 border border-white/[0.04] text-xs"><div class="flex justify-between mb-1"><span class="text-slate-600">成本总额</span><span class="text-white font-mono mono-value">{{ (holdingForm.shares * holdingForm.avg_cost).toFixed(2) }}</span></div><div class="flex justify-between"><span class="text-slate-600">盈亏</span><span :class="((holdingStock.price - holdingForm.avg_cost) / holdingForm.avg_cost) >= 0 ? 'price-up' : 'price-down'" class="font-mono mono-value">{{ ((holdingStock.price - holdingForm.avg_cost) / holdingForm.avg_cost) >= 0 ? '+' : '' }}{{ (((holdingStock.price - holdingForm.avg_cost) / holdingForm.avg_cost) * 100).toFixed(2) }}%</span></div></div>
+          <div v-if="holdingForm.shares > 0 && holdingForm.avg_cost > 0 && holdingStock?.price" class="bg-white/[0.02] rounded-lg p-3 border border-white/[0.04] text-xs"><div class="flex justify-between mb-1"><span class="text-slate-600">成本总额</span><span class="text-white font-mono mono-value">{{ maskPrivacyText((holdingForm.shares * holdingForm.avg_cost).toFixed(2)) }}</span></div><div class="flex justify-between"><span class="text-slate-600">盈亏</span><span :class="privacyMode ? 'text-slate-300' : ((((holdingStock.price - holdingForm.avg_cost) / holdingForm.avg_cost) >= 0) ? 'price-up' : 'price-down')" class="font-mono mono-value">{{ maskPrivacyText(`${((holdingStock.price - holdingForm.avg_cost) / holdingForm.avg_cost) >= 0 ? '+' : ''}${(((holdingStock.price - holdingForm.avg_cost) / holdingForm.avg_cost) * 100).toFixed(2)}%`) }}</span></div></div>
           <div class="flex gap-3 mt-6"><button v-if="holdings[holdingStock?.ts_code]?.shares > 0" @click="removeHoldingOnly" class="flex-1 py-2.5 rounded-xl text-[11px] font-bold text-signal-bear/80 border border-signal-bear/20 hover:bg-signal-bear/10 transition-all">删除持仓</button><button @click="saveHolding" class="flex-1 py-2.5 rounded-xl text-[11px] font-bold bg-signal-accent/80 text-white hover:bg-signal-accent transition-all">保存</button></div>
         </div>
       </div>
@@ -333,7 +362,7 @@
         <div class="flex items-center justify-between p-4 border-b border-white/[0.04]"><div><h3 class="text-white font-bold text-sm">图片更新持仓</h3><p class="mt-0.5 text-[10px] text-slate-600">先识别预览，再一键写入持仓并同步到自选</p></div><button @click="closeImageHoldingModal" class="text-slate-500 hover:text-white transition-colors p-1 rounded-lg hover:bg-white/[0.04]"><svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg></button></div>
         <div class="overflow-y-auto p-4 space-y-4 flex-1">
           <input ref="holdingImageInputRef" type="file" accept="image/*" class="hidden" @change="handleHoldingImageChange" />
-          <div class="rounded-xl border border-white/[0.04] bg-white/[0.02] p-3"><div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3"><div class="min-w-0"><div class="text-[10px] font-bold uppercase text-slate-600 tracking-wider">识别图片</div><p class="mt-1 text-xs text-slate-300 truncate">{{ holdingImageFile?.name || '请选择券商持仓截图' }}</p></div><div class="flex items-center gap-2 shrink-0"><button @click="triggerHoldingImageSelect" class="btn-ghost border-signal-data/30 text-signal-data/80 hover:bg-signal-data/10 hover:text-signal-data">{{ holdingImageFile ? '更换图片' : '选择图片' }}</button><button @click="parseHoldingImage" :disabled="!holdingImageFile || holdingImageParsing" class="btn-ghost border-signal-accent/30 text-signal-accent/80 hover:bg-signal-accent/10 hover:text-signal-accent disabled:opacity-40">{{ holdingImageParsing ? '识别中...' : '重新识别' }}</button></div></div></div>
+          <div class="rounded-xl border border-white/[0.04] bg-white/[0.02] p-3"><div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3"><div class="min-w-0"><div class="text-[10px] font-bold uppercase text-slate-600 tracking-wider">识别图片</div><p class="mt-1 text-xs text-slate-300 truncate">{{ holdingImageFile?.name || '请选择券商持仓截图' }}</p></div><div class="flex flex-wrap items-center gap-2 shrink-0"><button @click="triggerHoldingImageSelect" class="btn-ghost border-signal-data/30 text-signal-data/80 hover:bg-signal-data/10 hover:text-signal-data">{{ holdingImageFile ? '更换图片' : '选择图片' }}</button><button @click="parseHoldingImage" :disabled="!holdingImageFile || holdingImageParsing" class="btn-ghost border-signal-accent/30 text-signal-accent/80 hover:bg-signal-accent/10 hover:text-signal-accent disabled:opacity-40">{{ holdingImageParsing ? '识别中...' : '重新识别' }}</button><button v-if="holdingImagePreview" @click="applyHoldingImageResult" :disabled="holdingImageApplying || !getHoldingImageMatchedItems().length" class="rounded-xl border px-3 py-2 text-xs font-bold transition-all disabled:opacity-40" :class="getHoldingImageMatchedItems().length ? 'border-emerald-500/30 bg-emerald-500/15 text-emerald-200 hover:bg-emerald-500/20' : 'border-white/[0.08] bg-white/[0.03] text-slate-500'">{{ holdingImageApplying ? '写入中...' : `写入 ${getHoldingImageMatchedItems().length || 0} 条持仓` }}</button></div></div></div>
           <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
             <label class="flex items-start gap-2 rounded-xl border border-white/[0.04] bg-white/[0.02] px-3 py-2.5 cursor-pointer transition-colors hover:bg-white/[0.03]"><input v-model="holdingImageImportForm.sync_watchlist" type="checkbox" class="mt-0.5 rounded border-slate-600 bg-obsidian-950 text-signal-data focus:ring-signal-data/30" /><div><div class="text-[11px] font-bold text-slate-200">同步到自选</div><p class="mt-0.5 text-[10px] leading-4 text-slate-600">识别出的持仓若不在 Watchlist，会自动加入观察。</p></div></label>
             <label class="flex items-start gap-2 rounded-xl border border-white/[0.04] bg-white/[0.02] px-3 py-2.5 cursor-pointer transition-colors hover:bg-white/[0.03]"><input v-model="holdingImageImportForm.replace_missing" type="checkbox" class="mt-0.5 rounded border-slate-600 bg-obsidian-950 text-signal-bear focus:ring-signal-bear/30" /><div><div class="text-[11px] font-bold text-slate-200">按图片全量替换</div><p class="mt-0.5 text-[10px] leading-4 text-slate-600">仅在截图覆盖全部持仓时勾选，未识别到的旧持仓会被删除。</p></div></label>
@@ -346,11 +375,21 @@
               <div class="rounded-xl border border-emerald-500/15 bg-emerald-500/5 px-3 py-2.5"><div class="text-[10px] text-slate-600">已匹配</div><div class="mt-1 text-lg font-mono text-white mono-value">{{ holdingImagePreview.summary?.matched_count || 0 }}</div></div>
               <div class="rounded-xl border border-amber-500/15 bg-amber-500/5 px-3 py-2.5"><div class="text-[10px] text-slate-600">待确认</div><div class="mt-1 text-lg font-mono text-white mono-value">{{ holdingImagePreview.summary?.unmatched_count || 0 }}</div></div>
             </div>
-            <div v-if="holdingImagePreview.items?.length" class="rounded-xl border border-white/[0.04] overflow-hidden"><div class="px-3 py-2 border-b border-white/[0.04] bg-white/[0.02] text-[10px] font-bold uppercase text-slate-600 tracking-wider">识别预览</div><div class="max-h-64 overflow-y-auto"><div v-for="item in holdingImagePreview.items" :key="`${item.ts_code || item.source_code || item.name}-${item.shares}`" class="grid grid-cols-[1.6fr_0.8fr_0.8fr] gap-2 px-3 py-2.5 border-b border-white/[0.03] last:border-0 text-xs"><div class="min-w-0"><div class="flex items-center gap-2 min-w-0"><span class="truncate font-bold text-slate-100">{{ item.name }}</span><span class="text-[10px] font-mono text-slate-600 mono-value shrink-0">{{ item.ts_code || item.source_code || '-' }}</span></div><div class="mt-1 flex items-center gap-2 text-[10px]"><span class="chip" :class="item.status === 'matched' ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300' : 'border-amber-500/20 bg-amber-500/10 text-amber-300'">{{ item.status === 'matched' ? `已匹配 · ${item.matched_by}` : '待确认' }}</span><span v-if="item.warning" class="truncate text-amber-300/80">{{ item.warning }}</span></div></div><div class="text-right"><div class="text-[10px] text-slate-600">股数</div><div class="mt-1 font-mono text-slate-100 mono-value">{{ item.shares }}</div></div><div class="text-right"><div class="text-[10px] text-slate-600">成本</div><div class="mt-1 font-mono text-slate-100 mono-value">{{ item.avg_cost == null ? '-' : fmt(item.avg_cost, 2) }}</div></div></div></div></div>
+            <div class="rounded-xl border px-3 py-2.5 text-xs leading-5" :class="getHoldingImageMatchedItems().length ? 'border-emerald-500/15 bg-emerald-500/5 text-emerald-200/85' : 'border-amber-500/15 bg-amber-500/5 text-amber-200/85'">
+              <span v-if="getHoldingImageMatchedItems().length">识别已完成，当前还是预览状态，尚未写入持仓。需要点击底部按钮，才会把 {{ getHoldingImageMatchedItems().length }} 条“已匹配”记录同步到持仓列表。</span>
+              <span v-else>当前没有可直接写入的“已匹配”记录。预览里看到的代码可能只是识别原文；只有状态为“已匹配”的绿色记录，才会真正写入持仓。</span>
+            </div>
+            <div v-if="holdingImagePreview.items?.length" class="rounded-xl border border-white/[0.04] overflow-hidden"><div class="px-3 py-2 border-b border-white/[0.04] bg-white/[0.02] text-[10px] font-bold uppercase text-slate-600 tracking-wider">识别预览</div><div class="max-h-64 overflow-y-auto"><div v-for="item in holdingImagePreview.items" :key="`${item.ts_code || item.source_code || item.name}-${item.shares}`" class="grid grid-cols-[1.6fr_0.8fr_0.8fr] gap-2 px-3 py-2.5 border-b border-white/[0.03] last:border-0 text-xs"><div class="min-w-0"><div class="flex items-center gap-2 min-w-0"><span class="truncate font-bold text-slate-100">{{ item.name }}</span><span class="text-[10px] font-mono text-slate-600 mono-value shrink-0">{{ item.ts_code || item.source_code || '-' }}</span></div><div class="mt-1 flex items-center gap-2 text-[10px]"><span class="chip" :class="item.status === 'matched' ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300' : 'border-amber-500/20 bg-amber-500/10 text-amber-300'">{{ item.status === 'matched' ? `已匹配 · ${item.matched_by}` : '待确认' }}</span><span v-if="item.warning" class="truncate text-amber-300/80">{{ item.warning }}</span></div></div><div class="text-right"><div class="text-[10px] text-slate-600">股数</div><div class="mt-1 font-mono text-slate-100 mono-value">{{ maskPrivacyText(item.shares) }}</div></div><div class="text-right"><div class="text-[10px] text-slate-600">成本</div><div class="mt-1 font-mono text-slate-100 mono-value">{{ maskPrivacyText(item.avg_cost == null ? '-' : fmt(item.avg_cost, 2)) }}</div></div></div></div></div>
             <div v-if="holdingImagePreview.notes?.length" class="rounded-xl border border-white/[0.04] bg-white/[0.02] p-3"><div class="text-[10px] font-bold uppercase text-slate-600 tracking-wider">识别备注</div><div class="mt-2 space-y-1"><p v-for="(note, idx) in holdingImagePreview.notes" :key="`note-${idx}`" class="text-xs leading-5 text-slate-300">{{ note }}</p></div></div>
           </template>
         </div>
-        <div class="flex items-center justify-between gap-3 p-4 border-t border-white/[0.04]"><p class="text-[10px] text-slate-600">待确认表示图片已识别但代码未自动匹配，不等于识别失败。</p><div class="flex items-center gap-2"><button @click="closeImageHoldingModal" class="btn-ghost">关闭</button><button @click="applyHoldingImageResult" :disabled="holdingImageApplying || !holdingImagePreview?.matched_items?.length" class="btn-ghost border-signal-data/30 text-signal-data/80 hover:bg-signal-data/10 hover:text-signal-data disabled:opacity-40">{{ holdingImageApplying ? '更新中...' : '一键更新持仓' }}</button></div></div>
+        <div class="sticky bottom-0 safe-bottom flex flex-col items-stretch gap-3 border-t border-white/[0.04] bg-obsidian-800/95 p-4 backdrop-blur sm:flex-row sm:items-center sm:justify-between">
+          <p class="text-[10px] leading-4 text-slate-600">待确认表示图片已识别但代码未自动匹配，不等于识别失败。</p>
+          <div class="flex items-center gap-2 sm:shrink-0">
+            <button @click="closeImageHoldingModal" class="btn-ghost flex-1 sm:flex-none">关闭</button>
+            <button @click="applyHoldingImageResult" :disabled="holdingImageApplying || !getHoldingImageMatchedItems().length" class="flex-1 rounded-xl border px-3 py-2 text-xs font-bold transition-all disabled:opacity-40 sm:flex-none" :class="getHoldingImageMatchedItems().length ? 'border-emerald-500/30 bg-emerald-500/15 text-emerald-200 hover:bg-emerald-500/20' : 'border-white/[0.08] bg-white/[0.03] text-slate-500'">{{ holdingImageApplying ? '写入中...' : `写入 ${getHoldingImageMatchedItems().length || 0} 条持仓` }}</button>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -372,7 +411,8 @@
 
 <script setup>
 import { onBeforeUnmount, onMounted, ref, reactive, computed } from 'vue';
-import { getWatchlistRealtime, getWatchlistAnalysis, addToWatchlist, removeFromWatchlist, reorderWatchlist, getStockKline, getUserHoldings, updateUserHolding, deleteUserHolding, analyzeStockWithAI, parseHoldingsImage, batchUpdateUserHoldings } from '@/services/api';
+import { getWatchlistRealtime, getWatchlistAnalysis, addUserWatchlist, removeUserWatchlist, getStockKline, getUserHoldings, updateUserHolding, deleteUserHolding, analyzeStockWithAI, parseHoldingsImage, batchUpdateUserHoldings } from '@/services/api';
+import { useAuthStore } from '@/stores/auth';
 import { marked } from 'marked';
 import { useStockSearch } from '@/composables/useStockSearch';
 import { use } from 'echarts/core';
@@ -383,7 +423,9 @@ import { CandlestickChart, LineChart, BarChart } from 'echarts/charts';
 import { GridComponent, TooltipComponent, DataZoomComponent, LegendComponent, VisualMapComponent } from 'echarts/components';
 import { SparklesIcon } from '@heroicons/vue/20/solid';
 import VChart from 'vue-echarts';
+import { sortHoldingRowsByValue } from '@/composables/watchlistHoldings';
 import { useKlineChart } from '@/composables/useKlineChart';
+import { buildZenFocusTokens } from '@/composables/watchlistZen';
 
 use([CanvasRenderer, CandlestickChart, LineChart, BarChart, GridComponent, TooltipComponent, DataZoomComponent, LegendComponent, VisualMapComponent]);
 
@@ -393,6 +435,15 @@ const REFRESH_MS_TRADING = 10000;
 const REFRESH_MS_IDLE = 60000;
 const REFRESH_MS_ZEN = 10000;
 const WATCHLIST_CACHE_KEY = 'jarvis-watchlist-snapshot-v2';
+const WATCHLIST_PRIVACY_KEY = 'jarvis-watchlist-privacy-v1';
+const PRIVACY_MASK = '••••';
+
+const getUserCacheKey = () => {
+  try {
+    const authStore = useAuthStore();
+    return authStore.user?.username ? `_${authStore.user.username}` : '';
+  } catch { return ''; }
+};
 
 const loading = ref(false);
 const refreshing = ref(false);
@@ -404,6 +455,7 @@ const newCode = ref('');
 const klineHoveredIndex = ref(-1);
 
 const holdings = ref({});
+const privacyMode = ref(false);
 const showHoldingModal = ref(false);
 const holdingStock = ref(null);
 const holdingForm = reactive({ shares: 0, avg_cost: 0 });
@@ -419,59 +471,39 @@ const holdingImageImportForm = reactive({ replace_missing: false, sync_watchlist
 const aiAnalysisModal = ref({ visible: false, stock: null, loading: false, result: '', fromCache: false });
 const analyzingStock = ref(null);
 
-const dragOverIndex = ref(-1);
-const isDragging = ref(false);
-let dragSrcCode = null;
 const focusFilter = ref('all');
 const observationCollapsed = ref(true);
 const observationRefreshing = ref(false);
 
-const handleDragStart = (e, index) => {
-  if (focusFilter.value !== 'all') return;
-  isDragging.value = true;
-  dragSrcCode = observationRows.value[index]?.ts_code;
-  e.dataTransfer.effectAllowed = 'move';
-  e.dataTransfer.setData('text/plain', index);
-};
-
-const handleDragOver = (e, index) => {
-  if (focusFilter.value !== 'all') return;
-  e.preventDefault();
-  e.dataTransfer.dropEffect = 'move';
-  dragOverIndex.value = index;
-};
-
-const handleDragLeave = () => { dragOverIndex.value = -1; };
-
-const handleDrop = async (e, targetIndex) => {
-  if (focusFilter.value !== 'all') return;
-  e.preventDefault();
-  dragOverIndex.value = -1;
-  isDragging.value = false;
-  if (!dragSrcCode) return;
-  const targetCode = observationRows.value[targetIndex]?.ts_code;
-  if (!targetCode || dragSrcCode === targetCode) { dragSrcCode = null; return; }
-  const allCodes = rows.value.map(r => r.ts_code);
-  const srcGlobalIndex = allCodes.indexOf(dragSrcCode);
-  const tgtGlobalIndex = allCodes.indexOf(targetCode);
-  if (srcGlobalIndex < 0 || tgtGlobalIndex < 0) { dragSrcCode = null; return; }
-  const [moved] = allCodes.splice(srcGlobalIndex, 1);
-  allCodes.splice(tgtGlobalIndex, 0, moved);
-  const newRows = [...rows.value];
-  const [movedRow] = newRows.splice(srcGlobalIndex, 1);
-  newRows.splice(tgtGlobalIndex, 0, movedRow);
-  rows.value = newRows;
-  persistWatchlistCache();
-  dragSrcCode = null;
-  const nonHoldingCodes = allCodes.filter(c => !hasHolding(c));
-  try { await reorderWatchlist(nonHoldingCodes); } catch (err) {}
-};
-
-const handleDragEnd = () => { isDragging.value = false; dragOverIndex.value = -1; dragSrcCode = null; };
-
 const handleUpdateAxisPointer = (event) => {
   const info = event.dataIndex;
   if (info != null && info >= 0) klineHoveredIndex.value = info;
+};
+
+const getPrivacyCacheKey = () => `${WATCHLIST_PRIVACY_KEY}${getUserCacheKey()}`;
+const restorePrivacyMode = () => {
+  if (typeof window === 'undefined') return;
+  try {
+    privacyMode.value = window.localStorage.getItem(getPrivacyCacheKey()) === '1';
+  } catch (e) {
+    privacyMode.value = false;
+  }
+};
+const persistPrivacyMode = () => {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(getPrivacyCacheKey(), privacyMode.value ? '1' : '0');
+  } catch (e) {}
+};
+const togglePrivacyMode = () => {
+  privacyMode.value = !privacyMode.value;
+  persistPrivacyMode();
+};
+const maskPrivacyText = (value, fallback = '-') => {
+  if (privacyMode.value) return PRIVACY_MASK;
+  if (value == null) return fallback;
+  const text = String(value).trim();
+  return text ? text : fallback;
 };
 
 const zenMode = ref(false);
@@ -553,7 +585,7 @@ const handleDocumentClick = (e) => {
   hideKline();
 };
 
-const klineOption = computed(() => createKlineOption(hoverInfo.klineData, { showLegend: true, showDataZoom: true, marginType: 'mf' }));
+const klineOption = computed(() => createKlineOption(hoverInfo.klineData, { showLegend: true, showDataZoom: true, marginType: 'mf', hideMargin: true }));
 
 const latestKlineData = computed(() => {
   const data = hoverInfo.klineData;
@@ -608,14 +640,45 @@ const suggestionColor = (s) => {
 
 const stopAutoRefresh = () => { if (timer) { clearTimeout(timer); timer = null; } };
 
+const getWatchlistCachePayload = () => ({
+  rows: rows.value,
+  holdings: holdings.value,
+  isTradingTime: isTradingTime.value,
+  lastRefreshAt: lastRefreshAt.value,
+  cachedAt: Date.now(),
+});
+
+const readWatchlistCacheFromStorage = (storage, key) => {
+  if (!storage) return null;
+  try {
+    const raw = storage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch (e) {
+    return null;
+  }
+};
+
 const readWatchlistCache = () => {
   if (typeof window === 'undefined') return null;
-  try { const raw = window.sessionStorage.getItem(WATCHLIST_CACHE_KEY); if (!raw) return null; const parsed = JSON.parse(raw); return parsed && typeof parsed === 'object' ? parsed : null; } catch (e) { return null; }
+  const userKey = getUserCacheKey();
+  const key = `${WATCHLIST_CACHE_KEY}_${userKey}`;
+  const candidates = [
+    readWatchlistCacheFromStorage(window.sessionStorage, key),
+    readWatchlistCacheFromStorage(window.localStorage, key),
+  ].filter(Boolean);
+  if (!candidates.length) return null;
+  return candidates.sort((a, b) => Number(b.cachedAt || 0) - Number(a.cachedAt || 0))[0];
 };
 
 const persistWatchlistCache = () => {
   if (typeof window === 'undefined') return;
-  try { window.sessionStorage.setItem(WATCHLIST_CACHE_KEY, JSON.stringify({ rows: rows.value, holdings: holdings.value, isTradingTime: isTradingTime.value, lastRefreshAt: lastRefreshAt.value, cachedAt: Date.now() })); } catch (e) {}
+  const userKey = getUserCacheKey();
+  const key = `${WATCHLIST_CACHE_KEY}_${userKey}`;
+  const payload = JSON.stringify(getWatchlistCachePayload());
+  try { window.sessionStorage.setItem(key, payload); } catch (e) {}
+  try { window.localStorage.setItem(key, payload); } catch (e) {}
 };
 
 const restoreWatchlistCache = () => {
@@ -708,6 +771,12 @@ const ensureWatchlistRowsForHoldings = (items = []) => {
   return insertedCodes;
 };
 
+const applyImportedHoldingsLocally = (items = [], replaceMissing = false) => {
+  applyHoldingSnapshotLocal(items, replaceMissing);
+  ensureWatchlistRowsForHoldings(items);
+  persistWatchlistCache();
+};
+
 const syncImportedHoldingsInBackground = async (codes = [], syncWatchlist = true) => {
   const targetCodes = normalizeCodes(codes);
   const watchlistCodes = syncWatchlist ? targetCodes : targetCodes.filter(code => rows.value.some(row => row?.ts_code === code));
@@ -727,6 +796,14 @@ const mergePartialRows = (nextRows = []) => {
   const exists = new Set(merged.map(item => item.ts_code));
   for (const item of nextRows || []) { if (item?.ts_code && !exists.has(item.ts_code)) { merged.push(item); exists.add(item.ts_code); } }
   rows.value = merged;
+};
+
+const replaceObservationRows = (nextRows = []) => {
+  const normalizedRows = (nextRows || []).filter(item => item?.ts_code);
+  const observationCodes = new Set(normalizedRows.map(item => item.ts_code));
+  const holdingItems = rows.value.filter(item => hasHolding(item.ts_code));
+  const staleObservationItems = rows.value.filter(item => !hasHolding(item.ts_code) && !observationCodes.has(item.ts_code));
+  rows.value = [...holdingItems, ...normalizedRows, ...staleObservationItems];
 };
 
 const resolveRefreshScope = (scope = 'auto') => {
@@ -761,7 +838,9 @@ const refreshNow = async (showLoading = true, syncHoldings = false, scope = 'aut
     const body = res.data || {};
     const nextRows = body.data || [];
     if (nextHoldings) holdings.value = nextHoldings;
-    if (requestScope === 'all') rows.value = nextRows; else mergePartialRows(nextRows);
+    if (requestScope === 'all') rows.value = nextRows;
+    else if (effectiveScope === 'observation') replaceObservationRows(nextRows);
+    else mergePartialRows(nextRows);
     isTradingTime.value = !!body.is_trading_time;
     if (effectiveScope === 'observation') message.value = `观察列表已刷新（${nextRows.length}）`;
     else if (effectiveScope === 'holding') message.value = `持仓价格已刷新（${nextRows.length}）`;
@@ -792,7 +871,7 @@ const handleAdd = async (selectedStock = null) => {
 
   try {
     message.value = '正在添加...';
-    await addToWatchlist({ ts_code: tsCode, name: selectedStock?.name });
+    await addUserWatchlist({ ts_code: tsCode, name: selectedStock?.name });
     upsertWatchlistRow(pendingRow, true);
     newCode.value = '';
     clearResults();
@@ -800,7 +879,14 @@ const handleAdd = async (selectedStock = null) => {
 
     try {
       const latestRow = await fetchSingleWatchlistRow(tsCode);
-      if (latestRow) upsertWatchlistRow(latestRow, true);
+      if (latestRow) {
+        upsertWatchlistRow(latestRow, true);
+        const orderedRows = await fetchWatchlistRowsByCodes(getObservationCodeList());
+        if (orderedRows.length) {
+          replaceObservationRows(orderedRows);
+          persistWatchlistCache();
+        }
+      }
     } catch (e) {
       message.value = `已添加 ${pendingRow.name}，行情后台刷新中`;
       refreshNow(false, false, 'observation');
@@ -817,7 +903,7 @@ const handleRemove = async (tsCode) => {
   if (detailModal.stock?.ts_code === tsCode) closeDetailModal();
   if (hoverInfo.stock?.ts_code === tsCode) hideKline();
   try {
-    await removeFromWatchlist(tsCode);
+    await removeUserWatchlist(tsCode);
     message.value = `已删除 ${removedRow?.name || tsCode}`;
   } catch (e) {
     if (removedRow) upsertWatchlistRow(removedRow, true);
@@ -846,30 +932,49 @@ const openImageHoldingModal = () => { resetHoldingImageState(); showImageHolding
 const closeImageHoldingModal = () => { if (holdingImageParsing.value || holdingImageApplying.value) return; showImageHoldingModal.value = false; };
 const triggerHoldingImageSelect = () => { holdingImageInputRef.value?.click?.(); };
 const handleHoldingImageChange = async (event) => { const [file] = event?.target?.files || []; if (!file) return; holdingImageFile.value = file; await parseHoldingImage(); };
+const getHoldingImageMatchedItems = () => {
+  const matched = holdingImagePreview.value?.matched_items;
+  if (Array.isArray(matched)) return matched.filter(item => item?.ts_code);
+  const items = Array.isArray(holdingImagePreview.value?.items) ? holdingImagePreview.value.items : [];
+  return items.filter(item => item?.status === 'matched' && item?.ts_code);
+};
 const parseHoldingImage = async () => {
   if (!holdingImageFile.value) return;
   holdingImageParsing.value = true; holdingImageError.value = '';
-  try { const formData = new FormData(); formData.append('file', holdingImageFile.value); const res = await parseHoldingsImage(formData); holdingImagePreview.value = res.data?.data || null; }
+  try {
+    const formData = new FormData();
+    formData.append('file', holdingImageFile.value);
+    const res = await parseHoldingsImage(formData);
+    holdingImagePreview.value = res.data?.data || null;
+    const matchedCount = getHoldingImageMatchedItems().length;
+    if (!matchedCount && Number(holdingImagePreview.value?.summary?.total_items || 0) > 0) {
+      holdingImageError.value = '识别完成，但当前没有可直接写入的“已匹配”记录；请先确认绿色“已匹配”数量是否大于 0。';
+    } else {
+      message.value = matchedCount ? `已识别 ${matchedCount} 条可写入持仓，需点击底部按钮确认同步` : '';
+    }
+  }
   catch (e) { holdingImagePreview.value = null; holdingImageError.value = e?.response?.data?.detail || e?.message || '识别失败'; }
   finally { holdingImageParsing.value = false; }
 };
 const applyHoldingImageResult = async () => {
-  const matchedItems = holdingImagePreview.value?.matched_items || [];
+  const matchedItems = getHoldingImageMatchedItems();
   if (!matchedItems.length) { holdingImageError.value = '没有可应用的匹配持仓'; return; }
   holdingImageApplying.value = true; holdingImageError.value = '';
   try {
     const payloadItems = matchedItems.map(item => ({ ts_code: item.ts_code, name: item.name, shares: item.shares, avg_cost: item.avg_cost ?? 0 }));
-    const matchedCodes = payloadItems.map(item => item.ts_code);
     const unmatchedCount = Number(holdingImagePreview.value?.summary?.unmatched_count || 0);
-    await batchUpdateUserHoldings({ items: payloadItems, replace_missing: holdingImageImportForm.replace_missing, sync_watchlist: holdingImageImportForm.sync_watchlist });
-    applyHoldingSnapshotLocal(payloadItems, holdingImageImportForm.replace_missing);
-    if (holdingImageImportForm.sync_watchlist) ensureWatchlistRowsForHoldings(payloadItems);
-    message.value = `已同步 ${payloadItems.length} 条持仓${unmatchedCount ? `，另有 ${unmatchedCount} 条待确认` : ''}`;
+    const response = await batchUpdateUserHoldings({ items: payloadItems, replace_missing: holdingImageImportForm.replace_missing, sync_watchlist: holdingImageImportForm.sync_watchlist });
+    const appliedItems = Array.isArray(response.data?.data?.items) ? response.data.data.items : payloadItems;
+    const matchedCodes = normalizeCodes(appliedItems.map(item => item.ts_code));
+
+    applyImportedHoldingsLocally(appliedItems, holdingImageImportForm.replace_missing);
+    void syncImportedHoldingsInBackground(matchedCodes, holdingImageImportForm.sync_watchlist).catch(() => {});
+
+    message.value = `已同步 ${appliedItems.length} 条持仓${unmatchedCount ? `，另有 ${unmatchedCount} 条待确认` : ''}`;
     showImageHoldingModal.value = false;
-    void syncImportedHoldingsInBackground(matchedCodes, holdingImageImportForm.sync_watchlist).catch(() => {
-      message.value = `已同步 ${payloadItems.length} 条持仓，行情后台刷新中`;
-    });
-  } catch (e) { holdingImageError.value = e?.response?.data?.detail || e?.message || '批量更新失败'; }
+  } catch (e) { 
+    holdingImageError.value = e?.response?.data?.detail || e?.message || '批量更新失败'; 
+  }
   finally { holdingImageApplying.value = false; }
 };
 
@@ -880,9 +985,7 @@ const isDefensiveItem = (item) => { const s = getSignalText(item); return s.incl
 const isAttentionItem = (item) => getSignalText(item).includes('关注');
 const isActionableItem = (item, kind = 'observation') => { if (isAggressiveItem(item) || isAttentionItem(item) || isDefensiveItem(item)) return true; if (kind === 'holding') { const l = getHoldingLossLevel(item); return l === 'critical' || l === 'warning'; } return false; };
 const isRiskyItem = (item, kind = 'observation') => { if (isDefensiveItem(item)) return true; if (kind === 'holding') { const l = getHoldingLossLevel(item); return l === 'critical' || l === 'warning'; } return false; };
-const getHoldingPriorityScore = (item) => { let s = 0; const l = getHoldingLossLevel(item); if (l === 'critical') s += 400; else if (l === 'warning') s += 260; if (isDefensiveItem(item)) s += 180; if (isAggressiveItem(item)) s += 120; if (isAttentionItem(item)) s += 80; s += Math.min(((holdings.value[item.ts_code]?.shares || 0) * (item.price || 0)) / 10000, 60); return s; };
-
-const holdingRows = computed(() => rows.value.filter(item => hasHolding(item.ts_code)).sort((a, b) => { const d = getHoldingPriorityScore(b) - getHoldingPriorityScore(a); if (d !== 0) return d; return ((holdings.value[b.ts_code]?.shares || 0) * (b.price || 0)) - ((holdings.value[a.ts_code]?.shares || 0) * (a.price || 0)); }));
+const holdingRows = computed(() => sortHoldingRowsByValue(rows.value, holdings.value));
 const observationRows = computed(() => rows.value.filter(item => !hasHolding(item.ts_code)));
 const matchesFocusFilter = (item, kind = 'observation') => { if (focusFilter.value === 'all') return true; if (focusFilter.value === 'actionable') return isActionableItem(item, kind); if (focusFilter.value === 'risk') return isRiskyItem(item, kind); return true; };
 const filteredHoldingRows = computed(() => holdingRows.value.filter(item => matchesFocusFilter(item, 'holding')));
@@ -900,6 +1003,22 @@ const getRawConclusion = (item) => {
 };
 const getConclusionText = (item) => truncateText(getRawConclusion(item), 40);
 const getSignalReasons = (item, limit = 2) => { const r = item?.analyze?.detail?.signal_reasons; if (!Array.isArray(r) || !r.length) return []; return r.filter(Boolean).slice(0, limit); };
+const getRecommendationScore = (item) => Number(item?.analyze?.detail?.decision?.recommendation_score || 0);
+const getStateBucket = (item) => String(item?.analyze?.detail?.decision?.state_bucket || 'D_NEUTRAL_WAIT');
+const getRankReason = (item) => String(item?.analyze?.detail?.ranking?.rank_reason || '').trim();
+const getBreakoutScore = (item) => Number(item?.analyze?.detail?.breakout?.score || 0);
+const getBreakoutStrength = (item) => Number(item?.analyze?.detail?.breakout?.strength || 0);
+const getBreakConfirmPrice = (item) => Number(item?.analyze?.detail?.breakout?.confirm_price || NaN);
+const getFailPrice = (item) => Number(item?.analyze?.detail?.breakout?.fail_price || NaN);
+const getEntryQualityScore = (item) => Number(item?.analyze?.detail?.entry_quality?.score || 0);
+const stateBucketLabelMap = {
+  A_BREAKOUT_READY: '突破候选',
+  B_PULLBACK_READY: '回踩候选',
+  C_TREND_CONTINUE: '趋势跟踪',
+  D_NEUTRAL_WAIT: '普通观察',
+  E_RISK_AVOID: '风险回避',
+};
+const getStateBucketLabel = (item) => stateBucketLabelMap[getStateBucket(item)] || '普通观察';
 const getTriggerText = (item) => { const t = String(item?.analyze?.detail?.action_signal?.trigger || item?.analyze?.detail?.trade_plan?.entry || '').trim(); if (!t) return ''; return truncateText(t, 56); };
 const getInvalidText = (item) => { const t = String(item?.analyze?.detail?.action_signal?.fallback || item?.analyze?.detail?.trade_plan?.invalid || '').trim(); if (!t) return ''; return truncateText(t, 56); };
 const getVolumeRatio = (item) => { const d = Number(item?.volume_ratio); if (Number.isFinite(d) && d > 0) return d; const dv = Number(item?.analyze?.detail?.technical?.volume_ratio); if (Number.isFinite(dv) && dv > 0) return dv; return null; };
@@ -908,11 +1027,22 @@ const getKeyLevels = (item) => { const levels = item?.analyze?.detail?.key_level
 const getSignalText = (item) => { const s = String(item?.analyze?.suggestion || '').trim(); if (s) return s; if (getRawConclusion(item).includes('主动进攻')) return '主动进攻'; return '观望'; };
 const getAggressiveLabel = (item) => { const signal = getSignalText(item); const combined = `${item?.analyze?.suggestion || ''} ${item?.analyze?.conclusion || ''} ${item?.analyze?.summary || ''}`; if (combined.includes('主动进攻') && !signal.includes('主动进攻')) return '主动进攻'; return ''; };
 const isAggressiveItem = (item) => { const s = getSignalText(item); if (s.includes('主动进攻') || s.includes('试错')) return true; return !!getAggressiveLabel(item); };
-const aggressiveObservationCount = computed(() => observationRows.value.filter(isAggressiveItem).length);
+const getZenFocusTokens = (item) => buildZenFocusTokens({
+  levels: getKeyLevels(item),
+  triggerText: getTriggerText(item),
+  invalidText: getInvalidText(item),
+});
+const readyObservationCount = computed(() => observationRows.value.filter(item => ['A_BREAKOUT_READY', 'B_PULLBACK_READY'].includes(getStateBucket(item))).length);
 
 const signalReasonChipClass = (kind) => { if (kind === 'buy') return 'border-red-500/20 bg-red-500/8 text-red-200'; if (kind === 'sell') return 'border-emerald-500/20 bg-emerald-500/8 text-emerald-200'; return 'border-white/8 bg-white/[0.03] text-slate-300'; };
 const signalReasonCardClass = (kind) => { if (kind === 'buy') return 'border-red-500/20 bg-red-500/[0.06]'; if (kind === 'sell') return 'border-emerald-500/20 bg-emerald-500/[0.06]'; return 'border-white/8 bg-white/[0.03]'; };
 const watchSignalClass = (item) => { const k = getSignalKind(item); if (k === 'buy') return 'border-red-500/25 bg-red-500/10 text-red-200'; if (k === 'sell') return 'border-emerald-500/25 bg-emerald-500/10 text-emerald-200'; return 'border-white/10 bg-white/[0.04] text-slate-200'; };
+const watchStateClass = (item) => {
+  const state = getStateBucket(item);
+  if (state === 'A_BREAKOUT_READY' || state === 'B_PULLBACK_READY') return 'border-red-500/25 bg-red-500/10 text-red-200';
+  if (state === 'E_RISK_AVOID') return 'border-emerald-500/25 bg-emerald-500/10 text-emerald-200';
+  return 'border-white/10 bg-white/[0.04] text-slate-200';
+};
 const watchCardClass = (item, kind = 'observation') => {
   if (kind === 'holding') { const l = getHoldingLossLevel(item); if (l === 'critical') return 'animate-blink-red'; if (l === 'warning') return 'animate-blink-orange'; }
   if (isAggressiveItem(item)) return 'border-red-500/25 bg-red-500/[0.06] shadow-[inset_0_0_20px_rgba(245,158,11,0.03)]';
@@ -942,6 +1072,7 @@ const analyzeWithAI = async (item, forceRefresh = false) => {
 onMounted(() => {
   window.addEventListener('keydown', handleKeydown);
   document.addEventListener('click', handleDocumentClick, true);
+  restorePrivacyMode();
   const restored = restoreWatchlistCache();
   refreshNow(!restored, true);
 });

@@ -58,6 +58,7 @@ Jarvis-Quant
 │   └── strategy/     # 量化策略引擎
 │       ├── sentiment/ # 市场情绪分析
 │       ├── mainline/  # 主线板块分析
+│       ├── plaza/     # 策略广场插件与归档服务
 │       └── recommend/ # 个股推荐引擎
 └── frontend/         # Vue 3 前端
 ```
@@ -153,6 +154,10 @@ Jarvis-Quant
 | strategy_recommendations | 策略推荐记录 |
 | market_sentiment | 市场情绪 |
 | mainline_scores | 主线评分历史 |
+| strategy_definitions | 策略广场策略定义与启用状态 |
+| strategy_observations | 策略广场每日新进入观察标的归档 |
+| strategy_backtest_runs | 策略广场 3/5/10 日表现与回撤结果 |
+| strategy_daily_summaries | 策略广场滚动统计与总结文本 |
 
 ### 用户配置表
 
@@ -185,11 +190,11 @@ Jarvis-Quant
 | `/admin/tasks/status` | GET | 任务队列状态 |
 | `/admin/market_sentiment` | GET | 市场情绪历史 + 自动补算最新收盘情绪；交易时段按上证/创业板实时叠加，返回 10Y/Pizza 风险旁证、自动刷新提示，以及涨停/跌停回填后的情绪明细 |
 | `/admin/integrity` | GET | 数据完整性报告 |
-| `/admin/stock/analyze` | POST | 个股 AI 分析（摘要驱动、结论优先，并带入主线/市场配合、定位与关键点位定义） |
+| `/admin/stock/analyze` | POST | 个股 AI 分析（摘要驱动、结论优先；默认只注入标的自身行情/资金/持仓等客观数据，不再带入市场情绪、主线映射或程序评分） |
 | `/admin/users/me/ai-config` | GET/PUT | 当前登录用户的 AI 配置；`GET` 返回当前 provider 顶层字段，并附带 `provider_configs` 供前端切换时回显各 provider 历史配置，`PUT` 仅更新当前 provider |
 | `/admin/watchlist` | GET/POST | 当前登录用户的自选列表管理 |
 | `/admin/watchlist/{ts_code}` | DELETE | 删除当前登录用户自选 |
-| `/admin/watchlist/realtime` | GET | 当前登录用户的实时自选行情，支持 `analysis_depth=compact|full`；交易日优先展示当日快照，`compact` 也会返回 `action_signal` / `signal_reasons` / `key_levels` / `technical.volume_ratio`，并额外直出行级 `volume_ratio` / `turnover_rate` 供列表首屏直接使用 |
+| `/admin/watchlist/realtime` | GET | 当前登录用户的实时自选行情，支持 `analysis_depth=compact|full` 与 `sort_mode=auto|manual`；交易日优先展示当日快照，`compact` 会返回 `action_signal` / `signal_reasons` / `key_levels` / `technical.volume_ratio`，并额外直出 `decision.state_bucket` / `decision.recommendation_score` / `breakout` / `entry_quality` / `ranking.rank_reason` 以及行级 `volume_ratio` / `turnover_rate`，供观察列表自动排序与首屏直出；`key_levels` 的一号支撑/压力会优先贴近当前可交易区，扩张日会补近端波动防守位，二号位再保留更深层结构缓冲，并把趋势线、未补缺口、成交密集区与结构触线一起纳入共振判定 |
 | `/admin/watchlist/levels/backtest` | GET | Watchlist 点位回测诊断；默认聚焦创业板/科创板高流动性样本，也支持 `codes=...` 对指定股票/当前自选做定向回放，对比 `adaptive` 与 `legacy` 的支撑/压力反应率、主点位距离和二级间距异常 |
 | `/admin/watchlist/{ts_code}/analysis` | GET | 当前登录用户自选内单只股票深度分析（返回 `action_signal` / `signal_reasons` / `intraday_context` / `classification` / `level_methodology` / `key_levels[*].note`） |
 | `/admin/users/me/holdings/batch` | POST | 批量更新当前登录用户持仓，可选同步到自选、可选按提交结果替换旧持仓 |
@@ -205,6 +210,10 @@ Jarvis-Quant
 | `/admin/mainline/leaders` | GET | 主线及主线下龙头（支持前端按Top5展示，优先近10日持续性方向，剔除北交所，并按趋势先行/资金追踪/热度/题材命中综合评分，返回 `display_sector` / `focus_tags` / `driver_summary`） |
 | `/admin/mainline/preview` | GET | 盘中主线预估 |
 | `/admin/portfolio/recommendation` | GET | 组合建议（regime + theme + stock rank + position sizing） |
+| `/admin/strategy-plaza/strategies` | GET | 策略广场策略列表（全局公共策略、显示顺序、启用状态） |
+| `/admin/strategy-plaza/observations` | GET | 策略广场指定策略/日期的新进入观察标的列表，附 3/5/10 日结果简表 |
+| `/admin/strategy-plaza/summary` | GET | 策略广场指定策略/日期的滚动统计摘要与总结文本；若当日无新进入观察标的则返回 `null` |
+| `/admin/strategy-plaza/run` | POST | 手动触发策略广场任务，支持指定历史日期和单个策略重跑 |
 | `/admin/stock/{ts_code}/mainline_analysis` | GET | 个股主线归属分析（返回 `mapped_sector` / `is_mainline` 等） |
 | `/admin/sentiment/preview` | GET | 盘中情绪预估 |
 
@@ -319,7 +328,7 @@ TOKEN=$(curl -s -X POST "http://localhost:8000/auth/token" \
 
 # 自选盯盘接口按当前登录用户隔离，调用时需携带 token
 # 高频轮询建议走 compact，减少接口体积和后端内存抖动
-curl "http://localhost:8000/admin/watchlist/realtime?analysis_depth=compact&src=sina" \
+curl "http://localhost:8000/admin/watchlist/realtime?analysis_depth=compact&sort_mode=auto&src=sina" \
   -H "Authorization: Bearer ${TOKEN}"
 
 # 若今日日线尚未同步，Watchlist 实时接口和 /admin/stock/{ts_code}/kline
@@ -337,9 +346,35 @@ curl "http://localhost:8000/admin/watchlist/levels/backtest?codes=601138.SH,3005
 
 # detail 内会补充：
 # - classification：当前更按哪条产业方向理解，以及为什么这样归类
-# - level_methodology：支撑/压力位的筛选定义（现为 rolling-window 多源候选 + ATR/振幅归一化去重 + 成交密集区/摆动高低点综合打分，并按主板/创业科创波动画像自适应约束首要点位距离与二级间距）
-# - key_levels[*].note：单个点位来自哪条均线/区间高低点/成交密集区、距离现价多远、失效怎么看
+# - level_methodology：支撑/压力位的筛选定义（现为 rolling-window 多源候选 + ATR/振幅归一化去重 + 结构触线共振综合打分，并按主板/创业科创波动画像自适应约束首要点位距离与二级间距）
+# - key_levels[*].note：单个点位来自哪条均线/趋势线/缺口/成交密集区/结构触线、距离现价多远、失效怎么看
 ```
+
+### 策略广场
+
+```bash
+# 查看策略列表；首版允许空列表
+curl "http://localhost:8000/admin/strategy-plaza/strategies"
+
+# 手动触发某日策略广场任务
+curl -X POST "http://localhost:8000/admin/strategy-plaza/run" \
+  -H "Content-Type: application/json" \
+  -d '{"trade_date":"2026-04-08"}'
+
+# 查看某策略某日新进入观察的标的
+curl "http://localhost:8000/admin/strategy-plaza/observations?strategy_key=head7_dragon_return&trade_date=2026-04-08"
+
+# 查看某策略某日滚动摘要
+curl "http://localhost:8000/admin/strategy-plaza/summary?strategy_key=head7_dragon_return&trade_date=2026-04-08"
+```
+
+- 策略广场是与 Watchlist 并列的一级入口
+- 首版只展示最终进入观察的标的，不展示中间阶段池
+- 策略由后端代码注册，放在 `backend/strategy/plaza/builtin/`
+- 当前内置 `head7_dragon_return`、`single_yang_hold`、`golden_eye` 三个本地指标策略，分别对应 `头7龙回头`、`单阳不破`、`大眼睛/空中加油`
+- `head7_dragon_return` 当前按“最后一个封死涨停板或放量启动阳线触发后，先定位该段最高点，再在最高点后 5-8 个交易日缩量回调找二波启动点”实现；回撤保护与起涨点判断始终锚定触发K，而不是后续最高点那根K；主板看半实体回撤与 MA10，创业板/科创板允许回到触发K起涨点附近并看 MA20，最新观察日量能需压缩到触发段参考量的 `1/3` 以内且出现小阴小阳止跌
+- 回测从策略声明的 `entry_anchor_date + entry_price_source` 计算，不假设统一模板
+- 结果表支持点击标的名称，直接复用 Watchlist 的 K 线弹窗与 `/admin/stock/{ts_code}/kline` 数据链路
 
 ### AI 分析
 
@@ -423,19 +458,25 @@ curl -X POST "http://localhost:8000/admin/stock/analyze" \
 - 主线识别采用“宽主题稳定跟踪 + 强势股细分驱动拆解”的双层输出：`mapped_name` 负责稳定归并，`focus_tags` / `driver_summary` 负责解释最近真正上涨的细分原因；当 `stock_basic.industry` 仍停留在上游宽口径、但概念强证据更明显指向下游高权重赛道时，会允许概念主导重分类，避免把半导体材料/设备转型公司压回传统材料或泛电子
 - `/admin/mainline/leaders` 的龙头评分会剔除北交所标的，并以近10日趋势先行、持续资金跟踪、成交热度和题材命中为主，不再退化成单日涨幅榜
 - 盘中预估依赖 `realtime_quote` 的可用性与权限
-- 高频自选刷新建议使用 `/admin/watchlist/realtime?analysis_depth=compact`，详情页再单独调用 `/admin/watchlist/{ts_code}/analysis`；`compact` 走批量轻分析，只拼列表首屏需要的动作信号/量比/换手/关键位，不再逐股运行完整深度点评；若今日日线尚未 ETL 入库，接口仍会优先返回当日实时/收盘后快照，`/admin/stock/{ts_code}/kline` 也会补一根当日临时 bar
+- 高频自选刷新建议使用 `/admin/watchlist/realtime?analysis_depth=compact&sort_mode=auto`，详情页再单独调用 `/admin/watchlist/{ts_code}/analysis`；`compact` 走批量轻分析，只拼列表首屏需要的动作信号/量比/换手/关键位，以及自动排序所需的 `state_bucket` / `recommendation_score` / `breakout` / `entry_quality` / `ranking.rank_reason`，不再逐股运行完整深度点评；若今日日线尚未 ETL 入库，接口仍会优先返回当日实时/收盘后快照，`/admin/stock/{ts_code}/kline` 也会补一根当日临时 bar
 - 自选盯盘接口按当前登录用户隔离，`watchlist` 表使用 `user_id + ts_code` 复合主键；旧版全局自选会在启动时迁移到现有用户名下
+- Watchlist 当前支持本地持久化的“隐私模式”：开启后会遮罩持仓股数、成本、盈亏、总市值，以及持仓图片识别预览里的股数/成本；图片导入弹窗底部确认栏也需要保留 `safe-area inset`，避免手机端被系统手势区或浏览器底栏压住
 - AI 配置按“双层结构”保存：`user_ai_provider_configs` 保存各 provider 的历史配置，`user_ai_config` 仅镜像当前选中的 provider；Settings 页切换 provider 时应直接使用 `provider_configs` 回显，不要再假设切换后还能从单行配置里读回历史值
 - 新增自选仅允许 `stock_basic` 中已存在的代码；遗留无效代码会以空占位返回，便于前端删除，不再拖垮整批刷新
-- Watchlist 页面当前拆成“持仓跟踪 + 观察列表”：非持仓自选会自动归到观察列表，列表默认只展示结论不展示 10D 历史，顶部不再单独放汇总卡，`试错 / 主动进攻` 信号会标红浮出，专注模式只展示持仓股；观察列表默认折叠，折叠时自动刷新优先只更新持仓，观察价格改为手动展开后按需刷新；页面刷新时会优先恢复本地快照并后台并行更新自选与持仓，减少空白等待
+- Watchlist 页面当前拆成“持仓跟踪 + 观察列表”：非持仓自选会自动归到观察列表，列表默认只展示结论不展示 10D 历史，顶部不再单独放汇总卡，`试错 / 主动进攻` 信号会标红浮出；持仓区统一按持仓总市值倒序排列，专注模式复用同一排序结果，并在全屏视图中只保留代码、现价、动作词与主支撑/主压力/触发/失效位，整体进一步压成更紧凑的窄版双列点位块，不再显示涨跌幅、颜色提示或长句指导；观察列表默认折叠，折叠时自动刷新优先只更新持仓，观察价格改为手动展开后按需刷新；页面刷新时会优先恢复本地快照并后台并行更新自选与持仓，减少空白等待
 - Watchlist 搜索添加 / 删除观察股当前采用“本地先更新 + 单票补拉”策略：添加后先局部插入卡片，再只请求该股票的 compact 实时数据；删除时先本地移除，不再为单条操作阻塞整页重算
-- 持仓图片导入当前也采用“本地先落持仓 + 受影响代码后台补拉”策略：一键更新后先本地更新 `holdings` 和必要的 watchlist 占位行，再后台补拉受影响股票；预览里的 `待确认` 明确表示图片已识别，但该项尚未自动匹配到 `stock_basic`
+- 持仓图片导入当前也采用“先识别预览、再确认写入”的两段式流程：识别成功只生成预览，不会自动改持仓；只有点击底部写入按钮后，才会调用 `/admin/users/me/holdings/batch`。真正写入时以前端提交、后端返回的标准化 `items` 为准，先本地更新 `holdings` 和必要的 watchlist 占位行，再后台补拉受影响股票；预览里的 `待确认` 明确表示图片已识别，但该项尚未自动匹配到 `stock_basic`
+- 持仓批量写入同步自选时，后端会兼容旧版 `watchlist`（无 `sort_order` 列）与新版结构，避免历史库在 `/admin/users/me/holdings/batch` 上报 500
+- 持仓图片识别在构建 `stock_basic` 匹配索引时，后端会兼容无 `pinyin` / `pinyin_abbr` 列的旧库，自动回退到 `ts_code + symbol + name` 匹配路径
+- Watchlist 首屏快照当前同时持久化到 `sessionStorage + localStorage`：页面刷新时优先恢复最近一次本地快照，再后台并行更新自选与持仓，减少空白等待
 - Watchlist 搜索候选层、控制台下拉入口和 Settings 顶部 tab 需要保持近不透明的实底浮层/按钮样式，避免在深色背景上出现“透明感”导致代码、名称或入口文字难以辨认
 - Watchlist / Dashboard 首屏遵循“信号、点位、结论”顺序：不要额外叠加弱相关汇总卡或统计概览；支撑 / 压力 / 触发 / 失效等目标点位必须在卡片首屏直出
 - Watchlist 点位与操作建议当前以趋势、量价、主力资金、因子分和实时位置主导，K 线形态只做辅助参考；界面颜色语义统一为红色偏买入、绿色偏卖出、白色偏观望
-- Watchlist 点位引擎会按主板 / 创业板 / 科创板三套波动画像做自适应校准：创业板更保留趋势延续下的回踩空间，科创板额外压缩二级间距并提升趋势/成交密集区权重，同时统一弱化 `OPEN` / `PRE_CLOSE` 这类短线噪声锚点，减少回踩/回落场景下点位过近或过远
+- Watchlist 点位引擎会按主板 / 创业板 / 科创板三套波动画像做自适应校准：创业板更保留趋势延续下的回踩空间，科创板额外压缩二级间距并提升趋势/成交密集区权重，同时统一弱化 `OPEN` / `PRE_CLOSE` 这类短线噪声锚点；压力位不再只看开收盘，新增“三触顶”结构判定，要求至少 1 次阳线收盘锚定 + 2 次上影摸线，且至少 1 次上影晚于阳线收盘，但该锚点只作为结构触线证据之一，最终仍会和趋势线、均线、缺口、成交密集区一起共振排序；支撑位新增“四承接”结构判定，要求至少 4 次下探、含阴线收盘/阳线开盘锚点、2 次下影试探，并在第 4 次或之后出现放量小阳确认，再与趋势线、缺口和筹码密集区一起共振，减少回踩/回落场景下点位过近或过远
 - `/admin/watchlist/levels/backtest` 可直接对创业板、科创板或全市场样本做自驱动点位回放；当前建议以 `growth`/`gem`/`star` 三个范围分别观察 `adaptive` 对 `legacy` 的反应率和跨度异常改善
-- `/admin/stock/analyze` 默认不再注入关联个股推荐段，并只会把行情、资金、市场、主线榜单和持仓等客观数据摘要交给模型；`{commentary_snapshot}` 也仅保留换手/量比/RPS/因子分等客观补充字段；自定义模板建议优先使用 `{stock_snapshot}`、`{capital_flow_snapshot}`、`{sector_context}`、`{market_context}`、`{holding_context}`、`{commentary_snapshot}`、`{analysis_snapshot}`
+- `/admin/stock/analyze` 默认不再注入关联个股推荐段，并只会把标的自身的行情、资金、持仓与补充客观指标交给模型；`{commentary_snapshot}` 仅保留换手/量比/主力净额占比等客观补充字段；自定义模板建议优先使用 `{stock_snapshot}`、`{capital_flow_snapshot}`、`{holding_context}`、`{commentary_snapshot}`、`{analysis_snapshot}`，旧的 `{sector_context}` / `{market_context}` / `{market_sentiment}` / `{mainline}` 会在清洗时剔除
+- 日线字段单位按 Tushare 口径保持不变：`daily_price.vol` 与 `/admin/stock/{ts_code}/kline[*].vol` 为“手”，`daily_price.amount` 与 `/admin/stock/{ts_code}/kline[*].amount` 为“千元”；前端展示“亿”时应按 `amount / 1e5` 换算，AI 提示词中的成交额也必须沿用同一口径；K 线弹窗卡片与图例需显式标注单位
+- `/admin/stock/{ts_code}/mainline_analysis` 在“非主线板块”或评分被一票否决时，也会补齐 `sector_resonance` / `breakout` / `capital_flow` 等字段返回，避免因空评分字典触发 500
 - 策略优化目标是「提高盈亏比 + 降低回撤」，无法承诺单日或单阶段绝对盈利
 
 ## 开发经验总结

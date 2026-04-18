@@ -524,6 +524,95 @@ CREATE TABLE IF NOT EXISTS etl_tasks (
 );
 """
 
+# -- 策略广场策略定义表 (strategy_definitions) --
+CREATE_STRATEGY_DEFINITIONS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS strategy_definitions (
+    strategy_key     VARCHAR(100) PRIMARY KEY,
+    name             VARCHAR(100) NOT NULL,
+    description      TEXT,
+    enabled          BOOLEAN DEFAULT TRUE,
+    display_order    INTEGER DEFAULT 100,
+    engine_version   VARCHAR(50) DEFAULT 'v1',
+    updated_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+# -- 策略广场观察归档表 (strategy_observations) --
+CREATE_STRATEGY_OBSERVATIONS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS strategy_observations (
+    strategy_key      VARCHAR(100) NOT NULL,
+    trade_date        DATE NOT NULL,
+    observation_date  DATE NOT NULL,
+    ts_code           VARCHAR(15) NOT NULL,
+    name              VARCHAR(50),
+    reason            VARCHAR(255),
+    tags_json         JSON,
+    entry_anchor_date DATE NOT NULL,
+    trace_json        JSON,
+    created_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (strategy_key, observation_date, ts_code)
+);
+"""
+
+# -- 策略广场回测结果表 (strategy_backtest_runs) --
+CREATE_STRATEGY_BACKTEST_RUNS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS strategy_backtest_runs (
+    strategy_key            VARCHAR(100) NOT NULL,
+    observation_date        DATE NOT NULL,
+    ts_code                 VARCHAR(15) NOT NULL,
+    entry_anchor_date       DATE NOT NULL,
+    entry_price             DOUBLE,
+    entry_price_source      VARCHAR(50) DEFAULT 'close_on_anchor',
+    status                  VARCHAR(20) DEFAULT 'PENDING',
+    ret_3d                  DOUBLE,
+    ret_5d                  DOUBLE,
+    ret_10d                 DOUBLE,
+    max_gain_3d             DOUBLE,
+    max_gain_5d             DOUBLE,
+    max_gain_10d            DOUBLE,
+    max_drawdown_3d         DOUBLE,
+    max_drawdown_5d         DOUBLE,
+    max_drawdown_10d        DOUBLE,
+    last_completed_horizon  INTEGER DEFAULT 0,
+    last_eval_date          DATE,
+    error                   TEXT,
+    updated_at              TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (strategy_key, observation_date, ts_code)
+);
+"""
+
+# -- 策略广场摘要表 (strategy_daily_summaries) --
+CREATE_STRATEGY_DAILY_SUMMARIES_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS strategy_daily_summaries (
+    strategy_key             VARCHAR(100) NOT NULL,
+    trade_date               DATE NOT NULL,
+    window_trade_days        INTEGER DEFAULT 120,
+    observation_count        INTEGER DEFAULT 0,
+    completed_count_3d       INTEGER DEFAULT 0,
+    completed_count_5d       INTEGER DEFAULT 0,
+    completed_count_10d      INTEGER DEFAULT 0,
+    win_rate_3d              DOUBLE,
+    win_rate_5d              DOUBLE,
+    win_rate_10d             DOUBLE,
+    avg_ret_3d               DOUBLE,
+    avg_ret_5d               DOUBLE,
+    avg_ret_10d              DOUBLE,
+    median_ret_3d            DOUBLE,
+    median_ret_5d            DOUBLE,
+    median_ret_10d           DOUBLE,
+    avg_max_gain_3d          DOUBLE,
+    avg_max_gain_5d          DOUBLE,
+    avg_max_gain_10d         DOUBLE,
+    avg_max_drawdown_3d      DOUBLE,
+    avg_max_drawdown_5d      DOUBLE,
+    avg_max_drawdown_10d     DOUBLE,
+    summary_text             TEXT,
+    updated_at               TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (strategy_key, trade_date)
+);
+"""
+
 # -- 文档阅读进度表 (doc_reading_progress) --
 CREATE_DOC_READING_PROGRESS_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS doc_reading_progress (
@@ -563,6 +652,22 @@ CREATE TABLE IF NOT EXISTS doc_notes (
 """
 
 # -- 文档标签关联表 (doc_tag_mapping) --
+# -- AI趋势表 (ai_trends) --
+CREATE_AI_TRENDS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS ai_trends (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source VARCHAR(50) NOT NULL,
+    title TEXT NOT NULL,
+    url TEXT,
+    summary TEXT,
+    keywords JSON,
+    relevance_score DOUBLE DEFAULT 0,
+    published_date DATE,
+    collected_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    processed BOOLEAN DEFAULT FALSE
+);
+"""
+
 CREATE_DOC_TAG_MAPPING_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS doc_tag_mapping (
     user_id         INTEGER NOT NULL,
@@ -604,6 +709,10 @@ ALL_TABLES_SQL = [
     CREATE_USER_HOLDINGS_TABLE_SQL,
     CREATE_AI_ANALYSIS_CACHE_TABLE_SQL,
     CREATE_ETL_TASKS_TABLE_SQL,
+    CREATE_STRATEGY_DEFINITIONS_TABLE_SQL,
+    CREATE_STRATEGY_OBSERVATIONS_TABLE_SQL,
+    CREATE_STRATEGY_BACKTEST_RUNS_TABLE_SQL,
+    CREATE_STRATEGY_DAILY_SUMMARIES_TABLE_SQL,
     "CREATE INDEX IF NOT EXISTS idx_stock_margin_date ON stock_margin (trade_date);",
     "CREATE INDEX IF NOT EXISTS idx_stock_margin_tscode ON stock_margin (ts_code);",
     "CREATE INDEX IF NOT EXISTS idx_stock_index_member_tscode ON stock_index_member_all (ts_code);",
@@ -611,9 +720,14 @@ ALL_TABLES_SQL = [
     "CREATE INDEX IF NOT EXISTS idx_stock_factor_daily_date ON stock_factor_daily (trade_date);",
     "CREATE INDEX IF NOT EXISTS idx_stock_factor_daily_tscode ON stock_factor_daily (ts_code);",
     "CREATE INDEX IF NOT EXISTS idx_ai_analysis_cache_user_tscode ON ai_analysis_cache (user_id, ts_code);",
+    "CREATE INDEX IF NOT EXISTS idx_strategy_observations_date ON strategy_observations (observation_date);",
+    "CREATE INDEX IF NOT EXISTS idx_strategy_observations_key ON strategy_observations (strategy_key);",
+    "CREATE INDEX IF NOT EXISTS idx_strategy_backtest_status ON strategy_backtest_runs (status);",
+    "CREATE INDEX IF NOT EXISTS idx_strategy_summary_date ON strategy_daily_summaries (trade_date);",
     CREATE_DOC_READING_PROGRESS_TABLE_SQL,
     CREATE_DOC_USER_TAGS_TABLE_SQL,
     CREATE_DOC_NOTES_TABLE_SQL,
+    CREATE_AI_TRENDS_TABLE_SQL,
     CREATE_DOC_TAG_MAPPING_TABLE_SQL,
     "CREATE INDEX IF NOT EXISTS idx_doc_notes_user_doc ON doc_notes (user_id, doc_id);",
     "CREATE INDEX IF NOT EXISTS idx_doc_tag_mapping_user_doc ON doc_tag_mapping (user_id, doc_id);",

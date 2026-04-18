@@ -22,6 +22,13 @@
               盯盘
             </router-link>
             <router-link
+              to="/strategies"
+              class="px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all duration-200"
+              :class="isStrategiesPage ? 'bg-white/[0.06] text-white' : 'text-slate-500 hover:text-slate-300 hover:bg-white/[0.03]'"
+            >
+              策略广场
+            </router-link>
+            <router-link
               to="/dashboard"
               class="px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all duration-200"
               :class="isDashboardPage ? 'bg-white/[0.06] text-white' : 'text-slate-500 hover:text-slate-300 hover:bg-white/[0.03]'"
@@ -95,6 +102,10 @@
           <EyeIcon class="w-5 h-5" />
           <span class="text-[9px] font-semibold">盯盘</span>
         </router-link>
+        <router-link to="/strategies" class="flex flex-col items-center gap-0.5 transition-all duration-200 py-1 px-3 rounded-xl" :class="isStrategiesPage ? 'text-signal-bull' : 'text-slate-600'">
+          <Squares2X2Icon class="w-5 h-5" />
+          <span class="text-[9px] font-semibold">策略</span>
+        </router-link>
         <router-link to="/dashboard" class="flex flex-col items-center gap-0.5 transition-all duration-200 py-1 px-3 rounded-xl" :class="isDashboardPage ? 'text-signal-bull' : 'text-slate-600'">
           <ChartBarIcon class="w-5 h-5" />
           <span class="text-[9px] font-semibold">仪表盘</span>
@@ -122,7 +133,7 @@ import { Menu, MenuButton, MenuItems, MenuItem } from '@headlessui/vue'
 import { 
   ChevronDownIcon, Cog6ToothIcon, UserGroupIcon, 
   CircleStackIcon, ArrowRightOnRectangleIcon, ChartBarIcon, CommandLineIcon,
-  EyeIcon, SparklesIcon, DocumentTextIcon
+  EyeIcon, SparklesIcon, DocumentTextIcon, Squares2X2Icon
 } from '@heroicons/vue/20/solid'
 import DocsPanel from './DocsPanel.vue';
 
@@ -133,6 +144,7 @@ const showDocs = ref(false);
 
 const isSettingsPage = computed(() => route.path.startsWith('/settings'));
 const isWatchlistPage = computed(() => route.name === 'watchlist');
+const isStrategiesPage = computed(() => route.name === 'strategies');
 const isDashboardPage = computed(() => route.name === 'dashboard');
 
 const handleLogout = () => { authStore.logout(); router.push({ name: 'login' }); };

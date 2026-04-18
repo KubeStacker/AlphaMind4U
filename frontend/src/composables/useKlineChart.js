@@ -28,7 +28,7 @@ function fmtPrice(v) {
 
 export function useKlineChart() {
   const createKlineOption = (data, options = {}) => {
-    const { showLegend = false, showDataZoom = false, marginType = 'rzye' } = options;
+    const { showLegend = false, showDataZoom = false, marginType = 'rzye', hideMargin = false } = options;
     
     if (!data || !data.length) return {};
     
@@ -77,7 +77,7 @@ export function useKlineChart() {
     }
     
     series.push({ 
-      name: '成交量', 
+      name: '成交量(手)', 
       type: 'bar', 
       xAxisIndex: 1, 
       yAxisIndex: 1, 
@@ -93,32 +93,37 @@ export function useKlineChart() {
       } 
     });
     
-    const rzyeData = rzye;
-    series.push({ 
-      name: '融资', 
-      type: 'line', 
-      xAxisIndex: 2, 
-      yAxisIndex: 2, 
-      data: rzyeData, 
-      smooth: true, 
-      showSymbol: false, 
-      lineStyle: { width: 1.5, color: '#3b82f6' },
-      areaStyle: { color: 'rgba(59, 130, 246, 0.15)' }
-    });
+    const hasMargin = !hideMargin && (rzye.some(v => v != null) || netMfVol.some(v => v != null));
     
-    const mfData = netMfVol;
-    series.push({ 
-      name: '主力', 
-      type: 'bar', 
-      xAxisIndex: 2, 
-      yAxisIndex: 2, 
-      data: mfData, 
-      barWidth: '50%',
-      itemStyle: { color: (params) => Number(params.value) >= 0 ? '#0ea5e9' : '#f43f5e' }
-    });
+    if (hasMargin) {
+      const rzyeData = rzye;
+      series.push({ 
+        name: '融资(亿)', 
+        type: 'line', 
+        xAxisIndex: 2, 
+        yAxisIndex: 2, 
+        data: rzyeData, 
+        smooth: true, 
+        showSymbol: false, 
+        lineStyle: { width: 1.5, color: '#3b82f6' },
+        areaStyle: { color: 'rgba(59, 130, 246, 0.15)' }
+      });
+      
+      const mfData = netMfVol;
+      series.push({ 
+        name: '主力(亿)', 
+        type: 'bar', 
+        xAxisIndex: 2, 
+        yAxisIndex: 2, 
+        data: mfData, 
+        barWidth: '50%',
+        itemStyle: { color: (params) => Number(params.value) >= 0 ? '#0ea5e9' : '#f43f5e' }
+      });
+    }
     
+    const gridCount = hasMargin ? 3 : 2;
     const result = {
-      backgroundColor: '#1e1e1e',
+      backgroundColor: '#1a1a1a',
       animation: false,
       tooltip: { 
         trigger: 'axis', 
@@ -147,10 +152,10 @@ export function useKlineChart() {
             if (p.seriesName === 'MA5') html += `<div style="color:#f59e0b">MA5 ${fmtPrice(p.value)}</div>`;
             if (p.seriesName === 'MA10') html += `<div style="color:#38bdf8">MA10 ${fmtPrice(p.value)}</div>`;
             if (p.seriesName === 'MA20') html += `<div style="color:#a78bfa">MA20 ${fmtPrice(p.value)}</div>`;
-            if (p.seriesName === '成交量') html += `<div style="color:#fff">量 ${fmtVol(p.value)}</div>`;
-            if (p.seriesName === '成交额') html += `<div style="color:#fbbf24">额 ${fmtAmount(p.value)}</div>`;
-            if (p.seriesName === '融资') html += `<div style="color:#3b82f6">融资 ${fmtRzye(p.value)}</div>`;
-            if (p.seriesName === '主力') html += `<div style="color:${p.value >= 0 ? '#0ea5e9' : '#f43f5e'}">主力 ${fmtMf(p.value)}</div>`;
+            if (p.seriesName === '成交量(手)') html += `<div style="color:#fff">量 ${fmtVol(p.value)}</div>`;
+            if (p.seriesName === '成交额(亿)') html += `<div style="color:#fbbf24">额 ${fmtAmount(p.value)}</div>`;
+            if (p.seriesName === '融资(亿)') html += `<div style="color:#3b82f6">融资 ${fmtRzye(p.value)}</div>`;
+            if (p.seriesName === '主力(亿)') html += `<div style="color:${p.value >= 0 ? '#0ea5e9' : '#f43f5e'}">主力 ${fmtMf(p.value)}</div>`;
           });
           
           return html;
@@ -160,25 +165,28 @@ export function useKlineChart() {
         show: showLegend, 
         top: 2, 
         textStyle: { color: '#888', fontSize: 10 }, 
-        data: ['K线', 'MA5', 'MA10', 'MA20', '成交量', '融资', '主力']
+        data: ['K线', 'MA5', 'MA10', 'MA20', '成交量(手)', '融资(亿)', '主力(亿)']
       },
       axisPointer: {
         link: [{ xAxisIndex: 'all' }]
       },
-      grid: [
-        { left: 50, right: 10, top: showLegend ? 35 : 15, height: '45%' },
-        { left: 50, right: 10, top: '65%', height: '15%' },
-        { left: 50, right: 10, top: '82%', height: '14%' }
+      grid: gridCount === 3 ? [
+        { left: 50, right: 10, top: showLegend ? 35 : 15, height: '50%' },
+        { left: 50, right: 10, top: '68%', height: '20%' },
+        { left: 50, right: 10, top: '90%', height: '8%', show: false }
+      ] : [
+        { left: 50, right: 10, top: showLegend ? 35 : 15, height: '65%' },
+        { left: 50, right: 10, top: '78%', height: '18%' }
       ],
       xAxis: [
         { type: 'category', data: dates, scale: true, boundaryGap: false, axisLine: { lineStyle: { color: '#444' } }, axisLabel: { show: false }, splitLine: { show: false } },
         { type: 'category', gridIndex: 1, data: dates, axisLine: { lineStyle: { color: '#444' } }, axisLabel: { show: false }, splitLine: { show: false } },
-        { type: 'category', gridIndex: 2, data: dates, axisLine: { lineStyle: { color: '#444' } }, axisLabel: { color: '#666', fontSize: 9 }, splitLine: { show: false } }
+        ...(hasMargin ? [{ type: 'category', gridIndex: 2, data: dates, axisLine: { lineStyle: { color: '#444' } }, axisLabel: { color: '#666', fontSize: 9 }, splitLine: { show: false } }] : [])
       ],
       yAxis: [
         { scale: true, splitLine: { lineStyle: { color: '#333' } }, axisLabel: { color: '#888', fontSize: 10, formatter: (v) => fmtPrice(v) } },
         { gridIndex: 1, splitNumber: 2, axisLabel: { show: false }, splitLine: { show: false } },
-        { gridIndex: 2, scale: true, splitNumber: 2, axisLabel: { show: false }, splitLine: { show: false } }
+        ...(hasMargin ? [{ gridIndex: 2, scale: true, splitNumber: 2, axisLabel: { show: false }, splitLine: { show: false } }] : [])
       ],
       series
     };

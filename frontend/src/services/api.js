@@ -98,16 +98,20 @@ export const getMarketSuggestion = (params = {}) => apiClient.get('/admin/market
 export const syncSentiment = (days = 250) =>
   apiClient.post('/admin/etl/sentiment', null, { params: { days } });
 export const getMainlineHistory = (days = 30) => apiClient.get('/admin/mainline_history', { params: { days } });
-export const getWatchlistRealtime = (codes, src = 'sina', analysisDepth = 'compact') =>
-  apiClient.get('/admin/watchlist/realtime', { params: { codes, src, analysis_depth: analysisDepth } });
+export const getWatchlistRealtime = (codes, src = 'sina', analysisDepth = 'compact', sortMode = 'auto') =>
+  apiClient.get('/admin/watchlist/realtime', { params: { codes, src, analysis_depth: analysisDepth, sort_mode: sortMode } });
 export const getWatchlistAnalysis = (tsCode, forceRefresh = false) =>
   apiClient.get(`/admin/watchlist/${tsCode}/analysis`, { params: { force_refresh: forceRefresh } });
 
-// 盯盘管理 (DB)
+// 盯盘管理 (DB) - 后端通过 get_current_user_id 实现用户隔离
+export const getUserWatchlist = () => apiClient.get('/admin/watchlist');
+export const addUserWatchlist = (stock) => apiClient.post('/admin/watchlist', stock);
+export const removeUserWatchlist = (ts_code) => apiClient.delete(`/admin/watchlist/${ts_code}`);
+
+// 兼容旧调用
 export const listWatchlist = () => apiClient.get('/admin/watchlist');
 export const addToWatchlist = (stock) => apiClient.post('/admin/watchlist', stock);
 export const removeFromWatchlist = (ts_code) => apiClient.delete(`/admin/watchlist/${ts_code}`);
-export const reorderWatchlist = (codes) => apiClient.put('/admin/watchlist/reorder', { codes });
 
 // 股票日K (含两融)
 export const getStockKline = (ts_code, limit = 200) => apiClient.get(`/admin/stock/${ts_code}/kline`, { params: { limit } });
@@ -154,6 +158,12 @@ export const analyzeStockWithAI = (tsCode, templateId, forceRefresh = false) =>
 export const getMainlineLeaders = (params = {}) => apiClient.get('/admin/mainline/leaders', { params });
 export const getStockMainlineAnalysis = (tsCode) => apiClient.get(`/admin/stock/${tsCode}/mainline_analysis`);
 export const getStockIndicators = (tsCode, limit = 100) => apiClient.get(`/admin/stock/${tsCode}/indicators`, { params: { limit } });
+export const getStrategyPlazaStrategies = () => apiClient.get('/admin/strategy-plaza/strategies');
+export const getStrategyPlazaObservations = (strategyKey, tradeDate, limit = 100) =>
+  apiClient.get('/admin/strategy-plaza/observations', { params: { strategy_key: strategyKey, trade_date: tradeDate, limit } });
+export const getStrategyPlazaSummary = (strategyKey, tradeDate) =>
+  apiClient.get('/admin/strategy-plaza/summary', { params: { strategy_key: strategyKey, trade_date: tradeDate } });
+export const runStrategyPlaza = (payload) => apiClient.post('/admin/strategy-plaza/run', payload);
 
 // --- 文档管理 ---
 export const getDocsList = (params = {}) => apiClient.get('/admin/docs/list', { params });

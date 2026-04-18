@@ -39,7 +39,8 @@ from api.routes import (
     etl_router,
     db_router,
     system_router,
-    docs_router
+    docs_router,
+    strategy_plaza_router,
 )
 
 # 定义 FastAPI 应用的生命周期事件
@@ -90,6 +91,7 @@ app.include_router(etl_router, prefix="/admin")
 app.include_router(db_router, prefix="/admin")
 app.include_router(system_router, prefix="/admin")
 app.include_router(docs_router, prefix="/admin")
+app.include_router(strategy_plaza_router, prefix="/admin")
 
 @app.get("/", tags=["System"])
 async def read_root():

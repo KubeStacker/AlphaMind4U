@@ -259,6 +259,15 @@ class SyncEngine:
         from strategy.sentiment import sentiment_analyst
         sentiment_analyst.calculate(days=days)
 
+    def run_strategy_plaza_refresh(self, trade_date: str | None = None, strategy_key: str | None = None):
+        from etl.calendar import trading_calendar
+        from strategy.plaza import strategy_plaza_service
+
+        latest = trading_calendar.get_latest_sync_date()
+        target_date = trade_date or (latest.strftime("%Y-%m-%d") if hasattr(latest, "strftime") else str(latest))
+        logger.info(f"执行策略广场刷新: trade_date={target_date}, strategy_key={strategy_key or 'all'}")
+        return strategy_plaza_service.run_for_date(target_date, strategy_key=strategy_key)
+
     def sync_financial_statements(self, limit: int = 1000):
         """同步财务报表数据（兼容旧接口）
         
