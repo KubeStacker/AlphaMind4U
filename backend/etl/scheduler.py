@@ -31,13 +31,14 @@ def start_scheduler():
     )
     
     # 2. 每日凌晨 00:10 更新概念分类
-    scheduler.add_job(
-        sync_engine.sync_concept_classification,
-        CronTrigger(hour=0, minute=10, timezone=SHANGHAI_TZ),
-        id="sync_concept_classification",
-        name="同步概念分类数据",
-        replace_existing=True
-    )
+    # 暂时禁用: 当前概念同步会触发 DuckDB 主键冲突并拖挂服务，先保证持仓/分析接口可用。
+    # scheduler.add_job(
+    #     sync_engine.sync_concept_classification,
+    #     CronTrigger(hour=0, minute=10, timezone=SHANGHAI_TZ),
+    #     id="sync_concept_classification",
+    #     name="同步概念分类数据",
+    #     replace_existing=True
+    # )
 
     # 3. 每日收盘后更新（主任务 + 兜底任务，避免数据源延迟）
     scheduler.add_job(
