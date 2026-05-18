@@ -18,23 +18,7 @@ class PasswordChange(BaseModel):
     user_id: int
     new_password: str
 
-async def get_current_user_id(request: Request) -> int:
-    """从请求头提取当前用户ID"""
-    auth_header = request.headers.get("Authorization", "")
-    if not auth_header.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="未授权")
-    
-    token = auth_header[7:]
-    parts = token.split(".")
-    if len(parts) < 3:
-        raise HTTPException(status_code=401, detail="无效token")
-    
-    username = parts[1]
-    with get_db_connection() as con:
-        user = con.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
-        if not user:
-            raise HTTPException(status_code=401, detail="用户不存在")
-        return user[0]
+from core.security import get_current_user_id
 
 @router.get("")
 def list_users():

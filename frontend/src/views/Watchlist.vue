@@ -247,23 +247,41 @@
       </section>
     </div>
 
-    <div v-if="zenMode" class="fixed inset-0 z-50 overflow-y-auto bg-obsidian-950/98 px-3 py-5 md:px-6 md:py-6" @click="exitZenMode">
-      <div class="mx-auto flex min-h-full w-full max-w-5xl flex-col justify-center" @click.stop>
-        <div class="mb-4 text-center text-[9px] text-slate-700 tracking-[0.24em] uppercase">轻触空白处退出</div>
-        <div v-if="holdingRows.length" class="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
-          <div v-for="item in holdingRows" :key="item.ts_code" class="rounded-xl border border-white/[0.05] bg-white/[0.02] px-2.5 py-2.5 md:px-3 md:py-3">
-            <div class="text-[10px] text-slate-600 mono-value tracking-[0.24em]">{{ item.ts_code.replace('.SH', '').replace('.SZ', '') }}</div>
-            <div class="mt-1.5 text-[22px] leading-none font-mono text-white mono-value md:text-[26px]">{{ fmt(item.price, 2) }}</div>
-            <div class="mt-1.5 text-[9px] uppercase tracking-[0.14em] text-slate-400 md:text-[10px]">{{ getSignalText(item) }}</div>
-            <div v-if="getZenFocusTokens(item).length" class="mt-2 grid grid-cols-2 gap-1 text-[9px] md:text-[10px]">
-              <div v-for="token in getZenFocusTokens(item)" :key="`${item.ts_code}-${token.key}`" class="min-w-0 rounded-xl border border-white/[0.06] bg-white/[0.02] px-2 py-1.5">
-                <div class="text-[9px] text-slate-600">{{ token.label }}</div>
-                <div class="mt-0.5 truncate font-mono text-[11px] leading-4 text-slate-200 md:text-xs">{{ token.value }}</div>
+    <div v-if="zenMode" class="fixed inset-0 z-50 overflow-y-auto bg-obsidian-950/98 px-3 py-4 md:px-6 md:py-6" @click="exitZenMode">
+      <div class="mx-auto flex min-h-full w-full max-w-6xl flex-col" @click.stop>
+        <div class="flex items-center justify-between mb-4 md:mb-6">
+          <div class="flex items-center gap-2">
+            <span class="text-[10px] tracking-[0.2em] text-slate-600">专注</span>
+            <span class="text-[10px] text-slate-700 font-mono">{{ holdingRows.length }} 持仓</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="text-[9px] text-slate-700 font-mono">{{ lastRefreshAt || '--:--' }}</span>
+            <button @click="exitZenMode" class="text-[10px] text-slate-600 hover:text-slate-300 transition-colors">退出</button>
+          </div>
+        </div>
+
+        <div v-if="holdingRows.length" :class="zenGridClass" class="flex-1 content-center">
+          <div v-for="item in holdingRows" :key="`zen-${item.ts_code}`"
+               class="rounded-xl border border-white/[0.05] bg-white/[0.02] px-3 py-3 md:px-4 md:py-4">
+            <div class="text-[10px] text-slate-600 font-mono tracking-[0.12em]">{{ item.ts_code.replace('.SH','').replace('.SZ','') }}</div>
+            <div class="mt-1 flex items-baseline gap-2.5">
+              <span class="text-[24px] md:text-[30px] leading-none font-mono font-bold text-white">{{ fmt(item.price, 2) }}</span>
+              <span class="text-[13px] md:text-[15px] font-mono font-bold" :class="numColor(item.pct)">{{ item.pct >= 0 ? '+' : '' }}{{ fmt(item.pct, 2, '%') }}</span>
+            </div>
+            <div class="mt-1.5 text-[10px] text-slate-500">{{ getSignalText(item) }}</div>
+            <div v-if="getZenFocusTokens(item).length" class="mt-2.5 flex flex-wrap gap-1.5">
+              <div v-for="token in getZenFocusTokens(item)" :key="`${item.ts_code}-${token.key}`"
+                   class="rounded-lg border border-white/[0.06] bg-white/[0.02] px-2 py-1">
+                <span class="text-[9px] text-slate-600">{{ token.label }}</span>
+                <span class="ml-1 text-[11px] font-mono text-slate-200">{{ token.value }}</span>
               </div>
             </div>
           </div>
         </div>
-        <div v-else class="text-slate-700 text-lg text-center py-20">暂无持仓股</div>
+
+        <div v-else class="flex-1 flex items-center justify-center">
+          <div class="text-slate-700 text-lg">暂无持仓股</div>
+        </div>
       </div>
     </div>
 
@@ -510,6 +528,17 @@ const zenMode = ref(false);
 const toggleZenMode = () => { zenMode.value = !zenMode.value; startAutoRefresh(); };
 const exitZenMode = () => { zenMode.value = false; startAutoRefresh(); };
 const handleKeydown = (e) => { if (e.key === 'Escape' && zenMode.value) exitZenMode(); };
+
+const zenGridClass = computed(() => {
+  const n = holdingRows.value.length;
+  if (n === 0) return '';
+  if (n === 1) return 'grid grid-cols-1 max-w-[420px] mx-auto w-full gap-3';
+  if (n === 2) return 'grid grid-cols-1 sm:grid-cols-2 max-w-[840px] mx-auto gap-3';
+  if (n <= 4) return 'grid grid-cols-1 sm:grid-cols-2 gap-2.5';
+  if (n <= 6) return 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2';
+  if (n <= 9) return 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2';
+  return 'grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-1.5';
+});
 
 const klinePopupRef = ref(null);
 let searchTimer = null;
@@ -1100,4 +1129,5 @@ onBeforeUnmount(() => {
 .ai-analysis-content :deep(th), .ai-analysis-content :deep(td) { border: 1px solid #1a1e2e; padding: 0.4em 0.6em; text-align: left; }
 .ai-analysis-content :deep(th) { background: #12151f; font-weight: 600; }
 .ai-analysis-content :deep(hr) { border-color: #1a1e2e; margin: 1em 0; }
+
 </style>

@@ -7,6 +7,8 @@ const apiClient = axios.create({
   baseURL: '/api', // 所有请求都将以 /api 开头，由 Vite 代理
 });
 
+import router from '@/router';
+
 // 添加一个请求拦截器，在每个请求中附加 Token
 apiClient.interceptors.request.use(
   (config) => {
@@ -18,6 +20,22 @@ apiClient.interceptors.request.use(
     return config;
   },
   (error) => {
+    return Promise.reject(error);
+  }
+);
+
+// 响应拦截器：401 时自动清除 token 并跳转登录
+apiClient.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 401) {
+      const authStore = useAuthStore();
+      const isLoginRequest = error.config?.url?.includes('/auth/token');
+      if (!isLoginRequest) {
+        authStore.logout();
+        router.push({ name: 'login' });
+      }
+    }
     return Promise.reject(error);
   }
 );

@@ -25,23 +25,7 @@ router = APIRouter(prefix="/admin", tags=["Admin"])
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-async def get_current_user_id(request: Request) -> int:
-    """从请求头提取当前用户ID"""
-    auth_header = request.headers.get("Authorization", "")
-    if not auth_header.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="未授权")
-    
-    token = auth_header[7:]
-    parts = token.split(".")
-    if len(parts) < 3:
-        raise HTTPException(status_code=401, detail="无效token")
-    
-    username = parts[1]
-    with get_db_connection() as con:
-        user = con.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
-        if not user:
-            raise HTTPException(status_code=401, detail="用户不存在")
-        return user[0]
+from core.security import get_current_user_id
 
 # --- 模型定义 ---
 
@@ -313,8 +297,9 @@ def _build_sync_task(p: SyncTaskParams):
             days_back = (arrow.now() - target_date).days + 1
             return "两融数据同步", (sync_engine.sync_margin_trading_data, {"days": max(days_back, 1)})
         return "两融数据同步", (sync_engine.sync_margin_trading_data, {"days": p.days})
-    elif task == "fx":
-        return "外汇数据同步", sync_engine.sync_forex_data
+    elif task in ("fx", "forex"):
+        logger.info("外汇数据同步已禁用，跳过")
+        return "外汇数据同步已禁用", None
     elif task == "factors":
         return "因子数据计算", sync_engine.fill_missing_technical_factors
     else:
@@ -359,6 +344,9 @@ def _run_sync_task(task_id, params):
     from pydantic import parse_obj_as
     p = SyncTaskParams(**params)
     task_name, task_obj = _build_sync_task(p)
+    if task_obj is None:
+        logger.info(f"任务 [{task_id}] 已禁用，跳过: {task_name}")
+        return
     if isinstance(task_obj, tuple):
         fn, kwargs = task_obj
         fn(**kwargs)

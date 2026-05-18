@@ -628,7 +628,7 @@ CREATE TABLE IF NOT EXISTS doc_reading_progress (
 # -- 用户自定义文档标签表 (doc_user_tags) --
 CREATE_DOC_USER_TAGS_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS doc_user_tags (
-    id              INTEGER PRIMARY KEY,
+    id              INTEGER PRIMARY KEY DEFAULT nextval('doc_user_tags_id_seq'),
     user_id         INTEGER NOT NULL,
     tag_name        VARCHAR(50) NOT NULL,
     color           VARCHAR(20) DEFAULT '#64748b',
@@ -640,7 +640,7 @@ CREATE TABLE IF NOT EXISTS doc_user_tags (
 # -- 文档笔记/点评表 (doc_notes) --
 CREATE_DOC_NOTES_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS doc_notes (
-    id              INTEGER PRIMARY KEY,
+    id              INTEGER PRIMARY KEY DEFAULT nextval('doc_notes_id_seq'),
     user_id         INTEGER NOT NULL,
     doc_id          VARCHAR(100) NOT NULL,
     note_content    TEXT NOT NULL,
@@ -655,7 +655,7 @@ CREATE TABLE IF NOT EXISTS doc_notes (
 # -- AI趋势表 (ai_trends) --
 CREATE_AI_TRENDS_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS ai_trends (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER PRIMARY KEY DEFAULT nextval('ai_trends_id_seq'),
     source VARCHAR(50) NOT NULL,
     title TEXT NOT NULL,
     url TEXT,
@@ -680,6 +680,9 @@ CREATE TABLE IF NOT EXISTS doc_tag_mapping (
 
 ALL_TABLES_SQL = [
     "CREATE SEQUENCE IF NOT EXISTS users_id_seq START 1;",
+    "CREATE SEQUENCE IF NOT EXISTS doc_user_tags_id_seq START 1;",
+    "CREATE SEQUENCE IF NOT EXISTS doc_notes_id_seq START 1;",
+    "CREATE SEQUENCE IF NOT EXISTS ai_trends_id_seq START 1;",
     CREATE_USERS_TABLE_SQL,
     CREATE_STOCK_BASIC_TABLE_SQL,
     CREATE_DAILY_PRICE_TABLE_SQL,

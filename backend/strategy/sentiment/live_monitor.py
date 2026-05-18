@@ -49,26 +49,13 @@ class LiveSentimentMonitor:
         self._live_fetched_at = 0.0
 
     def refresh_macro_signals(self, force: bool = False) -> dict[str, Any]:
-        with self._macro_lock:
-            now_ts = time.time()
-            if (
-                not force
-                and self._macro_cache
-                and now_ts - self._macro_fetched_at < self.macro_refresh_seconds
-            ):
-                return self._macro_cache
-
-            ten_year = self._fetch_ten_year_signal()
-            pizza = self._fetch_pizza_index()
-            snapshot = {
-                "updated_at": arrow.now("Asia/Shanghai").format("YYYY-MM-DD HH:mm:ss"),
-                "refresh_seconds": self.macro_refresh_seconds,
-                "ten_year_yield": ten_year,
-                "pizza_index": pizza,
-            }
-            self._macro_cache = snapshot
-            self._macro_fetched_at = now_ts
-            return snapshot
+        """刷新外部风险信号 - 已禁用"""
+        return {
+            "updated_at": arrow.now("Asia/Shanghai").format("YYYY-MM-DD HH:mm:ss"),
+            "refresh_seconds": self.macro_refresh_seconds,
+            "ten_year_yield": {"source": "unavailable", "value": None, "status": "disabled"},
+            "pizza_index": {"source": "unavailable", "value": None, "status": "disabled"},
+        }
 
     def build_live_overlay(
         self,

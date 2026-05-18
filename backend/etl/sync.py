@@ -186,12 +186,20 @@ class SyncEngine:
             logger.error(f"数据完整性验证失败: {e}")
 
     @retry(stop=stop_after_attempt(3), wait=wait_fixed(10))
-    def sync_concept_classification(self):
-        """同步概念分类数据"""
+    def _sync_concept_classification_once(self):
+        """同步概念分类数据主体。"""
         self.concepts_task.sync()
 
+    def sync_concept_classification(self):
+        """同步概念分类数据。"""
+        self._sync_concept_classification_once()
+
         # 概念库刷新后，顺带回补近期主线落库结果，避免 mainline_scores 长时间停留在旧日期
-        self.refresh_mainline_scores(days=30)
+        try:
+            self.refresh_mainline_scores(days=30)
+        except Exception as e:
+            logger.warning(f"概念同步完成，但主线评分回补失败: {e}")
+
 
     def refresh_mainline_scores(self, days: int = 5):
         """重算最近若干交易日主线并落库。"""
@@ -302,8 +310,9 @@ class SyncEngine:
         self.margin_trading_task.sync_margin_trading(days=days)
 
     def sync_forex_data(self):
-        """同步外汇/宏观数据"""
-        self.forex_data_task.sync_forex_data()
+        """同步外汇/宏观数据 - 已禁用"""
+        logger.info("外汇数据同步已禁用")
+        return
 
     def fill_missing_technical_factors(self):
         """补全缺失的技术因子数据"""

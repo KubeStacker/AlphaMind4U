@@ -131,27 +131,10 @@ class CapitalFlowTask(BaseTask):
         
         with get_db_connection() as con:
             con.register('df_view', df)
-            con.execute("""
-                INSERT INTO stock_moneyflow 
-                SELECT * FROM df_view
-                ON CONFLICT (ts_code, trade_date) DO UPDATE SET
-                    buy_sm_vol = excluded.buy_sm_vol,
-                    buy_sm_amount = excluded.buy_sm_amount,
-                    sell_sm_vol = excluded.sell_sm_vol,
-                    sell_sm_amount = excluded.sell_sm_amount,
-                    buy_md_vol = excluded.buy_md_vol,
-                    buy_md_amount = excluded.buy_md_amount,
-                    sell_md_vol = excluded.sell_md_vol,
-                    sell_md_amount = excluded.sell_md_amount,
-                    buy_lg_vol = excluded.buy_lg_vol,
-                    buy_lg_amount = excluded.buy_lg_amount,
-                    sell_lg_vol = excluded.sell_lg_vol,
-                    sell_lg_amount = excluded.sell_lg_amount,
-                    buy_elg_vol = excluded.buy_elg_vol,
-                    buy_elg_amount = excluded.buy_elg_amount,
-                    sell_elg_vol = excluded.sell_elg_vol,
-                    sell_elg_amount = excluded.sell_elg_amount,
-                    net_mf_vol = excluded.net_mf_vol,
-                    net_mf_amount = excluded.net_mf_amount,
-                    net_mf_ratio = excluded.net_mf_ratio
-            """)
+            try:
+                dates = pd.unique(pd.to_datetime(df['trade_date']).dt.date).tolist()
+                for d in dates:
+                    con.execute("DELETE FROM stock_moneyflow WHERE trade_date = ?", [d])
+                con.execute("INSERT INTO stock_moneyflow SELECT * FROM df_view")
+            finally:
+                con.unregister('df_view')

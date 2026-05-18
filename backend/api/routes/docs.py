@@ -21,18 +21,7 @@ INDEX_FILE = DOCS_DIR / "index.json"
 SHANGHAI_TZ = pytz.timezone("Asia/Shanghai")
 
 
-def get_current_user_id() -> int:
-    from fastapi import Request
-    from core.security import get_current_active_user
-    from db.connection import get_db_connection
-    request = Request
-    try:
-        user = get_current_active_user(None)
-        if hasattr(user, 'id'):
-            return user.id
-        return 1
-    except:
-        return 1
+from core.security import get_current_user_id
 
 
 def _ensure_dirs():

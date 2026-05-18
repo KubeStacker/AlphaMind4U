@@ -45,6 +45,7 @@ def _is_recoverable_connection_error(err: Exception) -> bool:
             "Can't open a connection",
             "Connection Error",
             "database has been closed",
+            "Out of Memory Error",
         )
     )
 
@@ -56,6 +57,11 @@ def _open_shared_connection():
         memory_limit = str(settings.duckdb_memory_limit or "").strip()
         if memory_limit:
             _SHARED_CONN.execute(f"SET memory_limit='{memory_limit}'")
+
+        try:
+            _SHARED_CONN.execute("SET preserve_insertion_order=false")
+        except Exception as exc:
+            logger.warning(f"设置 DuckDB preserve_insertion_order 失败: {exc}")
 
         try:
             threads = max(1, int(settings.duckdb_threads))
@@ -97,7 +103,13 @@ def get_db_connection(read_only=False):
     """
     with _DB_LOCK:
         con = get_connection(read_only=read_only)
-        yield con
+        try:
+            yield con
+        except Exception as e:
+            if _is_recoverable_connection_error(e):
+                logger.warning(f"数据库上下文遇到可恢复错误，重置共享连接: {e}")
+                _reset_shared_connection()
+            raise
 
 
 def _query_df(sql_query: str, params=None):

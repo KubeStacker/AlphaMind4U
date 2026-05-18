@@ -86,26 +86,28 @@ def start_scheduler():
     )
 
     # 6. 每日 08:00 同步外汇数据 (美元指数、离岸人民币 - 最近7天)
-    scheduler.add_job(
-        sync_engine.sync_forex_data,
-        CronTrigger(hour=8, minute=0, timezone=SHANGHAI_TZ),
-        id="sync_forex_data",
-        name="每日外汇数据同步",
-        replace_existing=True
-    )
+    # 已禁用: 该任务会触发 DuckDB fatal error (删除 fx_daily 时失败)
+    # scheduler.add_job(
+    #     sync_engine.sync_forex_data,
+    #     CronTrigger(hour=8, minute=0, timezone=SHANGHAI_TZ),
+    #     id="sync_forex_data",
+    #     name="每日外汇数据同步",
+    #     replace_existing=True
+    # )
 
     # 7. 每10分钟刷新一次外部风险信号（CNBC 10Y / Pizza 指数）
-    scheduler.add_job(
-        live_sentiment_monitor.refresh_macro_signals,
-        CronTrigger(minute="*/10", timezone=SHANGHAI_TZ),
-        id="refresh_external_sentiment_signals",
-        name="刷新外部风险信号",
-        kwargs={"force": True},
-        misfire_grace_time=300,
-        coalesce=True,
-        max_instances=1,
-        replace_existing=True,
-    )
+    # 已禁用: 避免外部请求失败影响服务稳定性
+    # scheduler.add_job(
+    #     live_sentiment_monitor.refresh_macro_signals,
+    #     CronTrigger(minute="*/10", timezone=SHANGHAI_TZ),
+    #     id="refresh_external_sentiment_signals",
+    #     name="刷新外部风险信号",
+    #     kwargs={"force": True},
+    #     misfire_grace_time=300,
+    #     coalesce=True,
+    #     max_instances=1,
+    #     replace_existing=True,
+    # )
 
 
     scheduler.start()
@@ -114,6 +116,6 @@ def start_scheduler():
         "  - 基础数据: 00:05 (股票列表) / 00:10 (概念分类)\n"
         "  - 收盘数据: 16:45 (主) / 18:30 (兜底)\n"
         "  - 财务报表: 周日 02:00\n"
-        "  - 外汇数据: 08:00\n"
-        "  - 外部风险信号: 每10分钟"
+        "  - 外汇数据: 已禁用\n"
+        "  - 外部风险信号: 已禁用"
     )

@@ -170,30 +170,23 @@ class DailyMarketDataTask(BaseTask):
             df: 包含日线数据的DataFrame
         """
         cols = ['trade_date', 'ts_code', 'open', 'high', 'low', 'close', 'pre_close', 'change', 'pct_chg', 'vol', 'amount', 'factors', 'adj_factor']
-        # 确保列对齐
         for c in cols:
             if c not in df.columns:
                 df[c] = None
         
-        df_to_save = df[cols]
+        df_to_save = df[cols].copy()
+        df_to_save['trade_date'] = pd.to_datetime(df_to_save['trade_date']).dt.date
+        
         with get_db_connection() as con:
-            # 使用 ON CONFLICT DO UPDATE 确保数据更新，而不是忽略
-            con.execute("""
-                INSERT INTO daily_price 
-                SELECT * FROM df_to_save 
-                ON CONFLICT (trade_date, ts_code) DO UPDATE SET
-                    open = excluded.open,
-                    high = excluded.high,
-                    low = excluded.low,
-                    close = excluded.close,
-                    pre_close = excluded.pre_close,
-                    change = excluded.change,
-                    pct_chg = excluded.pct_chg,
-                    vol = excluded.vol,
-                    amount = excluded.amount,
-                    adj_factor = excluded.adj_factor
-                -- 注意: factors 字段不更新，因为它由因子计算单独管理
-            """)
+            con.unregister('df_daily_view')
+            try:
+                con.register('df_daily_view', df_to_save)
+                dates = pd.unique(df_to_save['trade_date']).tolist()
+                for d in dates:
+                    con.execute("DELETE FROM daily_price WHERE trade_date = ?", [d])
+                con.execute("INSERT INTO daily_price SELECT * FROM df_daily_view")
+            finally:
+                con.unregister('df_daily_view')
 
     def calculate_technical_factors(self, trade_date: str):
         """计算指定日期的技术因子

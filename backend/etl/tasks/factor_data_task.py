@@ -238,26 +238,10 @@ class FactorDataTask(BaseTask):
         df_to_save = df[self.DAILY_BASIC_COLUMNS]
         with get_db_connection() as con:
             con.register("factor_daily_basic_view", df_to_save)
-            con.execute(
-                """
-                INSERT INTO stock_daily_basic
-                SELECT * FROM factor_daily_basic_view
-                ON CONFLICT (trade_date, ts_code) DO UPDATE SET
-                    close = EXCLUDED.close,
-                    turnover_rate = EXCLUDED.turnover_rate,
-                    turnover_rate_f = EXCLUDED.turnover_rate_f,
-                    volume_ratio = EXCLUDED.volume_ratio,
-                    pe = EXCLUDED.pe,
-                    pe_ttm = EXCLUDED.pe_ttm,
-                    pb = EXCLUDED.pb,
-                    ps = EXCLUDED.ps,
-                    ps_ttm = EXCLUDED.ps_ttm,
-                    dv_ratio = EXCLUDED.dv_ratio,
-                    dv_ttm = EXCLUDED.dv_ttm,
-                    total_share = EXCLUDED.total_share,
-                    float_share = EXCLUDED.float_share,
-                    free_share = EXCLUDED.free_share,
-                    total_mv = EXCLUDED.total_mv,
-                    circ_mv = EXCLUDED.circ_mv
-                """
-            )
+            try:
+                dates = pd.unique(pd.to_datetime(df_to_save['trade_date']).dt.date).tolist()
+                for d in dates:
+                    con.execute("DELETE FROM stock_daily_basic WHERE trade_date = ?", [d])
+                con.execute("INSERT INTO stock_daily_basic SELECT * FROM factor_daily_basic_view")
+            finally:
+                con.unregister("factor_daily_basic_view")

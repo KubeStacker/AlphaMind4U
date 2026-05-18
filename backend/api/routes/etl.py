@@ -47,6 +47,20 @@ class IntegrityParams(BaseModel):
 # --- 任务持久化 ---
 class TaskRegistry:
     @staticmethod
+    def _fetch_task_detail(con, task_id: str):
+        row = con.execute(
+            """
+            SELECT task_id, task_type, params_json
+            FROM etl_tasks
+            WHERE task_id = ?
+            """,
+            (task_id,),
+        ).fetchone()
+        if not row:
+            return None
+        return {"task_id": row[0], "task_type": row[1], "params": json.loads(row[2])}
+
+    @staticmethod
     def create_task(task_type: str, params: dict, task_key: str = None):
         task_id = str(uuid.uuid4())[:8]
         params_str = json.dumps(params, sort_keys=True)
@@ -108,12 +122,18 @@ class TaskRegistry:
                 con.execute(
                     "UPDATE etl_tasks SET status = 'PENDING' WHERE status = 'RUNNING' AND (heartbeat_at < CURRENT_TIMESTAMP - INTERVAL 10 MINUTE OR heartbeat_at IS NULL)"
                 )
-                
-                row = con.execute(
-                    "SELECT task_id, task_type, params_json FROM etl_tasks WHERE status = 'PENDING' ORDER BY created_at LIMIT 1"
+
+                task_id_row = con.execute(
+                    """
+                    SELECT task_id
+                    FROM etl_tasks
+                    WHERE status = 'PENDING'
+                    ORDER BY created_at
+                    LIMIT 1
+                    """
                 ).fetchone()
-                if row:
-                    return {"task_id": row[0], "task_type": row[1], "params": json.loads(row[2])}
+                if task_id_row:
+                    return TaskRegistry._fetch_task_detail(con, task_id_row[0])
         except Exception as e:
             logger.error(f"获取待执行任务失败: {e}")
         return None
@@ -178,8 +198,9 @@ def _build_sync_task(p: SyncTaskParams):
             days_back = (arrow.now() - target_date).days + 1
             return "两融数据同步", (sync_engine.sync_margin_trading_data, {"days": max(days_back, 1)})
         return "两融数据同步", (sync_engine.sync_margin_trading_data, {"days": p.days})
-    elif task == "fx":
-        return "外汇数据同步", sync_engine.sync_forex_data
+    elif task in ("fx", "forex"):
+        logger.info("外汇数据同步已禁用，跳过")
+        return "外汇数据同步已禁用", None
     elif task == "factors":
         if p.start_date and p.end_date:
             return "因子宽表重建", (
@@ -193,6 +214,9 @@ def _build_sync_task(p: SyncTaskParams):
 def _run_sync_task(task_id, params):
     p = SyncTaskParams(**params)
     task_name, task_obj = _build_sync_task(p)
+    if task_obj is None:
+        logger.info(f"任务 [{task_id}] 已禁用，跳过: {task_name}")
+        return
     if isinstance(task_obj, tuple):
         fn, kwargs = task_obj
         fn(**kwargs)
@@ -343,7 +367,25 @@ def get_tasks_status(limit: int = 20):
     """ 获取持久化任务状态 """
     with get_db_connection() as con:
         history = con.execute(
-            "SELECT task_id, task_type, status, error, progress, CAST(created_at AS VARCHAR), CAST(finished_at AS VARCHAR) FROM etl_tasks ORDER BY created_at DESC LIMIT ?",
+            """
+            SELECT
+                t.task_id,
+                t.task_type,
+                t.status,
+                t.error,
+                t.progress,
+                CAST(t.created_at AS VARCHAR),
+                CAST(t.finished_at AS VARCHAR)
+            FROM etl_tasks AS t
+            INNER JOIN (
+                SELECT task_id
+                FROM etl_tasks
+                ORDER BY created_at DESC
+                LIMIT ?
+            ) AS recent
+                ON t.task_id = recent.task_id
+            ORDER BY t.created_at DESC
+            """,
             (limit,)
         ).fetchall()
         

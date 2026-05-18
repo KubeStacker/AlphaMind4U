@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     # Long token (标准token)
     long_tushare_token: str = ""
     
+    # JWT 配置
+    secret_key: str = "change-me-to-a-random-secret"
+
     # DuckDB 配置
     duckdb_memory_limit: str = "400MB"
     duckdb_threads: str = "2"
