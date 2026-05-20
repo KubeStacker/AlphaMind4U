@@ -5,6 +5,7 @@ from contextlib import contextmanager
 import threading
 import logging
 import os
+import signal
 import time
 
 from core.config import settings
@@ -50,6 +51,35 @@ def _is_recoverable_connection_error(err: Exception) -> bool:
     )
 
 
+def _is_fatal_connection_error(err: Exception) -> bool:
+    msg = str(err)
+    return any(
+        s in msg for s in (
+            "FATAL Error",
+            "database has been invalidated",
+            "Corrupted ART index",
+            "must be restarted prior to being used again",
+        )
+    )
+
+
+def _handle_connection_error(err: Exception) -> None:
+    if _is_fatal_connection_error(err):
+        logger.critical(
+            "DuckDB 进入 fatal/invalidated 状态，当前进程必须重启以释放失效连接: %s",
+            err,
+        )
+        _reset_shared_connection()
+        if settings.duckdb_fatal_exit_enabled:
+            logger.critical("触发进程退出，交给容器 restart policy 拉起干净实例")
+            os.kill(os.getpid(), signal.SIGTERM)
+        return
+
+    if _is_recoverable_connection_error(err):
+        logger.warning(f"数据库遇到可恢复错误，重置共享连接: {err}")
+        _reset_shared_connection()
+
+
 def _open_shared_connection():
     global _SHARED_CONN
     if _SHARED_CONN is None:
@@ -92,7 +122,7 @@ def get_connection(read_only=False):
             return _open_shared_connection()
         except Exception as e:
             logger.warning(f"数据库连接失败: {e}")
-            _reset_shared_connection()
+            _handle_connection_error(e)
             raise
 
 @contextmanager
@@ -106,9 +136,7 @@ def get_db_connection(read_only=False):
         try:
             yield con
         except Exception as e:
-            if _is_recoverable_connection_error(e):
-                logger.warning(f"数据库上下文遇到可恢复错误，重置共享连接: {e}")
-                _reset_shared_connection()
+            _handle_connection_error(e)
             raise
 
 
@@ -117,12 +145,14 @@ def _query_df(sql_query: str, params=None):
         con = get_connection(read_only=False)
         return con.execute(sql_query, params).fetchdf()
 
-def fetch_df(sql_query: str, params=None, max_retries=3, retry_delay=2) -> 'pd.DataFrame':
+def fetch_df(sql_query: str, params=None, max_retries=None, retry_delay=None) -> 'pd.DataFrame':
     """
     数据查询接口（共享连接 + 重试 + 自动重连）。
     """
     import pandas as pd
     
+    max_retries = max_retries if max_retries is not None else max(1, int(settings.duckdb_query_retries))
+    retry_delay = retry_delay if retry_delay is not None else float(settings.duckdb_retry_delay_seconds)
     last_error = None
     for attempt in range(max_retries):
         try:
@@ -130,9 +160,8 @@ def fetch_df(sql_query: str, params=None, max_retries=3, retry_delay=2) -> 'pd.D
         except Exception as e:
             last_error = e
             logger.warning(f"数据库查询失败 (尝试 {attempt + 1}/{max_retries}): {e}")
-            if _is_recoverable_connection_error(e):
-                with _DB_LOCK:
-                    _reset_shared_connection()
+            with _DB_LOCK:
+                _handle_connection_error(e)
             if attempt < max_retries - 1:
                 time.sleep(retry_delay)
     

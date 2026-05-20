@@ -4,7 +4,7 @@
 
 ## 项目概述
 
-A股量化交易决策系统，FastAPI + Vue 3，DuckDB 嵌入式数据库。5 个模块对应前端 tab。
+A股量化交易决策系统，FastAPI + Vue 3，DuckDB 嵌入式数据库。当前有效模块为 4 个（Watchlist / Strategy / Data Sync / Basic）。`Dashboard` 与 `Docs` 已从代码中移除。
 
 ## 规范驱动开发
 
@@ -20,7 +20,6 @@ A股量化交易决策系统，FastAPI + Vue 3，DuckDB 嵌入式数据库。5 �
 | 模块 | 目录 |
 |------|------|
 | 盯盘 | [modules/watchlist/](modules/watchlist/spec.md) |
-| 仪表盘 | [modules/dashboard/](modules/dashboard/spec.md) |
 | 策略广场 | [modules/strategy/](modules/strategy/spec.md) |
 | 数据同步 | [modules/data-sync/](modules/data-sync/spec.md) |
 | 基础设置 | [modules/basic/](modules/basic/spec.md) |

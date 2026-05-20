@@ -176,15 +176,26 @@ class DailyMarketDataTask(BaseTask):
         
         df_to_save = df[cols].copy()
         df_to_save['trade_date'] = pd.to_datetime(df_to_save['trade_date']).dt.date
+        df_to_save = df_to_save.drop_duplicates(subset=['trade_date', 'ts_code'], keep='last')
         
         with get_db_connection() as con:
-            con.unregister('df_daily_view')
+            try:
+                con.unregister('df_daily_view')
+            except Exception:
+                pass
             try:
                 con.register('df_daily_view', df_to_save)
-                dates = pd.unique(df_to_save['trade_date']).tolist()
-                for d in dates:
-                    con.execute("DELETE FROM daily_price WHERE trade_date = ?", [d])
-                con.execute("INSERT INTO daily_price SELECT * FROM df_daily_view")
+                update_set = ",".join(
+                    f"{col}=EXCLUDED.{col}" for col in cols if col not in ("trade_date", "ts_code")
+                )
+                con.execute(
+                    f"""
+                    INSERT INTO daily_price ({",".join(cols)})
+                    SELECT {",".join(cols)} FROM df_daily_view
+                    ON CONFLICT (trade_date, ts_code) DO UPDATE SET
+                        {update_set}
+                    """
+                )
             finally:
                 con.unregister('df_daily_view')
 

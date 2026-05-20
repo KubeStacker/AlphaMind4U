@@ -247,33 +247,38 @@
       </section>
     </div>
 
-    <div v-if="zenMode" class="fixed inset-0 z-50 overflow-y-auto bg-obsidian-950/98 px-3 py-4 md:px-6 md:py-6" @click="exitZenMode">
-      <div class="mx-auto flex min-h-full w-full max-w-6xl flex-col" @click.stop>
-        <div class="flex items-center justify-between mb-4 md:mb-6">
-          <div class="flex items-center gap-2">
-            <span class="text-[10px] tracking-[0.2em] text-slate-600">专注</span>
-            <span class="text-[10px] text-slate-700 font-mono">{{ holdingRows.length }} 持仓</span>
+    <div v-if="zenMode" class="fixed inset-0 z-50 overflow-y-auto bg-[#050505] px-3 py-4 text-slate-300 md:px-6 md:py-6" @click="exitZenMode">
+      <div class="mx-auto flex min-h-full w-full max-w-5xl flex-col" @click.stop>
+        <div class="mb-4 flex items-center justify-between border-b border-white/[0.06] pb-3 md:mb-5">
+          <div class="flex items-center gap-2.5">
+            <span class="text-[10px] tracking-[0.24em] text-slate-500">专注</span>
+            <span class="font-mono text-[10px] text-slate-600">{{ holdingRows.length }} 持仓</span>
           </div>
-          <div class="flex items-center gap-2">
-            <span class="text-[9px] text-slate-700 font-mono">{{ lastRefreshAt || '--:--' }}</span>
-            <button @click="exitZenMode" class="text-[10px] text-slate-600 hover:text-slate-300 transition-colors">退出</button>
+          <div class="flex items-center gap-2.5">
+            <span class="hidden text-[10px] text-slate-700 sm:inline">轻触空白处退出</span>
+            <span class="font-mono text-[9px] text-slate-700">{{ lastRefreshAt || '--:--' }}</span>
+            <button @click="exitZenMode" class="text-[10px] text-slate-500 transition-colors hover:text-slate-200">退出</button>
           </div>
         </div>
 
         <div v-if="holdingRows.length" :class="zenGridClass" class="flex-1 content-center">
           <div v-for="item in holdingRows" :key="`zen-${item.ts_code}`"
-               class="rounded-xl border border-white/[0.05] bg-white/[0.02] px-3 py-3 md:px-4 md:py-4">
-            <div class="text-[10px] text-slate-600 font-mono tracking-[0.12em]">{{ item.ts_code.replace('.SH','').replace('.SZ','') }}</div>
-            <div class="mt-1 flex items-baseline gap-2.5">
-              <span class="text-[24px] md:text-[30px] leading-none font-mono font-bold text-white">{{ fmt(item.price, 2) }}</span>
-              <span class="text-[13px] md:text-[15px] font-mono font-bold" :class="numColor(item.pct)">{{ item.pct >= 0 ? '+' : '' }}{{ fmt(item.pct, 2, '%') }}</span>
+               class="rounded-xl border border-white/[0.07] bg-white/[0.015] px-2.5 py-2.5 md:px-3 md:py-3">
+            <div class="flex items-start justify-between gap-3">
+              <div class="min-w-0">
+                <div class="truncate text-[12px] font-semibold text-slate-200">{{ item.name || '-' }}</div>
+                <div class="mt-0.5 font-mono text-[9px] tracking-[0.12em] text-slate-600">{{ item.ts_code.replace('.SH','').replace('.SZ','') }}</div>
+              </div>
+              <div class="shrink-0 text-right">
+                <div class="font-mono text-[22px] font-bold leading-none text-slate-100 md:text-[26px]">{{ fmt(item.price, 2) }}</div>
+              </div>
             </div>
-            <div class="mt-1.5 text-[10px] text-slate-500">{{ getSignalText(item) }}</div>
-            <div v-if="getZenFocusTokens(item).length" class="mt-2.5 flex flex-wrap gap-1.5">
+            <div class="mt-2 truncate text-[11px] leading-5 text-slate-400">{{ getSignalText(item) }}</div>
+            <div v-if="getZenFocusTokens(item).length" class="mt-2 grid grid-cols-2 border-l border-t border-white/[0.06]">
               <div v-for="token in getZenFocusTokens(item)" :key="`${item.ts_code}-${token.key}`"
-                   class="rounded-lg border border-white/[0.06] bg-white/[0.02] px-2 py-1">
-                <span class="text-[9px] text-slate-600">{{ token.label }}</span>
-                <span class="ml-1 text-[11px] font-mono text-slate-200">{{ token.value }}</span>
+                   class="min-w-0 border-b border-r border-white/[0.06] px-2 py-1.5">
+                <div class="text-[9px] text-slate-600">{{ token.label }}</div>
+                <div class="mt-0.5 truncate font-mono text-[11px] text-slate-200" :title="token.value">{{ token.value }}</div>
               </div>
             </div>
           </div>
@@ -532,11 +537,11 @@ const handleKeydown = (e) => { if (e.key === 'Escape' && zenMode.value) exitZenM
 const zenGridClass = computed(() => {
   const n = holdingRows.value.length;
   if (n === 0) return '';
-  if (n === 1) return 'grid grid-cols-1 max-w-[420px] mx-auto w-full gap-3';
-  if (n === 2) return 'grid grid-cols-1 sm:grid-cols-2 max-w-[840px] mx-auto gap-3';
-  if (n <= 4) return 'grid grid-cols-1 sm:grid-cols-2 gap-2.5';
+  if (n === 1) return 'grid grid-cols-1 max-w-[360px] mx-auto w-full gap-3';
+  if (n === 2) return 'grid grid-cols-1 sm:grid-cols-2 max-w-[720px] mx-auto gap-3';
+  if (n <= 4) return 'grid grid-cols-1 sm:grid-cols-2 gap-2';
   if (n <= 6) return 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2';
-  if (n <= 9) return 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2';
+  if (n <= 9) return 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2';
   return 'grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-1.5';
 });
 

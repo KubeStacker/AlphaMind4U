@@ -10,7 +10,6 @@ from pydantic import BaseModel, Field
 from typing import Optional
 from db.connection import fetch_df
 from etl.sync import sync_engine
-from strategy.sentiment.dashboard import build_market_sentiment_payload
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Market"])
@@ -164,17 +163,6 @@ def _select_low_correlation_candidates(candidates: pd.DataFrame, trade_date: str
     selected["selection_order"] = selected["ts_code"].map({code: idx for idx, code in enumerate(selected_codes)})
     return selected.sort_values(["selection_order", "composite_score"], ascending=[True, False]).head(top_n)
 
-@router.get("/market_sentiment")
-def get_market_sentiment(days: int = 365, force_macro_refresh: bool = False):
-    """获取市场情绪历史数据，并叠加交易日实时情绪看板。"""
-    try:
-        return build_market_sentiment_payload(
-            days=days,
-            force_macro_refresh=force_macro_refresh,
-        )
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
 @router.get("/sentiment/preview")
 def get_sentiment_preview(
     index_ts_code: str = "000300.SH",
@@ -284,18 +272,6 @@ def get_walkforward_result(train_days: int = 120, test_days: int = 40):
         "status": "unavailable",
         "message": "Walk-Forward 回测功能开发中，当前不可用"
     }
-
-@router.get("/mainline_history")
-def get_mainline_history(days: int = 30):
-    """获取主线演变历史数据"""
-    try:
-        from strategy.mainline import mainline_analyst
-
-        data = mainline_analyst.get_history(days=days)
-        return {"status": "success", "data": data}
-    except Exception as e:
-        logger.error(f"获取主线历史失败: {e}", exc_info=True)
-        return {"status": "error", "message": str(e)}
 
 @router.get("/market/suggestion")
 def get_market_suggestion(

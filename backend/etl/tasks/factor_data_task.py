@@ -235,13 +235,24 @@ class FactorDataTask(BaseTask):
                 df[col] = None
 
     def _upsert_daily_basic(self, df: pd.DataFrame):
-        df_to_save = df[self.DAILY_BASIC_COLUMNS]
+        df_to_save = df[self.DAILY_BASIC_COLUMNS].copy()
+        df_to_save["trade_date"] = pd.to_datetime(df_to_save["trade_date"]).dt.date
+        df_to_save = df_to_save.drop_duplicates(subset=["trade_date", "ts_code"], keep="last")
         with get_db_connection() as con:
-            con.register("factor_daily_basic_view", df_to_save)
             try:
-                dates = pd.unique(pd.to_datetime(df_to_save['trade_date']).dt.date).tolist()
-                for d in dates:
-                    con.execute("DELETE FROM stock_daily_basic WHERE trade_date = ?", [d])
-                con.execute("INSERT INTO stock_daily_basic SELECT * FROM factor_daily_basic_view")
+                con.register("factor_daily_basic_view", df_to_save)
+                update_set = ",".join(
+                    f"{col}=EXCLUDED.{col}"
+                    for col in self.DAILY_BASIC_COLUMNS
+                    if col not in ("trade_date", "ts_code")
+                )
+                con.execute(
+                    f"""
+                    INSERT INTO stock_daily_basic ({",".join(self.DAILY_BASIC_COLUMNS)})
+                    SELECT {",".join(self.DAILY_BASIC_COLUMNS)} FROM factor_daily_basic_view
+                    ON CONFLICT (trade_date, ts_code) DO UPDATE SET
+                        {update_set}
+                    """
+                )
             finally:
                 con.unregister("factor_daily_basic_view")

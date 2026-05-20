@@ -7,7 +7,6 @@ from .market import router as market_router
 from .etl import router as etl_router
 from .db import router as db_router
 from .system import router as system_router
-from .docs import router as docs_router
 from .strategy_plaza import router as strategy_plaza_router
 
 __all__ = [
@@ -18,6 +17,5 @@ __all__ = [
     "etl_router",
     "db_router",
     "system_router",
-    "docs_router",
     "strategy_plaza_router",
 ]

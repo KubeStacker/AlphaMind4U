@@ -28,23 +28,10 @@
             >
               策略广场
             </router-link>
-            <router-link
-              to="/dashboard"
-              class="px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all duration-200"
-              :class="isDashboardPage ? 'bg-white/[0.06] text-white' : 'text-slate-500 hover:text-slate-300 hover:bg-white/[0.03]'"
-            >
-              仪表盘
-            </router-link>
           </div>
         </div>
 
         <div class="flex items-center gap-1.5">
-          <button @click="showDocs = !showDocs"
-            class="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all duration-200"
-            :class="showDocs ? 'bg-white/[0.06] text-white' : 'text-slate-500 hover:text-slate-300 hover:bg-white/[0.03]'">
-            <DocumentTextIcon class="w-3.5 h-3.5" />
-            <span>文档</span>
-          </button>
           <div class="hidden md:block">
             <Menu as="div" class="relative inline-block text-left">
               <MenuButton class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold text-slate-500 hover:text-slate-300 hover:bg-white/[0.03] transition-all duration-200">
@@ -106,46 +93,33 @@
           <Squares2X2Icon class="w-5 h-5" />
           <span class="text-[9px] font-semibold">策略</span>
         </router-link>
-        <router-link to="/dashboard" class="flex flex-col items-center gap-0.5 transition-all duration-200 py-1 px-3 rounded-xl" :class="isDashboardPage ? 'text-signal-bull' : 'text-slate-600'">
-          <ChartBarIcon class="w-5 h-5" />
-          <span class="text-[9px] font-semibold">仪表盘</span>
-        </router-link>
-        <button @click="showDocs = !showDocs" class="flex flex-col items-center gap-0.5 transition-all duration-200 py-1 px-3 rounded-xl" :class="showDocs ? 'text-signal-bull' : 'text-slate-600'">
-          <DocumentTextIcon class="w-5 h-5" />
-          <span class="text-[9px] font-semibold">文档</span>
-        </button>
         <router-link to="/settings" class="flex flex-col items-center gap-0.5 transition-all duration-200 py-1 px-3 rounded-xl" :class="isSettingsPage ? 'text-signal-bull' : 'text-slate-600'">
           <Cog6ToothIcon class="w-5 h-5" />
           <span class="text-[9px] font-semibold">设置</span>
         </router-link>
       </div>
     </div>
-
-    <DocsPanel :open="showDocs" @close="showDocs = false" />
   </div>
 </template>
 
 <script setup>
-import { ref, computed } from 'vue';
+import { computed } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
 import { Menu, MenuButton, MenuItems, MenuItem } from '@headlessui/vue'
 import { 
   ChevronDownIcon, Cog6ToothIcon, UserGroupIcon, 
-  CircleStackIcon, ArrowRightOnRectangleIcon, ChartBarIcon, CommandLineIcon,
-  EyeIcon, SparklesIcon, DocumentTextIcon, Squares2X2Icon
+  CircleStackIcon, ArrowRightOnRectangleIcon, CommandLineIcon,
+  EyeIcon, SparklesIcon, Squares2X2Icon
 } from '@heroicons/vue/20/solid'
-import DocsPanel from './DocsPanel.vue';
 
 const route = useRoute();
 const router = useRouter();
 const authStore = useAuthStore();
-const showDocs = ref(false);
 
 const isSettingsPage = computed(() => route.path.startsWith('/settings'));
 const isWatchlistPage = computed(() => route.name === 'watchlist');
 const isStrategiesPage = computed(() => route.name === 'strategies');
-const isDashboardPage = computed(() => route.name === 'dashboard');
 
 const handleLogout = () => { authStore.logout(); router.push({ name: 'login' }); };
 </script>

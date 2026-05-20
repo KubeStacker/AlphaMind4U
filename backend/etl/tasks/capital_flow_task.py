@@ -126,15 +126,35 @@ class CapitalFlowTask(BaseTask):
             df: 包含资金流向数据的DataFrame
         """
         # 确保DataFrame有net_mf_ratio列（Tushare API可能不返回此列）
+        cols = [
+            'ts_code', 'trade_date', 'buy_sm_vol', 'buy_sm_amount', 'sell_sm_vol',
+            'sell_sm_amount', 'buy_md_vol', 'buy_md_amount', 'sell_md_vol',
+            'sell_md_amount', 'buy_lg_vol', 'buy_lg_amount', 'sell_lg_vol',
+            'sell_lg_amount', 'buy_elg_vol', 'buy_elg_amount', 'sell_elg_vol',
+            'sell_elg_amount', 'net_mf_vol', 'net_mf_amount', 'net_mf_ratio'
+        ]
+        for col in cols:
+            if col not in df.columns:
+                df[col] = None
         if 'net_mf_ratio' not in df.columns:
             df['net_mf_ratio'] = None
+        df_to_save = df[cols].copy()
+        df_to_save['trade_date'] = pd.to_datetime(df_to_save['trade_date']).dt.date
+        df_to_save = df_to_save.drop_duplicates(subset=['ts_code', 'trade_date'], keep='last')
         
         with get_db_connection() as con:
-            con.register('df_view', df)
             try:
-                dates = pd.unique(pd.to_datetime(df['trade_date']).dt.date).tolist()
-                for d in dates:
-                    con.execute("DELETE FROM stock_moneyflow WHERE trade_date = ?", [d])
-                con.execute("INSERT INTO stock_moneyflow SELECT * FROM df_view")
+                con.register('df_view', df_to_save)
+                update_set = ",".join(
+                    f"{col}=EXCLUDED.{col}" for col in cols if col not in ("ts_code", "trade_date")
+                )
+                con.execute(
+                    f"""
+                    INSERT INTO stock_moneyflow ({",".join(cols)})
+                    SELECT {",".join(cols)} FROM df_view
+                    ON CONFLICT (ts_code, trade_date) DO UPDATE SET
+                        {update_set}
+                    """
+                )
             finally:
                 con.unregister('df_view')

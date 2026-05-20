@@ -3,7 +3,8 @@
 import logging
 import datetime
 import asyncio
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from starlette.responses import JSONResponse
 import pytz
 
 # 配置全局日志 - 使用上海时区
@@ -26,9 +27,11 @@ logger = logging.getLogger(__name__)
 
 from contextlib import asynccontextmanager
 from db.init_db import initialize_database
+from core.config import settings
 from db.connection import close_connection, get_connection
 from api import auth
 from etl.scheduler import start_scheduler
+from core.security import is_valid_static_auth_request
 
 # 导入新的路由模块
 from api.routes import (
@@ -39,7 +42,6 @@ from api.routes import (
     etl_router,
     db_router,
     system_router,
-    docs_router,
     strategy_plaza_router,
 )
 
@@ -57,14 +59,20 @@ async def lifespan(app: FastAPI):
     get_connection()
     
     # 2. 启动任务中心消费者 (处理顺序同步任务)
-    from api.routes.etl import task_worker
-    asyncio.create_task(task_worker())
+    if settings.enable_etl_worker:
+        from api.routes.etl import task_worker
+        asyncio.create_task(task_worker())
+    else:
+        logger.info("ETL 任务消费者已按配置禁用")
     
     # 3. 启动定时任务调度器
-    try:
-        start_scheduler()
-    except Exception as e:
-        logger.error(f"调度器启动失败: {e}")
+    if settings.enable_scheduler:
+        try:
+            start_scheduler()
+        except Exception as e:
+            logger.error(f"调度器启动失败: {e}")
+    else:
+        logger.info("定时任务调度器已按配置禁用")
         
     logger.info("FastAPI 应用启动完成。")
     yield
@@ -81,6 +89,19 @@ app = FastAPI(
     lifespan=lifespan # 注册生命周期事件
 )
 
+
+@app.middleware("http")
+async def require_static_token_for_admin(request: Request, call_next):
+    if request.method != "OPTIONS" and request.url.path.startswith("/admin"):
+        if not is_valid_static_auth_request(request):
+            return JSONResponse(
+                {"detail": "静态令牌无效或缺失"},
+                status_code=401,
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+    return await call_next(request)
+
+
 # 注册 API 路由（添加 /admin 前缀以兼容前端调用）
 app.include_router(auth.router)
 app.include_router(users_router, prefix="/admin")
@@ -90,7 +111,6 @@ app.include_router(market_router, prefix="/admin")
 app.include_router(etl_router, prefix="/admin")
 app.include_router(db_router, prefix="/admin")
 app.include_router(system_router, prefix="/admin")
-app.include_router(docs_router, prefix="/admin")
 app.include_router(strategy_plaza_router, prefix="/admin")
 
 @app.get("/", tags=["System"])

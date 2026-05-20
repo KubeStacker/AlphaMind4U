@@ -16,12 +16,20 @@ class Settings(BaseSettings):
     # Long token (标准token)
     long_tushare_token: str = ""
     
-    # JWT 配置
-    secret_key: str = "change-me-to-a-random-secret"
+    # 静态服务令牌配置（用于 MCP 等无密码服务调用）
+    jarvis_static_auth_token: str = ""
+    jarvis_static_auth_username: str = "admin"
 
     # DuckDB 配置
     duckdb_memory_limit: str = "400MB"
     duckdb_threads: str = "2"
+    duckdb_fatal_exit_enabled: bool = True
+    duckdb_query_retries: int = 2
+    duckdb_retry_delay_seconds: float = 1.0
+
+    # 后端运行开关
+    enable_etl_worker: bool = True
+    enable_scheduler: bool = True
     
     @property
     def tushare_token(self) -> str:

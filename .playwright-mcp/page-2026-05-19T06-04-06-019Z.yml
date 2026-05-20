@@ -1,0 +1,13 @@
+- generic [ref=e6]:
+  - generic [ref=e7]:
+    - generic [ref=e9]: J
+    - heading "智能终端访问" [level=2] [ref=e10]
+  - generic [ref=e11]:
+    - generic [ref=e12]:
+      - text: 身份标识
+      - textbox [ref=e13]: admin
+    - generic [ref=e14]:
+      - text: 访问凭证
+      - textbox [ref=e15]: admin
+    - button "建立连接" [ref=e17] [cursor=pointer]:
+      - generic [ref=e18]: 建立连接

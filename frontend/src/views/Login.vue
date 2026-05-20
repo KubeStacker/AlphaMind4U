@@ -53,7 +53,7 @@ const handleLogin = async () => {
   error.value = '';
   try {
     await authStore.login(username.value, password.value);
-    router.push({ name: 'dashboard' });
+    router.push({ name: 'watchlist' });
   } catch (err) {
     error.value = '授权失败，请检查凭据';
   } finally {

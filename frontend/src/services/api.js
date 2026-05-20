@@ -110,12 +110,7 @@ export const getTableStats = () => apiClient.post('/admin/db/query', {
 });
 
 // --- 市场数据 ---
-export const getMarketSentiment = (days = 30, params = {}) =>
-  apiClient.get('/admin/market_sentiment', { params: { days, ...params } });
 export const getMarketSuggestion = (params = {}) => apiClient.get('/admin/market/suggestion', { params });
-export const syncSentiment = (days = 250) =>
-  apiClient.post('/admin/etl/sentiment', null, { params: { days } });
-export const getMainlineHistory = (days = 30) => apiClient.get('/admin/mainline_history', { params: { days } });
 export const getWatchlistRealtime = (codes, src = 'sina', analysisDepth = 'compact', sortMode = 'auto') =>
   apiClient.get('/admin/watchlist/realtime', { params: { codes, src, analysis_depth: analysisDepth, sort_mode: sortMode } });
 export const getWatchlistAnalysis = (tsCode, forceRefresh = false) =>
@@ -182,29 +177,3 @@ export const getStrategyPlazaObservations = (strategyKey, tradeDate, limit = 100
 export const getStrategyPlazaSummary = (strategyKey, tradeDate) =>
   apiClient.get('/admin/strategy-plaza/summary', { params: { strategy_key: strategyKey, trade_date: tradeDate } });
 export const runStrategyPlaza = (payload) => apiClient.post('/admin/strategy-plaza/run', payload);
-
-// --- 文档管理 ---
-export const getDocsList = (params = {}) => apiClient.get('/admin/docs/list', { params });
-export const getPublishedDocsList = (params = {}) => apiClient.get('/admin/docs/published/list', { params });
-export const getDocContent = (docId) => apiClient.get(`/admin/docs/${docId}`);
-export const publishDoc = (doc) => apiClient.post('/admin/docs/publish', doc);
-export const deleteDoc = (docId) => apiClient.delete(`/admin/docs/${docId}`);
-
-// --- 阅读位置记忆 ---
-export const getDocProgress = (docId) => apiClient.get(`/admin/docs/${docId}/progress`);
-export const updateDocProgress = (docId, data) => apiClient.post(`/admin/docs/${docId}/progress`, data);
-
-// --- 用户自定义标签 ---
-export const getUserTags = () => apiClient.get('/admin/docs/tags');
-export const createUserTag = (tag) => apiClient.post('/admin/docs/tags', tag);
-export const updateUserTag = (tagId, tag) => apiClient.put(`/admin/docs/tags/${tagId}`, tag);
-export const deleteUserTag = (tagId) => apiClient.delete(`/admin/docs/tags/${tagId}`);
-export const getDocTags = (docId) => apiClient.get(`/admin/docs/${docId}/tags`);
-export const setDocTags = (docId, tagIds) => apiClient.post(`/admin/docs/${docId}/tags`, { tag_ids: tagIds });
-
-// --- 文档笔记/点评 ---
-export const getDocNotes = (docId) => apiClient.get(`/admin/docs/${docId}/notes`);
-export const createDocNote = (docId, note) => apiClient.post(`/admin/docs/${docId}/notes`, note);
-export const updateDocNote = (noteId, note) => apiClient.put(`/admin/docs/notes/${noteId}`, note);
-export const deleteDocNote = (noteId) => apiClient.delete(`/admin/docs/notes/${noteId}`);
-export const getAllNotes = (params = {}) => apiClient.get('/admin/docs/notes/all', { params });

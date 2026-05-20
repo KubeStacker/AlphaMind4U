@@ -726,6 +726,7 @@ class FactorCalculator:
         if df.empty:
             return
 
+        df = df.drop_duplicates(subset=["trade_date", "ts_code"], keep="last")
         with get_db_connection() as con:
             con.register("factor_snapshot_view", df)
             cols = df.columns.tolist()
