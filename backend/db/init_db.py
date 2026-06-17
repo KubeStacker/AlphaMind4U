@@ -91,6 +91,116 @@ def _backfill_user_ai_provider_configs(con):
 
     print(f"AI provider 配置回填完成：新增 {migrated} 条历史配置。")
 
+
+def _has_primary_key(con, table_name: str) -> bool:
+    info = con.execute(f"PRAGMA table_info('{table_name}')").fetchall()
+    return any(bool(row[5]) for row in info)
+
+
+def _drop_indexes(con, index_names: list[str]) -> None:
+    for index_name in index_names:
+        try:
+            con.execute(f"DROP INDEX IF EXISTS {index_name}")
+        except Exception as exc:
+            print(f"删除索引 {index_name} 失败: {exc}")
+
+
+def _rebuild_table_without_art_indexes(
+    con,
+    *,
+    table_name: str,
+    key_cols: list[str],
+    index_names: list[str],
+) -> None:
+    """
+    Rebuild high-churn fact tables without DuckDB ART-backed PK/indexes.
+
+    Several daily sync tables are append/update-heavy. Once an ART index is invalidated,
+    any later write can fatal the process even if application code avoids ON CONFLICT.
+    Rebuilding with CTAS drops constraints/indexes and deduplicates by the logical key.
+    """
+    table_info = con.execute(f"PRAGMA table_info('{table_name}')").fetchall()
+    if not table_info:
+        return
+
+    _drop_indexes(con, index_names)
+
+    if not _has_primary_key(con, table_name):
+        return
+
+    columns = [row[1] for row in table_info]
+    missing_keys = [col for col in key_cols if col not in columns]
+    if missing_keys:
+        print(f"跳过 {table_name} ART 迁移，缺少主键列: {missing_keys}")
+        return
+
+    quoted_cols = ", ".join(f'"{col}"' for col in columns)
+    partition_cols = ", ".join(f'"{col}"' for col in key_cols)
+    tmp_table = f"{table_name}__no_art"
+
+    print(f"检测到 {table_name} 存在 ART 主键，开始重建为无主键去重表...")
+    con.execute(f"DROP TABLE IF EXISTS {tmp_table}")
+    con.execute(
+        f"""
+        CREATE TABLE {tmp_table} AS
+        SELECT {quoted_cols}
+        FROM (
+            SELECT
+                {quoted_cols},
+                ROW_NUMBER() OVER (
+                    PARTITION BY {partition_cols}
+                    ORDER BY rowid DESC
+                ) AS __rn
+            FROM {table_name}
+        )
+        WHERE __rn = 1
+        """
+    )
+    con.execute(f"DROP TABLE {table_name}")
+    con.execute(f"ALTER TABLE {tmp_table} RENAME TO {table_name}")
+    print(f"{table_name} ART 主键迁移完成。")
+
+
+def _migrate_art_indexed_fact_tables(con):
+    fact_tables = [
+        {
+            "table_name": "daily_price",
+            "key_cols": ["trade_date", "ts_code"],
+            "index_names": ["idx_daily_price_tscode", "idx_daily_price_date"],
+        },
+        {
+            "table_name": "stock_moneyflow",
+            "key_cols": ["ts_code", "trade_date"],
+            "index_names": ["idx_moneyflow_date"],
+        },
+        {
+            "table_name": "stock_daily_basic",
+            "key_cols": ["trade_date", "ts_code"],
+            "index_names": ["idx_stock_daily_basic_date", "idx_stock_daily_basic_tscode"],
+        },
+        {
+            "table_name": "stock_factor_daily",
+            "key_cols": ["trade_date", "ts_code"],
+            "index_names": ["idx_stock_factor_daily_date", "idx_stock_factor_daily_tscode"],
+        },
+        {
+            "table_name": "market_index",
+            "key_cols": ["trade_date", "ts_code"],
+            "index_names": [],
+        },
+        {
+            "table_name": "stock_margin",
+            "key_cols": ["ts_code", "trade_date"],
+            "index_names": ["idx_margin_date", "idx_stock_margin_date", "idx_stock_margin_tscode"],
+        },
+    ]
+    for table in fact_tables:
+        try:
+            _rebuild_table_without_art_indexes(con, **table)
+        except Exception as exc:
+            print(f"{table['table_name']} ART 索引迁移失败: {exc}")
+
+
 def initialize_database():
     """
     初始化数据库。如果数据库文件不存在，则创建它，并根据 schema.py 中的定义创建所有表。
@@ -107,6 +217,8 @@ def initialize_database():
             for table_sql in ALL_TABLES_SQL:
                 con.execute(table_sql)
             print("数据库表结构初始化/验证完成。")
+
+            _migrate_art_indexed_fact_tables(con)
             
             # 检查 users 表是否为空，如果为空则添加默认管理员用户
             user_count = con.execute("SELECT COUNT(*) FROM users").fetchone()[0]

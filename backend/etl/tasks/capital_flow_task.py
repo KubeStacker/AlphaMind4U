@@ -5,6 +5,7 @@ from etl.calendar import trading_calendar
 from db.connection import get_db_connection, fetch_df
 import pandas as pd
 import time
+from etl.utils.art_safe_write import dedupe_by_key, update_then_insert_missing
 
 logger = logging.getLogger(__name__)
 
@@ -140,21 +141,20 @@ class CapitalFlowTask(BaseTask):
             df['net_mf_ratio'] = None
         df_to_save = df[cols].copy()
         df_to_save['trade_date'] = pd.to_datetime(df_to_save['trade_date']).dt.date
-        df_to_save = df_to_save.drop_duplicates(subset=['ts_code', 'trade_date'], keep='last')
+        df_to_save = dedupe_by_key(
+            df_to_save,
+            key_cols=['ts_code', 'trade_date'],
+            table_name='stock_moneyflow',
+            logger=logger,
+        )
         
         with get_db_connection() as con:
-            try:
-                con.register('df_view', df_to_save)
-                update_set = ",".join(
-                    f"{col}=EXCLUDED.{col}" for col in cols if col not in ("ts_code", "trade_date")
-                )
-                con.execute(
-                    f"""
-                    INSERT INTO stock_moneyflow ({",".join(cols)})
-                    SELECT {",".join(cols)} FROM df_view
-                    ON CONFLICT (ts_code, trade_date) DO UPDATE SET
-                        {update_set}
-                    """
-                )
-            finally:
-                con.unregister('df_view')
+            update_then_insert_missing(
+                con,
+                df=df_to_save,
+                table_name='stock_moneyflow',
+                view_name='df_view',
+                columns=cols,
+                key_cols=['ts_code', 'trade_date'],
+                logger=logger,
+            )

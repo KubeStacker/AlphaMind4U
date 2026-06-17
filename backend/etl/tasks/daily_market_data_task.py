@@ -6,6 +6,7 @@ from tenacity import retry, stop_after_attempt, wait_fixed
 from etl.tasks.base_task import BaseTask
 from db.connection import get_db_connection, fetch_df
 from etl.calendar import trading_calendar
+from etl.utils.art_safe_write import dedupe_by_key, update_then_insert_missing
 
 logger = logging.getLogger(__name__)
 
@@ -176,28 +177,23 @@ class DailyMarketDataTask(BaseTask):
         
         df_to_save = df[cols].copy()
         df_to_save['trade_date'] = pd.to_datetime(df_to_save['trade_date']).dt.date
-        df_to_save = df_to_save.drop_duplicates(subset=['trade_date', 'ts_code'], keep='last')
+        df_to_save = dedupe_by_key(
+            df_to_save,
+            key_cols=['trade_date', 'ts_code'],
+            table_name='daily_price',
+            logger=logger,
+        )
         
         with get_db_connection() as con:
-            try:
-                con.unregister('df_daily_view')
-            except Exception:
-                pass
-            try:
-                con.register('df_daily_view', df_to_save)
-                update_set = ",".join(
-                    f"{col}=EXCLUDED.{col}" for col in cols if col not in ("trade_date", "ts_code")
-                )
-                con.execute(
-                    f"""
-                    INSERT INTO daily_price ({",".join(cols)})
-                    SELECT {",".join(cols)} FROM df_daily_view
-                    ON CONFLICT (trade_date, ts_code) DO UPDATE SET
-                        {update_set}
-                    """
-                )
-            finally:
-                con.unregister('df_daily_view')
+            update_then_insert_missing(
+                con,
+                df=df_to_save,
+                table_name='daily_price',
+                view_name='df_daily_view',
+                columns=cols,
+                key_cols=['trade_date', 'ts_code'],
+                logger=logger,
+            )
 
     def calculate_technical_factors(self, trade_date: str):
         """计算指定日期的技术因子

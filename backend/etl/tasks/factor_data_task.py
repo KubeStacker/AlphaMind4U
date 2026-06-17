@@ -6,6 +6,7 @@ import time
 from db.connection import fetch_df, get_db_connection
 from etl.calendar import trading_calendar
 from etl.tasks.base_task import BaseTask
+from etl.utils.art_safe_write import dedupe_by_key, update_then_insert_missing
 
 logger = logging.getLogger(__name__)
 
@@ -235,24 +236,25 @@ class FactorDataTask(BaseTask):
                 df[col] = None
 
     def _upsert_daily_basic(self, df: pd.DataFrame):
+        for col in self.DAILY_BASIC_COLUMNS:
+            if col not in df.columns:
+                df[col] = None
+
         df_to_save = df[self.DAILY_BASIC_COLUMNS].copy()
         df_to_save["trade_date"] = pd.to_datetime(df_to_save["trade_date"]).dt.date
-        df_to_save = df_to_save.drop_duplicates(subset=["trade_date", "ts_code"], keep="last")
+        df_to_save = dedupe_by_key(
+            df_to_save,
+            key_cols=["trade_date", "ts_code"],
+            table_name="stock_daily_basic",
+            logger=logger,
+        )
         with get_db_connection() as con:
-            try:
-                con.register("factor_daily_basic_view", df_to_save)
-                update_set = ",".join(
-                    f"{col}=EXCLUDED.{col}"
-                    for col in self.DAILY_BASIC_COLUMNS
-                    if col not in ("trade_date", "ts_code")
-                )
-                con.execute(
-                    f"""
-                    INSERT INTO stock_daily_basic ({",".join(self.DAILY_BASIC_COLUMNS)})
-                    SELECT {",".join(self.DAILY_BASIC_COLUMNS)} FROM factor_daily_basic_view
-                    ON CONFLICT (trade_date, ts_code) DO UPDATE SET
-                        {update_set}
-                    """
-                )
-            finally:
-                con.unregister("factor_daily_basic_view")
+            update_then_insert_missing(
+                con,
+                df=df_to_save,
+                table_name="stock_daily_basic",
+                view_name="factor_daily_basic_view",
+                columns=self.DAILY_BASIC_COLUMNS,
+                key_cols=["trade_date", "ts_code"],
+                logger=logger,
+            )

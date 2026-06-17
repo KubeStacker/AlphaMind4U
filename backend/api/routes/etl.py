@@ -120,7 +120,7 @@ class TaskRegistry:
             with get_db_connection() as con:
                 # 恢复僵尸任务：10分钟没心跳的 RUNNING 改回 PENDING
                 con.execute(
-                    "UPDATE etl_tasks SET status = 'PENDING' WHERE status = 'RUNNING' AND (heartbeat_at < CURRENT_TIMESTAMP - INTERVAL 10 MINUTE OR heartbeat_at IS NULL)"
+                    "UPDATE etl_tasks SET status = 'PENDING' WHERE status = 'RUNNING' AND (heartbeat_at < CURRENT_TIMESTAMP - INTERVAL 1 MINUTE OR heartbeat_at IS NULL)"
                 )
 
                 task_id_row = con.execute(

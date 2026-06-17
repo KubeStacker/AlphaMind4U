@@ -116,7 +116,13 @@ class SyncEngine:
         
         # 2. 指数同步（覆盖情绪模型依赖指数）
         self.sync_core_market_indices(years=0, days=5)
-        
+
+        # 2.5. 融资融券数据
+        try:
+            self.sync_margin_trading_data(days=3)
+        except Exception as e:
+            logger.warning(f"融资融券数据同步失败: {e}")
+
         # 3. 验证数据完整性
         self._validate_daily_update()
         

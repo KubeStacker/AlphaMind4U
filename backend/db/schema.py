@@ -50,8 +50,7 @@ CREATE TABLE IF NOT EXISTS daily_price (
     vol             DOUBLE,
     amount          DOUBLE,
     factors         JSON,
-    adj_factor      DOUBLE,
-    PRIMARY KEY (trade_date, ts_code)
+    adj_factor      DOUBLE
 );
 """
 
@@ -98,8 +97,7 @@ CREATE TABLE IF NOT EXISTS stock_moneyflow (
     sell_elg_amount DOUBLE,
     net_mf_vol      DOUBLE,
     net_mf_amount   DOUBLE,
-    net_mf_ratio    DOUBLE,
-    PRIMARY KEY (ts_code, trade_date)
+    net_mf_ratio    DOUBLE
 );
 """
 
@@ -129,9 +127,7 @@ CREATE TABLE IF NOT EXISTS market_index (
 
     vol             DOUBLE,
 
-    amount          DOUBLE,
-
-    PRIMARY KEY (trade_date, ts_code)
+    amount          DOUBLE
 
 );
 
@@ -180,9 +176,7 @@ CREATE TABLE IF NOT EXISTS stock_margin (
 
     rzrqye          DOUBLE, -- 融资融券余额 (Total Margin Balance)
 
-    rqyl            DOUBLE, -- 融券余量 (Margin Short Volume)
-
-    PRIMARY KEY (ts_code, trade_date)
+    rqyl            DOUBLE -- 融券余量 (Margin Short Volume)
 
 );
 
@@ -279,8 +273,7 @@ CREATE TABLE IF NOT EXISTS stock_daily_basic (
     float_share      DOUBLE,
     free_share       DOUBLE,
     total_mv         DOUBLE,
-    circ_mv          DOUBLE,
-    PRIMARY KEY (trade_date, ts_code)
+    circ_mv          DOUBLE
 );
 """
 
@@ -381,8 +374,7 @@ CREATE TABLE IF NOT EXISTS stock_factor_daily (
     value_score            DOUBLE,
     flow_score             DOUBLE,
     event_score            DOUBLE,
-    factor_score           DOUBLE,
-    PRIMARY KEY (trade_date, ts_code)
+    factor_score           DOUBLE
 );
 """
 
@@ -686,16 +678,11 @@ ALL_TABLES_SQL = [
     CREATE_USERS_TABLE_SQL,
     CREATE_STOCK_BASIC_TABLE_SQL,
     CREATE_DAILY_PRICE_TABLE_SQL,
-    "CREATE INDEX IF NOT EXISTS idx_daily_price_tscode ON daily_price (ts_code);",
-    "CREATE INDEX IF NOT EXISTS idx_daily_price_date ON daily_price (trade_date);",
     CREATE_STOCK_CONCEPTS_TABLE_SQL,
     CREATE_STOCK_CONCEPT_DETAILS_TABLE_SQL,
     "CREATE INDEX IF NOT EXISTS idx_concept_details_tscode ON stock_concept_details (ts_code);",
     CREATE_STOCK_MONEYFLOW_TABLE_SQL,
-    "CREATE INDEX IF NOT EXISTS idx_moneyflow_date ON stock_moneyflow (trade_date);",
     CREATE_STOCK_DAILY_BASIC_TABLE_SQL,
-    "CREATE INDEX IF NOT EXISTS idx_stock_daily_basic_date ON stock_daily_basic (trade_date);",
-    "CREATE INDEX IF NOT EXISTS idx_stock_daily_basic_tscode ON stock_daily_basic (ts_code);",
     CREATE_MARKET_INDEX_TABLE_SQL,
     CREATE_MARKET_SENTIMENT_TABLE_SQL,
     CREATE_STOCK_MARGIN_TABLE_SQL,
@@ -716,12 +703,8 @@ ALL_TABLES_SQL = [
     CREATE_STRATEGY_OBSERVATIONS_TABLE_SQL,
     CREATE_STRATEGY_BACKTEST_RUNS_TABLE_SQL,
     CREATE_STRATEGY_DAILY_SUMMARIES_TABLE_SQL,
-    "CREATE INDEX IF NOT EXISTS idx_stock_margin_date ON stock_margin (trade_date);",
-    "CREATE INDEX IF NOT EXISTS idx_stock_margin_tscode ON stock_margin (ts_code);",
     "CREATE INDEX IF NOT EXISTS idx_stock_index_member_tscode ON stock_index_member_all (ts_code);",
     "CREATE INDEX IF NOT EXISTS idx_stock_express_tscode ON stock_express (ts_code);",
-    "CREATE INDEX IF NOT EXISTS idx_stock_factor_daily_date ON stock_factor_daily (trade_date);",
-    "CREATE INDEX IF NOT EXISTS idx_stock_factor_daily_tscode ON stock_factor_daily (ts_code);",
     "CREATE INDEX IF NOT EXISTS idx_ai_analysis_cache_user_tscode ON ai_analysis_cache (user_id, ts_code);",
     "CREATE INDEX IF NOT EXISTS idx_strategy_observations_date ON strategy_observations (observation_date);",
     "CREATE INDEX IF NOT EXISTS idx_strategy_observations_key ON strategy_observations (strategy_key);",

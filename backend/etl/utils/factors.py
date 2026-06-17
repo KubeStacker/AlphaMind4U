@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 
 from db.connection import fetch_df, get_db_connection
+from etl.utils.art_safe_write import dedupe_by_key, update_then_insert_missing
 
 logger = logging.getLogger(__name__)
 
@@ -726,21 +727,22 @@ class FactorCalculator:
         if df.empty:
             return
 
-        df = df.drop_duplicates(subset=["trade_date", "ts_code"], keep="last")
+        df = dedupe_by_key(
+            df,
+            key_cols=["trade_date", "ts_code"],
+            table_name="stock_factor_daily",
+            logger=logger,
+        )
         with get_db_connection() as con:
-            con.register("factor_snapshot_view", df)
             cols = df.columns.tolist()
-            col_str = ",".join(cols)
-            update_set = ",".join(
-                f"{col}=EXCLUDED.{col}" for col in cols if col not in ("trade_date", "ts_code")
-            )
-            con.execute(
-                f"""
-                INSERT INTO stock_factor_daily ({col_str})
-                SELECT {col_str} FROM factor_snapshot_view
-                ON CONFLICT (trade_date, ts_code) DO UPDATE SET
-                    {update_set}
-                """
+            update_then_insert_missing(
+                con,
+                df=df,
+                table_name="stock_factor_daily",
+                view_name="factor_snapshot_view",
+                columns=cols,
+                key_cols=["trade_date", "ts_code"],
+                logger=logger,
             )
 
     def _sync_daily_price_factors_from_snapshot(self, trade_date: str):

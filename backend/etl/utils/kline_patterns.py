@@ -1801,6 +1801,9 @@ LEVEL_FAMILY_TEXT = {
     "volume": "成交密集区",
     "gap": "缺口",
     "structure": "结构触线",
+    "capital": "主力资金",
+    "fibonacci": "斐波那契",
+    "round": "整数关口",
 }
 
 
@@ -1893,6 +1896,60 @@ def _describe_level_source(source: str, level_type: str) -> tuple[str, str, str,
         basis = "三触顶结构压力"
         definition = "至少一次阳线收盘价锚定，加两次上影摸线；该结构只作为触线证据之一，最终仍需与趋势线、均线、缺口或成交密集区共振确认"
         breach_rule = "放量站上说明三触顶结构被化解"
+        return basis, definition, breach_rule, "structure"
+
+    if normalized.startswith("HIST_LOW"):
+        basis = "历史多次反转低点"
+        definition = "全样本低点按 0.5% 价差聚类后，至少两次下探后出现有效反弹"
+        breach_rule = "跌破说明历史承接区被击穿"
+        return basis, definition, breach_rule, "pivot"
+
+    if normalized.startswith("HIST_HIGH"):
+        basis = "历史多次反转高点"
+        definition = "全样本高点按 0.5% 价差聚类后，至少两次冲高后出现有效回落"
+        breach_rule = "放量站上才算历史套牢区被化解"
+        return basis, definition, breach_rule, "pivot"
+
+    if normalized.startswith("ROUND_SUPPORT") or normalized.startswith("ROUND_RESISTANCE"):
+        basis = "整数心理关口"
+        definition = "价格落在整数位 0.5% 范围内，按 A 股常见心理价位标记"
+        breach_rule = "跌破整数位说明心理支撑失效" if level_type == "support" else "放量站上整数位才算心理压力化解"
+        return basis, definition, breach_rule, "round"
+
+    if normalized.startswith("CAPITAL_IN_SUPPORT"):
+        basis = "主力连续净流入低点"
+        definition = "连续三日主力净流入且累计额处于近期高分位，对应区间最低价"
+        breach_rule = "跌破说明资金承接区失守"
+        return basis, definition, breach_rule, "capital"
+
+    if normalized.startswith("CAPITAL_OUT_RESISTANCE"):
+        basis = "主力连续净流出高点"
+        definition = "连续三日主力净流出且累计流出额处于近期高分位，对应区间最高价"
+        breach_rule = "放量站上说明资金抛压区被消化"
+        return basis, definition, breach_rule, "capital"
+
+    if normalized.startswith("CAPITAL_SPIKE_SUPPORT"):
+        basis = "主力单日大额净流入低点"
+        definition = "单日主力净流入达到近期均值三倍以上，对应当日最低价"
+        breach_rule = "跌破说明大额流入承接失败"
+        return basis, definition, breach_rule, "capital"
+
+    if normalized.startswith("CAPITAL_SPIKE_RESISTANCE"):
+        basis = "主力单日大额净流出高点"
+        definition = "单日主力净流出达到近期均值三倍以上，对应当日最高价"
+        breach_rule = "放量站上说明大额流出抛压被消化"
+        return basis, definition, breach_rule, "capital"
+
+    if normalized.startswith("FIB_SUPPORT") or normalized.startswith("FIB_RESISTANCE"):
+        basis = "斐波那契回撤位"
+        definition = "按最近主升/主跌波段计算 0.382/0.5/0.618/0.786 回撤位"
+        breach_rule = "跌破说明回撤防线失效" if level_type == "support" else "放量站上说明回撤压力化解"
+        return basis, definition, breach_rule, "fibonacci"
+
+    if normalized.startswith("BREAKOUT_ROLE_SHIFT_SUPPORT"):
+        basis = "压力转支撑候选"
+        definition = "原上方压力被连续三日放量站稳，回踩时按压力转支撑候选观察"
+        breach_rule = "跌回该价带下方说明突破确认失败"
         return basis, definition, breach_rule, "structure"
 
     if normalized == "ATR_SUPPORT":
@@ -2130,19 +2187,33 @@ def _collect_volume_profile_level_candidates(
     if len(df) < 12 or not volume_col or volume_col not in df.columns or not {"close", "high", "low"}.issubset(df.columns):
         return []
 
-    window = df.tail(min(len(df), 60)).copy()
+    window = df.tail(min(len(df), 120)).copy()
     typical_price = (
         pd.to_numeric(window["high"], errors="coerce")
         + pd.to_numeric(window["low"], errors="coerce")
         + pd.to_numeric(window["close"], errors="coerce")
     ) / 3.0
     volume = pd.to_numeric(window[volume_col], errors="coerce").fillna(0.0)
+    amount_weight = typical_price * volume
+    turnover = _first_numeric_series(window, ("turnover_rate", "turnover_rate_f"))
     mask = typical_price.notna() & volume.gt(0)
     if int(mask.sum()) < 8:
         return []
 
-    bins = int(np.clip(np.sqrt(mask.sum()) * 2.2, 12, 24))
-    weights, edges = np.histogram(typical_price.loc[mask], bins=bins, weights=np.maximum(volume.loc[mask], 1.0))
+    low_edge = float(typical_price.loc[mask].min())
+    high_edge = float(typical_price.loc[mask].max())
+    if high_edge <= low_edge:
+        return []
+    step = max(close * 0.01, (high_edge - low_edge) / 40.0, 0.01)
+    edges = np.arange(low_edge, high_edge + step * 1.5, step)
+    if len(edges) < 3:
+        return []
+
+    weights, edges = np.histogram(
+        typical_price.loc[mask],
+        bins=edges,
+        weights=np.maximum(amount_weight.loc[mask], 1.0),
+    )
     if not np.any(weights > 0):
         return []
 
@@ -2172,6 +2243,8 @@ def _collect_volume_profile_level_candidates(
         raw_nodes.append(
             {
                 "price": center,
+                "lower": float(edges[idx]),
+                "upper": float(edges[idx + 1]),
                 "strength": float(weight / max(nonzero_weights.mean(), 1.0)),
                 "prominence": prominence,
             }
@@ -2188,15 +2261,27 @@ def _collect_volume_profile_level_candidates(
     candidates: list[dict] = []
     prefix = "VP_SUPPORT" if level_type == "support" else "VP_RESISTANCE"
     for idx, node in enumerate(selected_nodes, start=1):
+        price_for_role = node["lower"] if level_type == "support" else node["upper"]
         extra_strength = min(
             max(node["strength"] - 1.0, 0.0) * 0.28 + max(node["prominence"] - 1.0, 0.0) * 0.18,
             0.75,
         )
+        if turnover is not None:
+            in_bucket = (typical_price >= node["lower"]) & (typical_price <= node["upper"])
+            bucket_turnover = turnover.loc[in_bucket].dropna()
+            if not bucket_turnover.empty:
+                avg_turnover = float(bucket_turnover.mean())
+                hist_turnover = turnover.dropna()
+                high_turnover = avg_turnover >= 15.0
+                if not high_turnover and len(hist_turnover) >= 10:
+                    high_turnover = avg_turnover >= float(hist_turnover.quantile(0.80))
+                if high_turnover:
+                    extra_strength += 0.24
         candidate = _build_level_candidate(
             df,
             level_type=level_type,
             source=f"{prefix}_{idx}",
-            price=node["price"],
+            price=price_for_role,
             close=close,
             base_weight=1.18,
             touch_band=touch_band,
@@ -2205,6 +2290,549 @@ def _collect_volume_profile_level_candidates(
         )
         if candidate:
             candidates.append(candidate)
+    return candidates
+
+
+def _first_numeric_series(df: pd.DataFrame, names: Sequence[str]) -> pd.Series | None:
+    for name in names:
+        if name in df.columns:
+            series = pd.to_numeric(df[name], errors="coerce")
+            if series.notna().any():
+                return series
+    return None
+
+
+def _expand_embedded_factors(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty or "factors" not in df.columns:
+        return df
+
+    work = df.copy()
+    parsed_rows: list[dict[str, Any]] = []
+    for raw in work["factors"].tolist():
+        parsed: dict[str, Any] = {}
+        if isinstance(raw, dict):
+            parsed = raw
+        elif isinstance(raw, str) and raw.strip():
+            try:
+                loaded = json.loads(raw)
+                parsed = loaded if isinstance(loaded, dict) else {}
+            except json.JSONDecodeError:
+                parsed = {}
+        parsed_rows.append(parsed)
+
+    keys = sorted({key for item in parsed_rows for key in item.keys()})
+    for key in keys:
+        values = pd.Series([item.get(key) for item in parsed_rows], index=work.index)
+        numeric_values = pd.to_numeric(values, errors="coerce")
+        if key in work.columns:
+            existing = pd.to_numeric(work[key], errors="coerce")
+            work[key] = existing.where(existing.notna(), numeric_values)
+        else:
+            work[key] = numeric_values
+    return work
+
+
+def _collect_historical_reversal_level_candidates(
+    df: pd.DataFrame,
+    close: float,
+    level_type: str,
+    touch_band: float,
+    volume_col: str,
+) -> list[dict]:
+    if len(df) < 20 or not {"high", "low", "close"}.issubset(df.columns):
+        return []
+
+    work = df.reset_index(drop=True).copy()
+    highs = pd.to_numeric(work["high"], errors="coerce")
+    lows = pd.to_numeric(work["low"], errors="coerce")
+    closes = pd.to_numeric(work["close"], errors="coerce")
+    prices = lows if level_type == "support" else highs
+    valid_items = [(idx, float(value)) for idx, value in prices.items() if pd.notna(value) and value > 0]
+    if len(valid_items) < 6:
+        return []
+
+    clusters: list[dict[str, Any]] = []
+    for idx, price in sorted(valid_items, key=lambda item: item[1]):
+        matched = None
+        for cluster in clusters:
+            if abs(price - float(cluster["center"])) / max(float(cluster["center"]), EPS) <= 0.005:
+                matched = cluster
+                break
+        if matched is None:
+            clusters.append({"center": price, "items": [(idx, price)]})
+        else:
+            matched["items"].append((idx, price))
+            matched["center"] = float(np.median([item[1] for item in matched["items"]]))
+
+    candidates: list[dict] = []
+    min_move = max(close * 0.008, touch_band * 1.4)
+    for cluster in clusters:
+        items = list(cluster["items"])
+        if len(items) < 2:
+            continue
+        reversal_count = 0
+        touch_volume = 0.0
+        for idx, price in items:
+            future = closes.iloc[idx + 1: min(len(closes), idx + 6)].dropna()
+            if future.empty:
+                continue
+            if level_type == "support":
+                if float(future.max()) >= price + min_move:
+                    reversal_count += 1
+            else:
+                if float(future.min()) <= price - min_move:
+                    reversal_count += 1
+            if volume_col and volume_col in work.columns:
+                touch_volume += _safe_number(work.iloc[idx].get(volume_col), 0.0) or 0.0
+        if reversal_count < 2:
+            continue
+
+        price = float(cluster["center"])
+        age = len(work) - 1 - max(idx for idx, _ in items)
+        if abs(close - price) / close > 0.35 and age > 60:
+            continue
+        base_weight = 1.24 if reversal_count >= 3 else 1.14
+        extra_strength = min(0.72, reversal_count * 0.12 + len(items) * 0.05)
+        if touch_volume > 0 and volume_col and volume_col in work.columns:
+            avg_volume = _safe_number(pd.to_numeric(work[volume_col], errors="coerce").replace(0, np.nan).mean(), 0.0) or 0.0
+            if avg_volume > 0:
+                extra_strength += min(0.26, max(touch_volume / max(avg_volume * len(items), 1.0) - 1.0, 0.0) * 0.12)
+
+        source = f"HIST_LOW_{reversal_count}" if level_type == "support" else f"HIST_HIGH_{reversal_count}"
+        candidate = _build_level_candidate(
+            df,
+            level_type=level_type,
+            source=source,
+            price=price,
+            close=close,
+            base_weight=base_weight,
+            touch_band=touch_band,
+            volume_col=volume_col,
+            extra_strength=extra_strength,
+        )
+        if candidate:
+            candidate["touch_count"] = max(int(candidate.get("touch_count") or 0), len(items))
+            candidates.append(candidate)
+
+    selected: list[dict] = []
+    for item in sorted(candidates, key=lambda candidate: (-candidate["weight"], candidate["distance_pct"])):
+        if any(abs(float(item["price"]) - float(prev["price"])) <= touch_band for prev in selected):
+            continue
+        selected.append(item)
+        if len(selected) >= 4:
+            break
+    return selected
+
+
+def _round_step_for_price(close: float) -> float:
+    if close < 20:
+        return 1.0
+    if close < 80:
+        return 5.0
+    return 10.0
+
+
+def _collect_round_number_level_candidates(
+    df: pd.DataFrame,
+    close: float,
+    level_type: str,
+    touch_band: float,
+    volume_col: str,
+) -> list[dict]:
+    if close <= 0:
+        return []
+    step = _round_step_for_price(close)
+    start = np.floor(close * 0.65 / step) * step
+    end = np.ceil(close * 1.35 / step) * step
+    candidates: list[dict] = []
+    for price in np.arange(start, end + step * 0.5, step):
+        if price <= 0:
+            continue
+        near_round = abs(close - price) / max(price, EPS) <= 0.005
+        if not near_round and abs(close - price) / close > 0.12:
+            continue
+        if level_type == "support" and price > close * 1.002:
+            continue
+        if level_type == "resistance" and price < close * 0.998:
+            continue
+        candidate = _build_level_candidate(
+            df,
+            level_type=level_type,
+            source=f"ROUND_{'SUPPORT' if level_type == 'support' else 'RESISTANCE'}",
+            price=float(price),
+            close=close,
+            base_weight=0.82,
+            touch_band=max(touch_band, close * 0.005),
+            volume_col=volume_col,
+            extra_strength=0.10 if near_round else 0.0,
+        )
+        if candidate:
+            candidates.append(candidate)
+    return candidates[:3]
+
+
+def _collect_capital_flow_level_candidates(
+    df: pd.DataFrame,
+    close: float,
+    level_type: str,
+    touch_band: float,
+    volume_col: str,
+) -> list[dict]:
+    flow = _first_numeric_series(df, ("main_net_flow", "net_mf_amount", "net_inflow"))
+    if flow is None or len(df) < 8 or not {"high", "low"}.issubset(df.columns):
+        return []
+
+    work = df.reset_index(drop=True).copy()
+    flow = flow.reset_index(drop=True).fillna(0.0)
+    abs_flow = flow.abs()
+    recent_abs = abs_flow.tail(min(len(abs_flow), 60))
+    avg_abs = float(recent_abs.replace(0, np.nan).mean() or 0.0)
+    high_bar = float(recent_abs.quantile(0.80)) if recent_abs.gt(0).sum() >= 8 else avg_abs
+    candidates: list[dict] = []
+
+    for idx in range(2, len(work)):
+        seg = flow.iloc[idx - 2: idx + 1]
+        if level_type == "support" and bool((seg > 0).all()):
+            total = float(seg.sum())
+            if total >= max(high_bar, avg_abs * 2.0, EPS):
+                price = _safe_number(pd.to_numeric(work.iloc[idx - 2: idx + 1]["low"], errors="coerce").min())
+                candidate = _build_level_candidate(
+                    df,
+                    level_type="support",
+                    source=f"CAPITAL_IN_SUPPORT_{len(work) - 1 - idx}",
+                    price=price,
+                    close=close,
+                    base_weight=1.24,
+                    touch_band=touch_band,
+                    volume_col=volume_col,
+                    extra_strength=min(0.66, total / max(high_bar, EPS) * 0.10),
+                )
+                if candidate:
+                    candidates.append(candidate)
+        if level_type == "resistance" and bool((seg < 0).all()):
+            total = float(abs(seg.sum()))
+            if total >= max(high_bar, avg_abs * 2.0, EPS):
+                price = _safe_number(pd.to_numeric(work.iloc[idx - 2: idx + 1]["high"], errors="coerce").max())
+                candidate = _build_level_candidate(
+                    df,
+                    level_type="resistance",
+                    source=f"CAPITAL_OUT_RESISTANCE_{len(work) - 1 - idx}",
+                    price=price,
+                    close=close,
+                    base_weight=1.24,
+                    touch_band=touch_band,
+                    volume_col=volume_col,
+                    extra_strength=min(0.66, total / max(high_bar, EPS) * 0.10),
+                )
+                if candidate:
+                    candidates.append(candidate)
+
+    if avg_abs > 0:
+        for idx, value in flow.tail(min(len(flow), 60)).items():
+            magnitude = abs(float(value))
+            if magnitude < avg_abs * 3.0:
+                continue
+            if value > 0 and level_type == "support":
+                price = _safe_number(work.iloc[idx].get("low"))
+                source = f"CAPITAL_SPIKE_SUPPORT_{len(work) - 1 - idx}"
+            elif value < 0 and level_type == "resistance":
+                price = _safe_number(work.iloc[idx].get("high"))
+                source = f"CAPITAL_SPIKE_RESISTANCE_{len(work) - 1 - idx}"
+            else:
+                continue
+            candidate = _build_level_candidate(
+                df,
+                level_type=level_type,
+                source=source,
+                price=price,
+                close=close,
+                base_weight=1.32,
+                touch_band=touch_band,
+                volume_col=volume_col,
+                extra_strength=min(0.82, magnitude / max(avg_abs, EPS) * 0.08),
+            )
+            if candidate:
+                candidates.append(candidate)
+
+    selected: list[dict] = []
+    for item in sorted(candidates, key=lambda candidate: (candidate["distance_pct"], -candidate["weight"])):
+        if any(abs(float(item["price"]) - float(prev["price"])) <= touch_band for prev in selected):
+            continue
+        selected.append(item)
+        if len(selected) >= 3:
+            break
+    return selected
+
+
+def _collect_fibonacci_level_candidates(
+    df: pd.DataFrame,
+    close: float,
+    level_type: str,
+    touch_band: float,
+    volume_col: str,
+) -> list[dict]:
+    if len(df) < 20 or not {"high", "low"}.issubset(df.columns):
+        return []
+
+    window = df.tail(min(len(df), 120)).reset_index(drop=True)
+    highs = pd.to_numeric(window["high"], errors="coerce")
+    lows = pd.to_numeric(window["low"], errors="coerce")
+    if highs.dropna().empty or lows.dropna().empty:
+        return []
+
+    low_idx = int(lows.idxmin())
+    high_idx = int(highs.idxmax())
+    low_price = float(lows.iloc[low_idx])
+    high_price = float(highs.iloc[high_idx])
+    if high_price <= low_price:
+        return []
+
+    ratios = (0.382, 0.5, 0.618, 0.786)
+    candidates: list[dict] = []
+    if low_idx < high_idx:
+        for ratio in ratios:
+            price = high_price - (high_price - low_price) * ratio
+            if level_type != "support":
+                continue
+            candidate = _build_level_candidate(
+                df,
+                level_type="support",
+                source=f"FIB_SUPPORT_{int(ratio * 1000)}",
+                price=price,
+                close=close,
+                base_weight=0.98,
+                touch_band=max(touch_band, close * 0.006),
+                volume_col=volume_col,
+                extra_strength=0.08,
+            )
+            if candidate:
+                candidates.append(candidate)
+    else:
+        for ratio in ratios:
+            price = low_price + (high_price - low_price) * ratio
+            if level_type != "resistance":
+                continue
+            candidate = _build_level_candidate(
+                df,
+                level_type="resistance",
+                source=f"FIB_RESISTANCE_{int(ratio * 1000)}",
+                price=price,
+                close=close,
+                base_weight=0.98,
+                touch_band=max(touch_band, close * 0.006),
+                volume_col=volume_col,
+                extra_strength=0.08,
+            )
+            if candidate:
+                candidates.append(candidate)
+
+    return candidates[:4]
+
+
+def _collect_breakout_role_shift_candidates(
+    df: pd.DataFrame,
+    close: float,
+    level_type: str,
+    touch_band: float,
+    volume_col: str,
+) -> list[dict]:
+    if level_type != "support" or len(df) < 20 or not {"high", "close"}.issubset(df.columns):
+        return []
+
+    if not volume_col or volume_col not in df.columns:
+        return []
+
+    closes = pd.to_numeric(df["close"], errors="coerce")
+    highs = pd.to_numeric(df["high"], errors="coerce")
+    volumes = pd.to_numeric(df[volume_col], errors="coerce").fillna(0.0)
+    vol_ma5 = volumes.rolling(5, min_periods=1).mean()
+    if len(closes.dropna()) < 10:
+        return []
+
+    recent_highs = highs.iloc[:-3].tail(min(len(df), 60)).dropna()
+    if recent_highs.empty:
+        return []
+
+    seed_prices = sorted(set(round(float(value), 2) for value in recent_highs.tail(24).tolist()))
+    candidates: list[dict] = []
+    for price in seed_prices:
+        if price <= 0 or price > close * 1.002 or price < close * 0.88:
+            continue
+        last3_close = closes.tail(3)
+        last3_volume = volumes.tail(3)
+        last3_vol_ma5 = vol_ma5.tail(3)
+        if not (
+            len(last3_close.dropna()) == 3
+            and bool((last3_close > price).all())
+            and bool((last3_volume >= last3_vol_ma5 * 1.08).all())
+        ):
+            continue
+        prior_touches = int(((recent_highs - price).abs() <= max(touch_band, price * 0.005)).sum())
+        if prior_touches < 2:
+            continue
+        candidate = _build_level_candidate(
+            df,
+            level_type="support",
+            source=f"BREAKOUT_ROLE_SHIFT_SUPPORT_{prior_touches}",
+            price=price,
+            close=close,
+            base_weight=1.28,
+            touch_band=max(touch_band, price * 0.005),
+            volume_col=volume_col,
+            extra_strength=min(0.54, prior_touches * 0.08),
+        )
+        if candidate:
+            candidate["role_shift_candidate"] = True
+            candidate["factor_notes"] = ["连续3日放量站稳原压力上方，标记压力转支撑候选"]
+            candidates.append(candidate)
+
+    selected: list[dict] = []
+    for item in sorted(candidates, key=lambda candidate: (candidate["distance_pct"], -candidate["weight"])):
+        if any(abs(float(item["price"]) - float(prev["price"])) <= touch_band for prev in selected):
+            continue
+        selected.append(item)
+        if len(selected) >= 2:
+            break
+    return selected
+
+
+def _ma_extra_strength(
+    df: pd.DataFrame,
+    ma_col: str,
+    close: float,
+    touch_band: float,
+) -> float:
+    if ma_col not in df.columns or len(df) < 8:
+        return 0.0
+
+    series = pd.to_numeric(df[ma_col], errors="coerce")
+    latest = _safe_number(series.iloc[-1])
+    if latest is None or latest <= 0:
+        return 0.0
+
+    lookback = df.tail(min(len(df), 60)).copy()
+    ma = pd.to_numeric(lookback[ma_col], errors="coerce")
+    lows = pd.to_numeric(lookback.get("low"), errors="coerce")
+    highs = pd.to_numeric(lookback.get("high"), errors="coerce")
+    closes = pd.to_numeric(lookback.get("close"), errors="coerce")
+    touches = ((lows <= ma + touch_band) & (highs >= ma - touch_band)).fillna(False)
+    touch_count = int(touches.sum())
+    if touch_count < 2:
+        return 0.0
+
+    prev = _safe_number(series.iloc[-6] if len(series) >= 6 else series.iloc[0], latest) or latest
+    slope_pct = abs(latest - prev) / max(abs(prev), EPS) * 100.0
+    flat_bonus = 0.18 if slope_pct <= 1.2 else 0.0
+    touch_bonus = min(touch_count * 0.05, 0.25)
+    bias_pct = abs(close / latest - 1.0) * 100.0
+    bias_penalty = -0.18 if bias_pct > 15.0 else 0.0
+    return float(np.clip(flat_bonus + touch_bonus + bias_penalty, -0.24, 0.46))
+
+
+def _rsi_divergence_boost(df: pd.DataFrame, level_type: str) -> float:
+    if "rsi_14" not in df.columns or len(df) < 20 or not {"high", "low"}.issubset(df.columns):
+        return 0.0
+    rsi = pd.to_numeric(df["rsi_14"], errors="coerce")
+    if rsi.dropna().empty:
+        return 0.0
+    recent = df.tail(min(len(df), 60)).reset_index(drop=True)
+    recent_rsi = pd.to_numeric(recent["rsi_14"], errors="coerce")
+    highs = pd.to_numeric(recent["high"], errors="coerce")
+    lows = pd.to_numeric(recent["low"], errors="coerce")
+    latest_rsi = _safe_number(recent_rsi.iloc[-1])
+    if latest_rsi is None:
+        return 0.0
+    if level_type == "resistance" and _safe_number(highs.iloc[-1]) is not None:
+        prev_high_idx = int(highs.iloc[:-1].idxmax()) if len(highs) > 1 and highs.iloc[:-1].notna().any() else None
+        if prev_high_idx is not None and float(highs.iloc[-1]) >= float(highs.iloc[prev_high_idx]) * 0.998:
+            prev_rsi = _safe_number(recent_rsi.iloc[prev_high_idx])
+            if prev_rsi is not None and latest_rsi < prev_rsi - 2.0:
+                return 0.22
+    if level_type == "support" and _safe_number(lows.iloc[-1]) is not None:
+        prev_low_idx = int(lows.iloc[:-1].idxmin()) if len(lows) > 1 and lows.iloc[:-1].notna().any() else None
+        if prev_low_idx is not None and float(lows.iloc[-1]) <= float(lows.iloc[prev_low_idx]) * 1.002:
+            prev_rsi = _safe_number(recent_rsi.iloc[prev_low_idx])
+            if prev_rsi is not None and latest_rsi > prev_rsi + 2.0:
+                return 0.22
+    return 0.0
+
+
+def _margin_context_boost(df: pd.DataFrame, level_type: str) -> float:
+    margin = _first_numeric_series(df, ("margin_balance", "rzye", "rzrqye"))
+    if margin is None or len(df) < 10 or "close" not in df.columns:
+        return 0.0
+    recent = margin.tail(min(len(margin), 20)).dropna()
+    if len(recent) < 5:
+        return 0.0
+    close_series = pd.to_numeric(df["close"], errors="coerce").tail(min(len(df), 60)).dropna()
+    if close_series.empty:
+        return 0.0
+    close = float(close_series.iloc[-1])
+    rank = float((close_series <= close).mean())
+    delta5 = float(recent.iloc[-1] - recent.iloc[-5])
+    if level_type == "resistance" and delta5 > 0 and rank >= 0.72:
+        return 0.16
+    if level_type == "support" and delta5 < 0 and rank <= 0.35:
+        return 0.14
+    return 0.0
+
+
+def _apply_factor_adjustments(
+    df: pd.DataFrame,
+    candidates: list[dict],
+    level_type: str,
+    close: float,
+    touch_band: float,
+) -> list[dict]:
+    if not candidates:
+        return candidates
+
+    volatility = _first_numeric_series(df, ("volatility_20", "vol_20", "vol_60"))
+    volatility_hot = False
+    if volatility is not None:
+        valid = volatility.dropna()
+        latest = _safe_number(valid.iloc[-1]) if not valid.empty else None
+        if latest is not None and len(valid) >= 10:
+            volatility_hot = latest >= float(valid.quantile(0.80))
+
+    turnover = _first_numeric_series(df, ("turnover_rate", "turnover_rate_f"))
+    rsi_boost = _rsi_divergence_boost(df, level_type)
+    margin_boost = _margin_context_boost(df, level_type)
+
+    for candidate in candidates:
+        notes: list[str] = list(candidate.get("factor_notes") or [])
+        multiplier = 1.0
+        additive = 0.0
+
+        if volatility_hot:
+            multiplier *= 0.90
+            notes.append("volatility_20 处于高分位，支撑/压力穿透概率上升，强度降级")
+
+        if turnover is not None and "close" in df.columns:
+            price = float(candidate.get("price") or 0.0)
+            closes = pd.to_numeric(df["close"], errors="coerce")
+            near = (closes - price).abs() <= max(touch_band, price * 0.005)
+            near_turnover = turnover.loc[near].dropna()
+            valid_turnover = turnover.dropna()
+            if not near_turnover.empty:
+                avg_turnover = float(near_turnover.mean())
+                high_turnover = avg_turnover >= 15.0
+                if not high_turnover and len(valid_turnover) >= 10:
+                    high_turnover = avg_turnover >= float(valid_turnover.quantile(0.80))
+                if high_turnover:
+                    additive += 0.22
+                    notes.append("价位附近换手充分，筹码交换强度升级")
+
+        if rsi_boost:
+            additive += rsi_boost
+            notes.append("RSI 背离增强该方向点位有效性")
+        if margin_boost:
+            additive += margin_boost
+            notes.append("两融余额变化与价格位置形成同向验证")
+
+        candidate["weight"] = round(float(candidate.get("weight") or 0.0) * multiplier + additive, 3)
+        if notes:
+            candidate["factor_notes"] = sorted(set(notes))
     return candidates
 
 
@@ -2569,6 +3197,9 @@ def _merge_level_clusters(candidates: Sequence[dict], cluster_band: float) -> li
             cloned["definitions"] = [item["definition"]]
             cloned["breach_rules"] = [item["breach_rule"]]
             cloned["families"] = [item["family"]]
+            cloned["factor_notes"] = list(item.get("factor_notes") or [])
+            if item.get("role_shift_candidate"):
+                cloned["role_shift_candidate"] = True
             cloned["dominant_basis"] = item["basis"]
             cloned["dominant_weight"] = float(item["weight"])
             cloned["dominant_family"] = item["family"]
@@ -2601,6 +3232,11 @@ def _merge_level_clusters(candidates: Sequence[dict], cluster_band: float) -> li
             values = set(existing.get(key, []))
             values.add(item[field])
             existing[key] = sorted(values)
+        factor_notes = set(existing.get("factor_notes") or [])
+        factor_notes.update(item.get("factor_notes") or [])
+        existing["factor_notes"] = sorted(factor_notes)
+        if item.get("role_shift_candidate"):
+            existing["role_shift_candidate"] = True
 
         if incoming_weight > float(existing.get("dominant_weight", 0.0)):
             existing["dominant_weight"] = incoming_weight
@@ -2610,9 +3246,11 @@ def _merge_level_clusters(candidates: Sequence[dict], cluster_band: float) -> li
     for item in merged:
         families = {str(family) for family in item.get("families", []) if family}
         level_type = str(item.get("type") or "")
-        strategic_families = families.intersection({"trend", "trendline", "pivot", "volume", "gap", "structure"})
-        emphasis_families = families.intersection({"trendline", "volume", "gap", "trend"})
+        strategic_families = families.intersection({"trend", "trendline", "pivot", "volume", "gap", "structure", "capital", "fibonacci"})
+        emphasis_families = families.intersection({"trendline", "volume", "gap", "trend", "capital"})
         multi_factor_bonus = min(len(strategic_families) * 0.16, 0.80) + min(len(emphasis_families) * 0.10, 0.32)
+        if "fibonacci" in families and strategic_families.difference({"fibonacci"}):
+            multi_factor_bonus += 0.22
         if level_type == "resistance":
             if len(strategic_families) >= 2:
                 multi_factor_bonus += 0.24
@@ -2732,15 +3370,16 @@ def build_structural_price_levels_legacy(df: pd.DataFrame, top_n: int = 2) -> di
             "selection_gap": None,
         }
 
-    work = _ensure_volume_col(df.copy())
+    work = _expand_embedded_factors(_ensure_volume_col(df.copy()))
     for col in ("open", "high", "low", "close", "volume", "amount"):
         if col in work.columns:
             work[col] = pd.to_numeric(work[col], errors="coerce")
 
-    for ma in (5, 10, 20, 60):
+    for ma in (5, 10, 20, 60, 120, 250):
         col = f"ma{ma}"
         if col not in work.columns:
-            work[col] = work["close"].rolling(ma, min_periods=1).mean()
+            min_periods = ma if ma >= 120 else 1
+            work[col] = work["close"].rolling(ma, min_periods=min_periods).mean()
         else:
             work[col] = pd.to_numeric(work[col], errors="coerce")
 
@@ -2772,8 +3411,10 @@ def build_structural_price_levels_legacy(df: pd.DataFrame, top_n: int = 2) -> di
         ("OPEN", open_price, 0.66),
         ("MA5", _safe_number(work.iloc[-1].get("ma5")), 0.76),
         ("MA10", _safe_number(work.iloc[-1].get("ma10")), 0.92),
-        ("MA20", _safe_number(work.iloc[-1].get("ma20")), 1.06),
-        ("MA60", _safe_number(work.iloc[-1].get("ma60")), 1.14),
+        ("MA20", _safe_number(work.iloc[-1].get("ma20")), 1.06 + _ma_extra_strength(work, "ma20", close, touch_band)),
+        ("MA60", _safe_number(work.iloc[-1].get("ma60")), 1.14 + _ma_extra_strength(work, "ma60", close, touch_band)),
+        ("MA120", _safe_number(work.iloc[-1].get("ma120")), 1.08 + _ma_extra_strength(work, "ma120", close, touch_band)),
+        ("MA250", _safe_number(work.iloc[-1].get("ma250")), 1.04 + _ma_extra_strength(work, "ma250", close, touch_band)),
         ("LOW_5", _safe_number(last_5["low"].min() if "low" in last_5.columns else None), 0.78),
         ("LOW_10", _safe_number(last_10["low"].min() if "low" in last_10.columns else None), 0.92),
         ("LOW_20", _safe_number(last_20["low"].min() if "low" in last_20.columns else None), 1.06),
@@ -2784,8 +3425,10 @@ def build_structural_price_levels_legacy(df: pd.DataFrame, top_n: int = 2) -> di
         ("OPEN", open_price, 0.66),
         ("MA5", _safe_number(work.iloc[-1].get("ma5")), 0.76),
         ("MA10", _safe_number(work.iloc[-1].get("ma10")), 0.92),
-        ("MA20", _safe_number(work.iloc[-1].get("ma20")), 1.06),
-        ("MA60", _safe_number(work.iloc[-1].get("ma60")), 1.14),
+        ("MA20", _safe_number(work.iloc[-1].get("ma20")), 1.06 + _ma_extra_strength(work, "ma20", close, touch_band)),
+        ("MA60", _safe_number(work.iloc[-1].get("ma60")), 1.14 + _ma_extra_strength(work, "ma60", close, touch_band)),
+        ("MA120", _safe_number(work.iloc[-1].get("ma120")), 1.08 + _ma_extra_strength(work, "ma120", close, touch_band)),
+        ("MA250", _safe_number(work.iloc[-1].get("ma250")), 1.04 + _ma_extra_strength(work, "ma250", close, touch_band)),
         ("HIGH_5", _safe_number(last_5["high"].max() if "high" in last_5.columns else None), 0.78),
         ("HIGH_10", _safe_number(last_10["high"].max() if "high" in last_10.columns else None), 0.92),
         ("HIGH_20", _safe_number(last_20["high"].max() if "high" in last_20.columns else None), 1.06),
@@ -2995,6 +3638,9 @@ LEVEL_BOARD_PROFILES: dict[str, dict[str, Any]] = {
             "volume": 1.12,
             "gap": 1.10,
             "structure": 1.22,
+            "capital": 1.24,
+            "fibonacci": 1.06,
+            "round": 0.86,
         },
         "source_weight": {
             "PRE_CLOSE": 0.76,
@@ -3055,6 +3701,9 @@ LEVEL_BOARD_PROFILES: dict[str, dict[str, Any]] = {
             "volume": 1.18,
             "gap": 1.12,
             "structure": 1.26,
+            "capital": 1.26,
+            "fibonacci": 1.06,
+            "round": 0.84,
         },
         "source_weight": {
             "PRE_CLOSE": 0.70,
@@ -3115,6 +3764,9 @@ LEVEL_BOARD_PROFILES: dict[str, dict[str, Any]] = {
             "volume": 1.18,
             "gap": 1.12,
             "structure": 1.28,
+            "capital": 1.28,
+            "fibonacci": 1.06,
+            "round": 0.84,
         },
         "source_weight": {
             "PRE_CLOSE": 0.70,
@@ -3175,6 +3827,9 @@ LEVEL_BOARD_PROFILES: dict[str, dict[str, Any]] = {
             "volume": 1.20,
             "gap": 1.14,
             "structure": 1.24,
+            "capital": 1.26,
+            "fibonacci": 1.06,
+            "round": 0.82,
         },
         "source_weight": {
             "PRE_CLOSE": 0.68,
@@ -3291,6 +3946,14 @@ def _resolve_source_weight(source: str, family: str, market_profile: dict[str, A
         return float(market_profile.get("family_weight", {}).get("gap", 1.10))
     if normalized.startswith("STRUCT_"):
         return float(market_profile.get("family_weight", {}).get("structure", 1.22))
+    if normalized.startswith("CAPITAL_"):
+        return float(market_profile.get("family_weight", {}).get("capital", 1.24))
+    if normalized.startswith("FIB_"):
+        return float(market_profile.get("family_weight", {}).get("fibonacci", 1.06))
+    if normalized.startswith("ROUND_"):
+        return float(market_profile.get("family_weight", {}).get("round", 0.86))
+    if normalized.startswith("HIST_"):
+        return float(market_profile.get("family_weight", {}).get("pivot", 1.10))
     return float(market_profile.get("family_weight", {}).get(family, 1.0))
 
 
@@ -3706,6 +4369,8 @@ def _select_key_levels_adaptive(
             "第二道阻力位"
         )
         family_suffix = f"（{family_text}）" if family_text else ""
+        factor_notes = [str(note) for note in item.get("factor_notes", []) if str(note).strip()]
+        factor_suffix = f" 因子校验：{'；'.join(factor_notes[:2])}。" if factor_notes else ""
         distance_atr = item.get("distance_atr")
         board_label = market_profile.get("label", "当前板块")
         distance_atr_text = f" / {distance_atr:.2f} ATR" if distance_atr is not None else ""
@@ -3718,6 +4383,8 @@ def _select_key_levels_adaptive(
                 "sources": item.get("sources", []),
                 "families": item.get("families", []),
                 "dominant_family": item.get("dominant_family"),
+                "factor_notes": factor_notes,
+                "role_shift_candidate": bool(item.get("role_shift_candidate") or False),
                 "distance_pct": round(float(item["distance_pct"]), 2),
                 "distance_atr": round(float(distance_atr), 2) if distance_atr is not None else None,
                 "strength_score": round(float(item.get("strength_score") or 0.0), 2),
@@ -3727,7 +4394,7 @@ def _select_key_levels_adaptive(
                     f"距现价{direction_text}约 {float(item['distance_pct']):.2f}%{distance_atr_text}，"
                     f"并按 {board_label} 波动画像约束首位/二位间距后保留为{role_text}。"
                     f"{' 压力位优先看趋势线、缺口、均线与成交密集区的共振，不再只由单根K线开收盘锚点决定。' if level_type == 'resistance' else ''}"
-                    f"{breach_rule}。"
+                    f"{breach_rule}。{factor_suffix}"
                 ),
             }
         )
@@ -3763,7 +4430,84 @@ def _augment_selected_level(
     item["break_confirm_price"] = confirm_price
     item["fail_threshold_price"] = fail_price
     item["expected_move_pct"] = expected_move_pct
+    resonance_bonus = min(source_count, 5) * 0.045
+    score_component = min(max(base_strength, 0.0), 8.0) / 8.0 * 0.34
+    touch_component = min(max(touch_count, 0), 6) / 6.0 * 0.18
+    confidence = 0.46 + score_component + touch_component + resonance_bonus
+    if "fibonacci" in set(item.get("families") or []) and source_count >= 2:
+        confidence = max(confidence, 0.85)
+    confidence = round(float(np.clip(confidence, 0.50, 0.96)), 2)
+    item["confidence"] = confidence
+    item["strength_grade"] = (
+        "极强" if confidence >= 0.90 or source_count >= 5 else
+        "强" if confidence >= 0.78 or source_count >= 3 else
+        "中" if confidence >= 0.64 else
+        "弱"
+    )
     return item
+
+
+def _classify_level_trend(df: pd.DataFrame, close: float) -> str:
+    if close <= 0 or df.empty:
+        return "震荡"
+    ma20 = pd.to_numeric(df.get("ma20"), errors="coerce") if "ma20" in df.columns else df["close"].rolling(20, min_periods=1).mean()
+    ma60 = pd.to_numeric(df.get("ma60"), errors="coerce") if "ma60" in df.columns else df["close"].rolling(60, min_periods=1).mean()
+    ma20_now = _safe_number(ma20.iloc[-1], close) or close
+    ma60_now = _safe_number(ma60.iloc[-1], ma20_now) or ma20_now
+    ma20_prev = _safe_number(ma20.iloc[-6] if len(ma20) >= 6 else ma20.iloc[0], ma20_now) or ma20_now
+    slope20 = (ma20_now - ma20_prev) / max(abs(ma20_prev), EPS)
+    if close >= ma20_now and slope20 > 0.0015:
+        return "上升"
+    if close <= ma20_now and slope20 < -0.0015:
+        return "下跌"
+    if abs(ma20_now - ma60_now) / max(close, EPS) <= 0.035:
+        return "震荡"
+    return "上升" if close > ma20_now > ma60_now else ("下跌" if close < ma20_now < ma60_now else "震荡")
+
+
+def _annotate_breakout_context(
+    df: pd.DataFrame,
+    resistance_levels: list[dict[str, Any]],
+    selection_gap: float,
+) -> list[dict[str, Any]]:
+    if not resistance_levels or len(df) < 4 or not {"close", "volume"}.issubset(df.columns):
+        return resistance_levels
+
+    closes = pd.to_numeric(df["close"], errors="coerce")
+    volumes = pd.to_numeric(df["volume"], errors="coerce").fillna(0.0)
+    vol_ma5 = volumes.rolling(5, min_periods=1).mean()
+    last3_close = closes.tail(3)
+    last3_volume = volumes.tail(3)
+    last3_vol_ma5 = vol_ma5.tail(3)
+    latest_close = _safe_number(closes.iloc[-1])
+    latest_volume = _safe_number(volumes.iloc[-1], 0.0) or 0.0
+    latest_vol_ma5 = _safe_number(vol_ma5.iloc[-1], latest_volume) or latest_volume
+    prev_close = _safe_number(closes.iloc[-2] if len(closes) >= 2 else closes.iloc[-1], latest_close)
+
+    for item in resistance_levels:
+        price = _safe_number(item.get("price"))
+        if price is None or latest_close is None:
+            continue
+        notes: list[str] = list(item.get("context_flags") or [])
+        if (
+            len(last3_close.dropna()) == 3
+            and bool((last3_close > price).all())
+            and bool((last3_volume >= last3_vol_ma5 * 1.08).all())
+        ):
+            item["role_shift_candidate"] = True
+            notes.append("连续3日放量站稳压力位上方，进入压力转支撑候选")
+            item["note"] = f"{item.get('note', '')} 连续3日放量站稳上方，后续回踩该价带可观察压力转支撑。"
+        elif (
+            abs(latest_close - price) <= max(selection_gap, price * 0.01)
+            and prev_close is not None
+            and latest_close >= prev_close
+            and latest_volume < latest_vol_ma5 * 0.95
+        ):
+            notes.append("缩量上涨逼近压力，假突破风险较高")
+            item["note"] = f"{item.get('note', '')} 当前缩量逼近压力，未补量前仍按有效压力处理。"
+        if notes:
+            item["context_flags"] = sorted(set(notes))
+    return resistance_levels
 
 
 def build_structural_price_levels(
@@ -3795,15 +4539,16 @@ def build_structural_price_levels(
             "market_board": inferred_board,
         }
 
-    work = _ensure_volume_col(df.copy())
+    work = _expand_embedded_factors(_ensure_volume_col(df.copy()))
     for col in ("open", "high", "low", "close", "volume", "amount"):
         if col in work.columns:
             work[col] = pd.to_numeric(work[col], errors="coerce")
 
-    for ma in (5, 10, 20, 60):
+    for ma in (5, 10, 20, 60, 120, 250):
         col = f"ma{ma}"
         if col not in work.columns:
-            work[col] = work["close"].rolling(ma, min_periods=1).mean()
+            min_periods = ma if ma >= 120 else 1
+            work[col] = work["close"].rolling(ma, min_periods=min_periods).mean()
         else:
             work[col] = pd.to_numeric(work[col], errors="coerce")
 
@@ -3840,8 +4585,10 @@ def build_structural_price_levels(
         ("OPEN", open_price, 0.66),
         ("MA5", _safe_number(work.iloc[-1].get("ma5")), 0.76),
         ("MA10", _safe_number(work.iloc[-1].get("ma10")), 0.92),
-        ("MA20", _safe_number(work.iloc[-1].get("ma20")), 1.06),
-        ("MA60", _safe_number(work.iloc[-1].get("ma60")), 1.14),
+        ("MA20", _safe_number(work.iloc[-1].get("ma20")), 1.06 + _ma_extra_strength(work, "ma20", close, touch_band)),
+        ("MA60", _safe_number(work.iloc[-1].get("ma60")), 1.14 + _ma_extra_strength(work, "ma60", close, touch_band)),
+        ("MA120", _safe_number(work.iloc[-1].get("ma120")), 1.08 + _ma_extra_strength(work, "ma120", close, touch_band)),
+        ("MA250", _safe_number(work.iloc[-1].get("ma250")), 1.04 + _ma_extra_strength(work, "ma250", close, touch_band)),
         ("LOW_5", _safe_number(last_5["low"].min() if "low" in last_5.columns else None), 0.78),
         ("LOW_10", _safe_number(last_10["low"].min() if "low" in last_10.columns else None), 0.92),
         ("LOW_20", _safe_number(last_20["low"].min() if "low" in last_20.columns else None), 1.06),
@@ -3852,8 +4599,10 @@ def build_structural_price_levels(
         ("OPEN", open_price, 0.66),
         ("MA5", _safe_number(work.iloc[-1].get("ma5")), 0.76),
         ("MA10", _safe_number(work.iloc[-1].get("ma10")), 0.92),
-        ("MA20", _safe_number(work.iloc[-1].get("ma20")), 1.06),
-        ("MA60", _safe_number(work.iloc[-1].get("ma60")), 1.14),
+        ("MA20", _safe_number(work.iloc[-1].get("ma20")), 1.06 + _ma_extra_strength(work, "ma20", close, touch_band)),
+        ("MA60", _safe_number(work.iloc[-1].get("ma60")), 1.14 + _ma_extra_strength(work, "ma60", close, touch_band)),
+        ("MA120", _safe_number(work.iloc[-1].get("ma120")), 1.08 + _ma_extra_strength(work, "ma120", close, touch_band)),
+        ("MA250", _safe_number(work.iloc[-1].get("ma250")), 1.04 + _ma_extra_strength(work, "ma250", close, touch_band)),
         ("HIGH_5", _safe_number(last_5["high"].max() if "high" in last_5.columns else None), 0.78),
         ("HIGH_10", _safe_number(last_10["high"].max() if "high" in last_10.columns else None), 0.92),
         ("HIGH_20", _safe_number(last_20["high"].max() if "high" in last_20.columns else None), 1.06),
@@ -4173,6 +4922,66 @@ def build_structural_price_levels(
         if adaptive_candidate:
             resistance_candidates.append(adaptive_candidate)
 
+    supplemental_collectors = (
+        (_collect_historical_reversal_level_candidates, "support", support_candidates),
+        (_collect_historical_reversal_level_candidates, "resistance", resistance_candidates),
+        (_collect_round_number_level_candidates, "support", support_candidates),
+        (_collect_round_number_level_candidates, "resistance", resistance_candidates),
+        (_collect_capital_flow_level_candidates, "support", support_candidates),
+        (_collect_capital_flow_level_candidates, "resistance", resistance_candidates),
+        (_collect_fibonacci_level_candidates, "support", support_candidates),
+        (_collect_fibonacci_level_candidates, "resistance", resistance_candidates),
+        (_collect_breakout_role_shift_candidates, "support", support_candidates),
+    )
+    for collector, level_type, target_candidates in supplemental_collectors:
+        for candidate in collector(
+            work,
+            close=close,
+            level_type=level_type,
+            touch_band=touch_band,
+            volume_col=volume_col,
+        ):
+            adaptive_candidate = _build_level_candidate_adaptive(
+                work,
+                level_type=level_type,
+                source=str(candidate["source"]),
+                price=_safe_number(candidate["price"]),
+                close=close,
+                base_weight=float(candidate["weight"]),
+                touch_band=touch_band,
+                volume_col=volume_col,
+                market_profile=market_profile,
+                regime=regime,
+                atr_value=atr_value,
+                atr_pct=atr_pct,
+                volatility_pct=volatility_pct,
+            )
+            if adaptive_candidate:
+                adaptive_candidate["touch_count"] = max(
+                    int(adaptive_candidate.get("touch_count") or 0),
+                    int(candidate.get("touch_count") or 0),
+                )
+                if candidate.get("factor_notes"):
+                    adaptive_candidate["factor_notes"] = list(candidate.get("factor_notes") or [])
+                if candidate.get("role_shift_candidate"):
+                    adaptive_candidate["role_shift_candidate"] = True
+                target_candidates.append(adaptive_candidate)
+
+    support_candidates = _apply_factor_adjustments(
+        work,
+        support_candidates,
+        level_type="support",
+        close=close,
+        touch_band=touch_band,
+    )
+    resistance_candidates = _apply_factor_adjustments(
+        work,
+        resistance_candidates,
+        level_type="resistance",
+        close=close,
+        touch_band=touch_band,
+    )
+
     support_levels = _select_key_levels_adaptive(
         close,
         support_candidates,
@@ -4218,6 +5027,12 @@ def build_structural_price_levels(
         )
         for item in resistance_levels
     ]
+    resistance_levels = _annotate_breakout_context(
+        work,
+        resistance_levels,
+        selection_gap=float(selection_gap),
+    )
+    trend_state = _classify_level_trend(work, close)
 
     if not support_levels and not resistance_levels:
         legacy = build_structural_price_levels_legacy(df, top_n=top_n)
@@ -4231,6 +5046,8 @@ def build_structural_price_levels(
         f"自适应校准：按 {market_profile['label']} 波动画像，把聚类带、首要点位距离和二级间距统一换算到 ATR/振幅刻度，减少跨度过大或过小。",
         "结构触线规则：压力要求至少 1 次阳线收盘锚定 + 2 次上影摸线，且至少 1 次上影发生在阳线收盘之后；支撑要求至少 4 次下探承接，含阴线收盘/阳线开盘锚点、2 次下影试探，并在第 4 次或之后出现放量小阳确认。",
         "排序规则：候选价位先按来源共振、触碰次数、量能与最近性打分，再叠加“离现价是否处在可交易 ATR 区间”的约束；压力位会额外提高趋势线、缺口、均线、成交密集区等多源共振的优先级，降低纯开收盘锚点的主导权重。",
+        "新增交叉验证：全历史反转聚类、整数关口、MA120/MA250、连续/极端主力资金、1% 成交密集区、RSI/换手/波动率/两融过滤与斐波那契回撤共同参与定级。",
+        f"当前多空格局：{trend_state}。MA20 向上且价格在其上定义为上升，反之为下跌，均线纠缠则按震荡处理。",
     ]
     if atr_pct > 0 or swing_pct > 0:
         level_methodology.append(
@@ -4247,6 +5064,7 @@ def build_structural_price_levels(
         "cluster_band": round(float(cluster_band), 2),
         "selection_gap": round(float(selection_gap), 2),
         "market_board": inferred_market_board,
+        "trend_state": trend_state,
     }
 
 

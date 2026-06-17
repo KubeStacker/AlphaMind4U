@@ -75,6 +75,19 @@ def start_scheduler():
         replace_existing=True
     )
 
+    # 4.5. 每日 19:00 同步融资融券数据（两融数据通常较晚发布）
+    scheduler.add_job(
+        sync_engine.sync_margin_trading_data,
+        CronTrigger(hour=19, minute=7, timezone=SHANGHAI_TZ),
+        id="sync_margin_trading",
+        name="每日融资融券数据同步",
+        kwargs={"days": 3},
+        misfire_grace_time=3600,
+        coalesce=True,
+        max_instances=1,
+        replace_existing=True,
+    )
+
     # 5. 每周日凌晨 02:00 同步财务报表数据
     scheduler.add_job(
         sync_engine.sync_financial_statements,
@@ -115,6 +128,7 @@ def start_scheduler():
         "定时任务调度器已启动:\n"
         "  - 基础数据: 00:05 (股票列表) / 00:10 (概念分类)\n"
         "  - 收盘数据: 16:45 (主) / 18:30 (兜底)\n"
+        "  - 融资融券: 19:07 (每日)\n"
         "  - 财务报表: 周日 02:00\n"
         "  - 外汇数据: 已禁用\n"
         "  - 外部风险信号: 已禁用"

@@ -134,6 +134,75 @@ def _build_structural_support_fixture() -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _build_capital_flow_support_fixture() -> pd.DataFrame:
+    rows: list[dict[str, float | str]] = []
+    price = 10.0
+    start_date = pd.Timestamp("2026-04-01")
+    for idx in range(36):
+        if idx < 24:
+            price += 0.02
+        else:
+            price += 0.05
+        close = round(price, 2)
+        low = round(close - 0.10, 2)
+        high = round(close + 0.12, 2)
+        net_flow = 800.0
+        if idx in (25, 26, 27):
+            low = 10.28 if idx == 25 else 10.32
+            net_flow = 9500.0 + idx * 100
+        rows.append(
+            {
+                "trade_date": (start_date + pd.Timedelta(days=idx)).strftime("%Y-%m-%d"),
+                "open": round(close - 0.03, 2),
+                "high": high,
+                "low": low,
+                "close": close,
+                "volume": 130_000 + idx * 2_000,
+                "main_net_flow": net_flow,
+                "turnover_rate": 8.0,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _build_fibonacci_resonance_fixture() -> pd.DataFrame:
+    rows: list[dict[str, float | str]] = []
+    start_date = pd.Timestamp("2026-01-01")
+    for idx in range(45):
+        close = round(10.0 + idx * 0.23, 2)
+        rows.append(
+            {
+                "trade_date": (start_date + pd.Timedelta(days=idx)).strftime("%Y-%m-%d"),
+                "open": round(close - 0.05, 2),
+                "high": round(close + 0.18, 2),
+                "low": round(close - 0.16, 2),
+                "close": close,
+                "volume": 100_000 + idx * 1_000,
+            }
+        )
+    pullback = [
+        ("2026-02-15", 20.35, 20.55, 19.85, 20.05, 165_000),
+        ("2026-02-16", 19.50, 19.72, 18.90, 19.05, 150_000),
+        ("2026-02-17", 18.35, 18.62, 17.88, 18.05, 148_000),
+        ("2026-02-18", 17.20, 17.55, 16.68, 16.92, 190_000),
+        ("2026-02-19", 16.45, 16.82, 16.10, 16.32, 210_000),
+        ("2026-02-20", 16.25, 16.70, 16.08, 16.42, 205_000),
+    ]
+    for trade_date, open_price, high, low, close, volume in pullback:
+        rows.append(
+            {
+                "trade_date": trade_date,
+                "open": open_price,
+                "high": high,
+                "low": low,
+                "close": close,
+                "volume": volume,
+                "turnover_rate": 16.5,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 class WatchlistLevelTests(unittest.TestCase):
     def test_adaptive_support_prefers_nearby_trend_level_in_accelerating_uptrend(self) -> None:
         bundle = build_structural_price_levels(
@@ -212,6 +281,37 @@ class WatchlistLevelTests(unittest.TestCase):
         self.assertTrue(
             any(str(source).startswith("STRUCT_SUPPORT") for source in primary.get("sources", []))
         )
+
+    def test_capital_flow_inflow_zone_is_selected_as_support_source(self) -> None:
+        bundle = build_structural_price_levels(
+            _build_capital_flow_support_fixture(),
+            top_n=3,
+            market_board="default",
+        )
+
+        support_levels = bundle["support_levels"]
+        self.assertTrue(support_levels)
+        self.assertTrue(
+            any(
+                any(str(source).startswith("CAPITAL_IN_SUPPORT") for source in level.get("sources", []))
+                for level in support_levels
+            )
+        )
+
+    def test_fibonacci_resonance_raises_confidence_floor(self) -> None:
+        bundle = build_structural_price_levels(
+            _build_fibonacci_resonance_fixture(),
+            top_n=3,
+            market_board="default",
+        )
+
+        fib_levels = [
+            level
+            for level in bundle["support_levels"]
+            if "fibonacci" in set(level.get("families", []))
+        ]
+        self.assertTrue(fib_levels)
+        self.assertGreaterEqual(fib_levels[0].get("confidence") or 0.0, 0.85)
 
 
 if __name__ == "__main__":

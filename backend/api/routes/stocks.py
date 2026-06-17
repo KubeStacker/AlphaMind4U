@@ -15,7 +15,7 @@ from typing import Any, Dict, Optional
 import arrow
 import httpx
 import pandas as pd
-from fastapi import APIRouter, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, File, HTTPException, Request, Response, UploadFile
 from pydantic import BaseModel, Field
 from db.connection import get_db_connection, fetch_df
 from etl.calendar import trading_calendar
@@ -1983,7 +1983,6 @@ async def _parse_holdings_with_ai_vision(
         "max_tokens": max(500, min(int(max_tokens or 1200), 1200)),
         "temperature": 0,
         "stream": False,
-        "response_format": {"type": "json_object"},
     }
 
     try:
@@ -2961,6 +2960,203 @@ def get_stock_kline(ts_code: str, limit: int = 200):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/stock/{ts_code}/daily-probe")
+def get_stock_daily_probe(ts_code: str, days: int = 30):
+    """获取单只股票最近 N 个交易日的行情、资金、两融和因子明细。"""
+    try:
+        norm_code = _normalize_ts_code(ts_code)
+        limit = min(max(int(days or 30), 1), 260)
+
+        df = fetch_df(
+            """
+            WITH recent AS (
+                SELECT trade_date, ts_code, open, high, low, close, pre_close,
+                       change, pct_chg, vol, amount, factors
+                FROM daily_price
+                WHERE ts_code = ?
+                ORDER BY trade_date DESC
+                LIMIT ?
+            )
+            SELECT
+                r.trade_date,
+                r.ts_code,
+                b.name,
+                r.open,
+                r.high,
+                r.low,
+                r.close,
+                r.pre_close,
+                r.change,
+                r.pct_chg,
+                r.vol AS volume,
+                r.amount AS total_money_k,
+                r.amount * 1000 AS total_money,
+                mf.net_mf_vol,
+                mf.net_mf_amount AS net_inflow,
+                mf.net_mf_ratio,
+                mg.rzye,
+                mg.rzmre,
+                mg.rzche,
+                mg.rqye,
+                mg.rqmcl,
+                mg.rzrqye,
+                mg.rqyl,
+                f.ma5,
+                f.ma10,
+                f.ma20,
+                f.ma60,
+                f.ma120,
+                f.high_250,
+                f.vol_ma5,
+                f.avg_ret_60,
+                f.vol_60,
+                f.rps_20,
+                f.rps_50,
+                f.rps_120,
+                f.rps_250,
+                f.turnover_rate,
+                f.turnover_rate_f,
+                f.volume_ratio,
+                f.pe,
+                f.pe_ttm,
+                f.pb,
+                f.ps,
+                f.ps_ttm,
+                f.total_mv,
+                f.circ_mv,
+                f.big_order_ratio,
+                f.trend_score,
+                f.liquidity_score,
+                f.quality_score,
+                f.value_score,
+                f.flow_score,
+                f.event_score,
+                f.factor_score,
+                r.factors
+            FROM recent r
+            LEFT JOIN stock_basic b
+              ON r.ts_code = b.ts_code
+            LEFT JOIN stock_moneyflow mf
+              ON r.ts_code = mf.ts_code AND r.trade_date = mf.trade_date
+            LEFT JOIN stock_margin mg
+              ON r.ts_code = mg.ts_code AND r.trade_date = mg.trade_date
+            LEFT JOIN stock_factor_daily f
+              ON r.ts_code = f.ts_code AND r.trade_date = f.trade_date
+            ORDER BY r.trade_date ASC
+            """,
+            (norm_code, limit),
+        )
+
+        if df.empty:
+            return {
+                "status": "success",
+                "ts_code": norm_code,
+                "days": limit,
+                "count": 0,
+                "unit": {
+                    "volume": "手",
+                    "total_money": "元",
+                    "total_money_k": "千元",
+                    "net_inflow": "万元",
+                    "net_mf_vol": "手",
+                    "margin_amount": "元",
+                },
+                "data": [],
+            }
+
+        factor_keys = {
+            "ma5",
+            "ma10",
+            "ma20",
+            "ma60",
+            "ma120",
+            "high_250",
+            "vol_ma5",
+            "avg_ret_60",
+            "vol_60",
+            "rps_20",
+            "rps_50",
+            "rps_120",
+            "rps_250",
+            "turnover_rate",
+            "turnover_rate_f",
+            "volume_ratio",
+            "pe",
+            "pe_ttm",
+            "pb",
+            "ps",
+            "ps_ttm",
+            "total_mv",
+            "circ_mv",
+            "big_order_ratio",
+            "trend_score",
+            "liquidity_score",
+            "quality_score",
+            "value_score",
+            "flow_score",
+            "event_score",
+            "factor_score",
+        }
+
+        rows = []
+        for _, row in df.iterrows():
+            item = row.to_dict()
+            raw_factors = item.pop("factors", None)
+            parsed_factors = {}
+            if raw_factors:
+                try:
+                    parsed_factors = (
+                        json.loads(raw_factors)
+                        if isinstance(raw_factors, str)
+                        else dict(raw_factors)
+                    )
+                except Exception:
+                    parsed_factors = {}
+
+            for key in factor_keys:
+                current_value = item.get(key)
+                is_missing = current_value is None
+                if not is_missing:
+                    try:
+                        is_missing = bool(pd.isna(current_value))
+                    except TypeError:
+                        is_missing = False
+                if is_missing and key in parsed_factors:
+                    item[key] = parsed_factors.get(key)
+
+            item["margin"] = {
+                "rzye": item.get("rzye"),
+                "rzmre": item.get("rzmre"),
+                "rzche": item.get("rzche"),
+                "rqye": item.get("rqye"),
+                "rqmcl": item.get("rqmcl"),
+                "rzrqye": item.get("rzrqye"),
+                "rqyl": item.get("rqyl"),
+            }
+            item["factors"] = {key: item.get(key) for key in factor_keys}
+            rows.append(_sanitize_json_value(item))
+
+        first = rows[0] if rows else {}
+        return {
+            "status": "success",
+            "ts_code": norm_code,
+            "name": first.get("name"),
+            "days": limit,
+            "count": len(rows),
+            "unit": {
+                "volume": "手",
+                "total_money": "元",
+                "total_money_k": "千元",
+                "net_inflow": "万元",
+                "net_mf_vol": "手",
+                "margin_amount": "元",
+            },
+            "data": rows,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ========== 持仓管理 ==========
 
 
@@ -3180,8 +3376,10 @@ async def batch_update_holdings(request: Request, body: HoldingsBatchUpdateReque
 
 
 @router.get("/users/me/holdings")
-async def get_holdings(request: Request):
+async def get_holdings(request: Request, response: Response):
     """获取当前用户的持仓（含盈亏计算）"""
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
     user_id = await get_current_user_id(request)
     try:
         with get_db_connection() as con:

@@ -3,6 +3,7 @@ import time
 from etl.tasks.base_task import BaseTask
 from db.connection import get_db_connection, fetch_df
 from etl.calendar import trading_calendar
+from etl.utils.art_safe_write import dedupe_by_key, update_then_insert_missing
 import pandas as pd
 import logging
 
@@ -70,7 +71,7 @@ class MarginTradingTask(BaseTask):
                 logger.warning(f"融资融券 {date_str} 无数据")
                 return
             
-            df['trade_date'] = pd.to_datetime(df['trade_date']).dt.strftime('%Y-%m-%d')
+            df['trade_date'] = pd.to_datetime(df['trade_date']).dt.date
             df = df[df['ts_code'].notna()]
             if df.empty:
                 return
@@ -79,16 +80,25 @@ class MarginTradingTask(BaseTask):
             for col in target_cols:
                 if col not in df.columns:
                     df[col] = None
-            df = df[[c for c in target_cols if c in df.columns]]
+            df = df[[c for c in target_cols if c in df.columns]].copy()
+            df = dedupe_by_key(
+                df,
+                key_cols=['ts_code', 'trade_date'],
+                table_name='stock_margin',
+                logger=logger,
+            )
             
             with get_db_connection() as con:
-                con.begin()
-                con.execute("DELETE FROM stock_margin WHERE trade_date = ?", [date_str])
-                con.register('df_view', df)
                 cols = df.columns.tolist()
-                col_str = ','.join(cols)
-                con.execute(f"INSERT INTO stock_margin ({col_str}) SELECT {col_str} FROM df_view")
-                con.commit()
+                update_then_insert_missing(
+                    con,
+                    df=df,
+                    table_name='stock_margin',
+                    view_name='margin_view',
+                    columns=cols,
+                    key_cols=['ts_code', 'trade_date'],
+                    logger=logger,
+                )
             
             logger.info(f"融资融券 {date_str} 同步完成: {len(df)} 条")
             

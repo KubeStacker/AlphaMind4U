@@ -457,7 +457,7 @@ const { createKlineOption, getLatestKlineData } = useKlineChart();
 const REFRESH_MS_TRADING = 10000;
 const REFRESH_MS_IDLE = 60000;
 const REFRESH_MS_ZEN = 10000;
-const WATCHLIST_CACHE_KEY = 'jarvis-watchlist-snapshot-v2';
+const WATCHLIST_CACHE_KEY = 'jarvis-watchlist-snapshot-v3';
 const WATCHLIST_PRIVACY_KEY = 'jarvis-watchlist-privacy-v1';
 const PRIVACY_MASK = '••••';
 
@@ -676,7 +676,6 @@ const stopAutoRefresh = () => { if (timer) { clearTimeout(timer); timer = null; 
 
 const getWatchlistCachePayload = () => ({
   rows: rows.value,
-  holdings: holdings.value,
   isTradingTime: isTradingTime.value,
   lastRefreshAt: lastRefreshAt.value,
   cachedAt: Date.now(),
@@ -719,11 +718,11 @@ const restoreWatchlistCache = () => {
   const cached = readWatchlistCache();
   if (!cached) return false;
   rows.value = Array.isArray(cached.rows) ? cached.rows : [];
-  holdings.value = cached.holdings && typeof cached.holdings === 'object' ? cached.holdings : {};
+  holdings.value = {};
   isTradingTime.value = !!cached.isTradingTime;
   lastRefreshAt.value = typeof cached.lastRefreshAt === 'string' ? cached.lastRefreshAt : '';
-  if (rows.value.length > 0 || Object.keys(holdings.value).length > 0) message.value = '已恢复上次快照，后台刷新中';
-  return rows.value.length > 0 || Object.keys(holdings.value).length > 0;
+  if (rows.value.length > 0) message.value = '已恢复行情快照，正在同步持仓';
+  return rows.value.length > 0;
 };
 
 const normalizeCodes = (codes = []) => Array.from(new Set((codes || []).map(c => String(c || '').trim()).filter(Boolean)));

@@ -75,6 +75,66 @@ def _bounded_codes(codes: str | None, max_codes: int = 80) -> str | None:
     return ",".join(parts[:max_codes])
 
 
+DAILY_PROBE_FIELD_DEFINITIONS: dict[str, dict[str, str]] = {
+    "trade_date": {"meaning": "交易日", "unit": "YYYY-MM-DD"},
+    "ts_code": {"meaning": "Tushare 标准股票代码", "unit": "无"},
+    "name": {"meaning": "股票简称", "unit": "无"},
+    "open": {"meaning": "开盘价", "unit": "元/股"},
+    "high": {"meaning": "最高价", "unit": "元/股"},
+    "low": {"meaning": "最低价", "unit": "元/股"},
+    "close": {"meaning": "收盘价", "unit": "元/股"},
+    "pre_close": {"meaning": "前收盘价", "unit": "元/股"},
+    "change": {"meaning": "涨跌额，close - pre_close", "unit": "元/股"},
+    "pct_chg": {"meaning": "涨跌幅", "unit": "%"},
+    "volume": {"meaning": "成交量，对应 daily_price.vol", "unit": "手"},
+    "total_money": {"meaning": "成交额，由 daily_price.amount * 1000 换算", "unit": "元"},
+    "total_money_k": {"meaning": "成交额原始库字段 daily_price.amount", "unit": "千元"},
+    "net_mf_vol": {"meaning": "主力净流入量", "unit": "手"},
+    "net_inflow": {"meaning": "主力净流入金额，对应 stock_moneyflow.net_mf_amount", "unit": "万元"},
+    "net_mf_ratio": {"meaning": "主力净流入占比", "unit": "%"},
+    "rzye": {"meaning": "融资余额", "unit": "元"},
+    "rzmre": {"meaning": "融资买入额", "unit": "元"},
+    "rzche": {"meaning": "融资偿还额", "unit": "元"},
+    "rqye": {"meaning": "融券余额", "unit": "元"},
+    "rqmcl": {"meaning": "融券卖出量", "unit": "股"},
+    "rzrqye": {"meaning": "融资融券余额", "unit": "元"},
+    "rqyl": {"meaning": "融券余量", "unit": "股"},
+    "ma5": {"meaning": "5 日收盘价均线", "unit": "元/股"},
+    "ma10": {"meaning": "10 日收盘价均线", "unit": "元/股"},
+    "ma20": {"meaning": "20 日收盘价均线", "unit": "元/股"},
+    "ma60": {"meaning": "60 日收盘价均线", "unit": "元/股"},
+    "ma120": {"meaning": "120 日收盘价均线", "unit": "元/股"},
+    "high_250": {"meaning": "近 250 个交易日最高价", "unit": "元/股"},
+    "vol_ma5": {"meaning": "5 日成交量均线", "unit": "手"},
+    "avg_ret_60": {"meaning": "近 60 日平均日收益率", "unit": "%"},
+    "vol_60": {"meaning": "近 60 日收益波动率", "unit": "%"},
+    "rps_20": {"meaning": "20 日相对强度排名百分位", "unit": "0-100 分"},
+    "rps_50": {"meaning": "50 日相对强度排名百分位", "unit": "0-100 分"},
+    "rps_120": {"meaning": "120 日相对强度排名百分位", "unit": "0-100 分"},
+    "rps_250": {"meaning": "250 日相对强度排名百分位", "unit": "0-100 分"},
+    "turnover_rate": {"meaning": "换手率", "unit": "%"},
+    "turnover_rate_f": {"meaning": "自由流通股换手率", "unit": "%"},
+    "volume_ratio": {"meaning": "量比或相对成交量指标", "unit": "倍"},
+    "pe": {"meaning": "市盈率 PE", "unit": "倍"},
+    "pe_ttm": {"meaning": "滚动市盈率 PE TTM", "unit": "倍"},
+    "pb": {"meaning": "市净率 PB", "unit": "倍"},
+    "ps": {"meaning": "市销率 PS", "unit": "倍"},
+    "ps_ttm": {"meaning": "滚动市销率 PS TTM", "unit": "倍"},
+    "total_mv": {"meaning": "总市值", "unit": "万元"},
+    "circ_mv": {"meaning": "流通市值", "unit": "万元"},
+    "big_order_ratio": {"meaning": "大单资金强度/占比衍生指标", "unit": "比例"},
+    "trend_score": {"meaning": "趋势因子评分", "unit": "0-100 分"},
+    "liquidity_score": {"meaning": "流动性因子评分", "unit": "0-100 分"},
+    "quality_score": {"meaning": "质量因子评分", "unit": "0-100 分"},
+    "value_score": {"meaning": "估值因子评分", "unit": "0-100 分"},
+    "flow_score": {"meaning": "资金流因子评分", "unit": "0-100 分"},
+    "event_score": {"meaning": "事件/财报催化因子评分", "unit": "0-100 分"},
+    "factor_score": {"meaning": "综合因子评分", "unit": "0-100 分"},
+    "margin": {"meaning": "两融字段嵌套对象，字段同 rzye/rzmre/rzche/rqye/rqmcl/rzrqye/rqyl", "unit": "混合"},
+    "factors": {"meaning": "因子字段嵌套对象，便于模型或工具一次读取 MA/RPS/估值/评分", "unit": "混合"},
+}
+
+
 mcp = FastMCP(
     "jarvis-quant",
     instructions=(
@@ -98,6 +158,22 @@ async def jarvis_search_stock(q: str = "", limit: int = 10) -> dict[str, Any]:
 async def jarvis_get_stock_kline(ts_code: str, limit: int = 120) -> dict[str, Any]:
     """Get bounded daily K-line data for one stock."""
     return await _get(f"/stock/{ts_code}/kline", {"limit": _clamp(limit, 20, 300)})
+
+
+@mcp.tool()
+async def jarvis_get_stock_daily_probe(ts_code: str, days: int = 30) -> dict[str, Any]:
+    """
+    Get recent daily probe data for one A-share stock.
+
+    The result contains the latest N trading days of OHLCV, amount, money flow,
+    margin trading, and factor fields. Returned units are also included in
+    `unit` and detailed field descriptions are included in `field_definitions`.
+    `net_inflow` is in 10k CNY, `total_money` is CNY, `volume` is lots, and
+    margin amount fields are CNY.
+    """
+    payload = await _get(f"/stock/{ts_code}/daily-probe", {"days": _clamp(days, 1, 260)})
+    payload["field_definitions"] = DAILY_PROBE_FIELD_DEFINITIONS
+    return payload
 
 
 @mcp.tool()

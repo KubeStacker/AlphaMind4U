@@ -1,5 +1,6 @@
 from etl.tasks.base_task import BaseTask
 from db.connection import get_db_connection
+from etl.utils.art_safe_write import dedupe_by_key, update_then_insert_missing
 import arrow
 import pandas as pd
 
@@ -24,8 +25,22 @@ class MarketIndexTask(BaseTask):
                     if c not in df.columns:
                         df[c] = None
                         
-                df_to_save = df[cols]
+                df_to_save = df[cols].copy()
+                df_to_save = dedupe_by_key(
+                    df_to_save,
+                    key_cols=['trade_date', 'ts_code'],
+                    table_name='market_index',
+                    logger=self.logger,
+                )
                 with get_db_connection() as con:
-                    con.execute("INSERT INTO market_index SELECT * FROM df_to_save ON CONFLICT (trade_date, ts_code) DO NOTHING")
+                    update_then_insert_missing(
+                        con,
+                        df=df_to_save,
+                        table_name='market_index',
+                        view_name='market_index_view',
+                        columns=cols,
+                        key_cols=['trade_date', 'ts_code'],
+                        logger=self.logger,
+                    )
         except Exception as e:
             self.logger.error(f"同步指数失败: {e}")

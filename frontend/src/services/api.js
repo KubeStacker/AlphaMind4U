@@ -154,7 +154,11 @@ export const getSelectedTemplate = () => apiClient.get('/admin/users/me/selected
 export const selectTemplate = (templateId) => apiClient.put('/admin/users/me/selected-template', { template_id: templateId });
 
 // --- 用户持仓 ---
-export const getUserHoldings = () => apiClient.get('/admin/users/me/holdings');
+export const getUserHoldings = () =>
+  apiClient.get('/admin/users/me/holdings', {
+    params: { _t: Date.now() },
+    headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' },
+  });
 export const updateUserHolding = (tsCode, holding) => apiClient.put(`/admin/users/me/holdings/${tsCode}`, holding);
 export const deleteUserHolding = (tsCode) => apiClient.delete(`/admin/users/me/holdings/${tsCode}`);
 export const parseHoldingsImage = (formData) =>
