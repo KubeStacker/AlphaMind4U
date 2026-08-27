@@ -1,49 +1,25 @@
 # /backend/main.py
 
 import logging
-import datetime
 import asyncio
 from fastapi import FastAPI, Request
 from starlette.responses import JSONResponse
-import pytz
 
-# 配置全局日志 - 使用上海时区
-shanghai_tz = pytz.timezone('Asia/Shanghai')
+from core.logging import setup_logging
 
-class ShanghaiTimeFormatter(logging.Formatter):
-    def formatTime(self, record, datefmt=None):
-        dt = datetime.datetime.fromtimestamp(record.created, tz=shanghai_tz)
-        if datefmt:
-            return dt.strftime(datefmt)
-        return dt.strftime('%Y-%m-%d %H:%M:%S')
-
-# 配置全局日志
-handler = logging.StreamHandler()
-handler.setFormatter(ShanghaiTimeFormatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
-logging.root.addHandler(handler)
-logging.root.setLevel(logging.INFO)
-logging.getLogger('strategy.sentiment.analyst').setLevel(logging.WARNING)
-logger = logging.getLogger(__name__)
+# 初始化集中式日志系统 (必须在其他 import 之前)
+setup_logging()
 
 from contextlib import asynccontextmanager
 from db.init_db import initialize_database
 from core.config import settings
 from db.connection import close_connection, get_connection
-from api import auth
 from etl.scheduler import start_scheduler
 from core.security import is_valid_static_auth_request
 
-# 导入新的路由模块
-from api.routes import (
-    users_router,
-    ai_router,
-    stocks_router,
-    market_router,
-    etl_router,
-    db_router,
-    system_router,
-    strategy_plaza_router,
-)
+from api.routes import datasets_router, etl_router
+
+logger = logging.getLogger(__name__)
 
 # 定义 FastAPI 应用的生命周期事件
 @asynccontextmanager
@@ -83,10 +59,13 @@ async def lifespan(app: FastAPI):
 
 # 创建 FastAPI 应用实例
 app = FastAPI(
-    title="Jarvis-Quant Backend",
-    description="A lightweight, modular A-share quantitative decision system.",
-    version="0.2.0",
-    lifespan=lifespan # 注册生命周期事件
+    title="Jarvis Data Backend",
+    description="A-share data collection and read-only MCP data backend.",
+    version="1.0.0",
+    lifespan=lifespan,
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
 )
 
 
@@ -102,20 +81,13 @@ async def require_static_token_for_admin(request: Request, call_next):
     return await call_next(request)
 
 
-# 注册 API 路由（添加 /admin 前缀以兼容前端调用）
-app.include_router(auth.router)
-app.include_router(users_router, prefix="/admin")
-app.include_router(ai_router, prefix="/admin")
-app.include_router(stocks_router, prefix="/admin")
-app.include_router(market_router, prefix="/admin")
+# 仅注册数据采集与 MCP 数据读取路由。
 app.include_router(etl_router, prefix="/admin")
-app.include_router(db_router, prefix="/admin")
-app.include_router(system_router, prefix="/admin")
-app.include_router(strategy_plaza_router, prefix="/admin")
+app.include_router(datasets_router, prefix="/admin")
 
 @app.get("/", tags=["System"])
 async def read_root():
     """
     根路径接口，用于健康检查或返回基本信息。
     """
-    return {"message": "Welcome to Jarvis-Quant Backend!"}
+    return {"status": "ok", "service": "jarvis-data-backend"}

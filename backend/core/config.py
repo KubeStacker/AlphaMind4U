@@ -18,8 +18,6 @@ class Settings(BaseSettings):
     
     # 静态服务令牌配置（用于 MCP 等无密码服务调用）
     jarvis_static_auth_token: str = ""
-    jarvis_static_auth_username: str = "admin"
-
     # DuckDB 配置
     duckdb_memory_limit: str = "400MB"
     duckdb_threads: str = "2"

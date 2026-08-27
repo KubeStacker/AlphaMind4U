@@ -1,13 +1,11 @@
 {
   "mcpServers": {
-    "browser": {
-      "type": "stdio",
-      "command": "npx",
-      "args": [
-        "-y",
-        "@playwright/mcp@latest"
-      ],
-      "env": {}
+    "jarvis-data": {
+      "type": "http",
+      "url": "http://localhost:8081/mcp",
+      "headers": {
+        "Authorization": "Bearer ${JARVIS_MCP_API_KEY}"
+      }
     }
   }
 }

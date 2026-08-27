@@ -1,7 +1,7 @@
 services:
   mcp-server:
     build:
-      context: ./mcp-server
+      context: ./ai/mcp
       dockerfile: Dockerfile
     container_name: jarvis-mcp-server
     restart: unless-stopped

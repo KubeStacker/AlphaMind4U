@@ -101,12 +101,78 @@ class DataProvider(ABC):
         """获取业绩快报数据。"""
         pass
 
-    def us_tycr(
+    @abstractmethod
+    def balance_sheet(self, ts_code: str, start_date: str = None, end_date: str = None) -> pd.DataFrame:
+        """获取资产负债表数据。"""
+        pass
+
+    @abstractmethod
+    def cashflow(self, ts_code: str, start_date: str = None, end_date: str = None) -> pd.DataFrame:
+        """获取现金流量表数据。"""
+        pass
+
+    @abstractmethod
+    def suspend_d(
         self,
-        date: str = None,
+        trade_date: str = None,
+        ts_code: str = None,
         start_date: str = None,
         end_date: str = None,
-        fields: str = None,
     ) -> pd.DataFrame:
-        """获取美国国债收益率曲线。默认返回空结果，按需由具体 provider 覆盖。"""
-        return pd.DataFrame()
+        """获取每日停复牌信息。"""
+        pass
+
+    @abstractmethod
+    def namechange(
+        self,
+        ts_code: str = None,
+        start_date: str = None,
+        end_date: str = None,
+    ) -> pd.DataFrame:
+        """获取股票曾用名/更名记录。"""
+        pass
+
+    @abstractmethod
+    def dividend(
+        self,
+        ts_code: str = None,
+        ann_date: str = None,
+        record_date: str = None,
+        ex_date: str = None,
+    ) -> pd.DataFrame:
+        """获取分红送股数据。"""
+        pass
+
+    @abstractmethod
+    def index_weight(
+        self,
+        index_code: str = None,
+        trade_date: str = None,
+        start_date: str = None,
+        end_date: str = None,
+    ) -> pd.DataFrame:
+        """获取指数成分与权重。"""
+        pass
+
+    @abstractmethod
+    def forecast(
+        self,
+        ts_code: str = None,
+        ann_date: str = None,
+        start_date: str = None,
+        end_date: str = None,
+        period: str = None,
+    ) -> pd.DataFrame:
+        """获取业绩预告数据。"""
+        pass
+
+    @abstractmethod
+    def moneyflow_hsgt(
+        self,
+        trade_date: str = None,
+        start_date: str = None,
+        end_date: str = None,
+    ) -> pd.DataFrame:
+        """获取沪深港通资金流向。"""
+        pass
+

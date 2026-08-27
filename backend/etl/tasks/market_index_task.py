@@ -1,3 +1,5 @@
+import logging
+logger = logging.getLogger(__name__)
 from etl.tasks.base_task import BaseTask
 from db.connection import get_db_connection
 from etl.utils.art_safe_write import dedupe_by_key, update_then_insert_missing
@@ -6,7 +8,7 @@ import pandas as pd
 
 class MarketIndexTask(BaseTask):
     def sync(self, ts_code: str = '000001.SH', years: int = 0, days: int = 3):
-        self.logger.info(f"同步市场指数 {ts_code}...")
+        logger.info(f"同步市场指数 {ts_code}...")
         from etl.calendar import trading_calendar
         end_date = arrow.get(trading_calendar.get_latest_sync_date())
         if years > 0:
@@ -30,7 +32,7 @@ class MarketIndexTask(BaseTask):
                     df_to_save,
                     key_cols=['trade_date', 'ts_code'],
                     table_name='market_index',
-                    logger=self.logger,
+                    logger=logger,
                 )
                 with get_db_connection() as con:
                     update_then_insert_missing(
@@ -40,7 +42,7 @@ class MarketIndexTask(BaseTask):
                         view_name='market_index_view',
                         columns=cols,
                         key_cols=['trade_date', 'ts_code'],
-                        logger=self.logger,
+                        logger=logger,
                     )
         except Exception as e:
-            self.logger.error(f"同步指数失败: {e}")
+            logger.error(f"同步指数失败: {e}")

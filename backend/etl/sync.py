@@ -1,6 +1,4 @@
 import logging
-import time
-import arrow
 from etl.utils.factory import get_provider
 from etl.tasks.stock_basic_task import StockBasicTask
 from etl.tasks.daily_market_data_task import DailyMarketDataTask
@@ -8,11 +6,9 @@ from etl.tasks.capital_flow_task import CapitalFlowTask
 from etl.tasks.concepts_task import ConceptsTask
 from etl.tasks.market_index_task import MarketIndexTask
 from etl.tasks.financials_task import FinancialsTask
-from etl.tasks.factor_data_task import FactorDataTask
+from etl.tasks.reference_data_task import ReferenceDataTask
 from etl.tasks.calendar_task import CalendarTask
 from etl.tasks.margin_trading_task import MarginTradingTask
-from etl.tasks.forex_data_task import ForexDataTask
-from etl.utils.factors import factor_calculator
 from tenacity import retry, stop_after_attempt, wait_fixed
 
 logger = logging.getLogger(__name__)
@@ -31,11 +27,9 @@ class SyncEngine:
         self.concepts_task = ConceptsTask(self.provider)
         self.market_index_task = MarketIndexTask(self.provider)
         self.financials_task = FinancialsTask(self.provider)
-        self.factor_data_task = FactorDataTask(self.provider)
+        self.reference_data_task = ReferenceDataTask(self.provider)
         self.calendar_task = CalendarTask(self.provider)
         self.margin_trading_task = MarginTradingTask(self.provider)
-        self.forex_data_task = ForexDataTask(self.provider)
-        self.factor_calculator = factor_calculator
 
     @retry(stop=stop_after_attempt(3), wait=wait_fixed(10))
     def sync_stock_basic(self):
@@ -51,24 +45,22 @@ class SyncEngine:
         """
         self.calendar_task.sync(start_date=start_date, end_date=end_date)
 
-    def sync_daily_market_data(self, years: int = 1, force: bool = False, calc_factors: bool = True):
+    def sync_daily_market_data(self, years: int = 1, force: bool = False):
         """同步每日市场数据
         
         Args:
             years: 同步的年数
             force: 是否强制重新同步
-            calc_factors: 是否计算技术因子
         """
-        self.daily_market_data_task.sync_daily_data(years=years, force=force, calc_factors=calc_factors)
+        self.daily_market_data_task.sync_daily_data(years=years, force=force)
 
-    def sync_daily_data_by_date(self, trade_date: str, calc_factors: bool = True):
+    def sync_daily_data_by_date(self, trade_date: str):
         """同步特定日期的市场数据
         
         Args:
             trade_date: 交易日期
-            calc_factors: 是否计算技术因子
         """
-        self.daily_market_data_task.fetch_and_save_daily_data(trade_date, calc_factors=calc_factors)
+        self.daily_market_data_task.fetch_and_save_daily_data(trade_date)
 
     def sync_capital_flow(self, years: int = 0, days: int = 3, force: bool = False):
         """同步资金流向数据
@@ -82,11 +74,11 @@ class SyncEngine:
 
     def sync_daily_basic(self, years: int = 0, days: int = 3, force: bool = False):
         """同步日频基础指标。"""
-        self.factor_data_task.sync_daily_basic(years=years, days=days, force=force)
+        self.reference_data_task.sync_daily_basic(years=years, days=days, force=force)
 
     def sync_index_member_all(self):
         """同步申万行业层级归属。"""
-        self.factor_data_task.sync_index_member_all()
+        self.reference_data_task.sync_index_member_all()
 
     def sync_express_data(
         self,
@@ -95,44 +87,57 @@ class SyncEngine:
         end_date: str | None = None,
     ):
         """同步业绩快报数据。"""
-        self.factor_data_task.sync_express(days=days, start_date=start_date, end_date=end_date)
+        self.reference_data_task.sync_express(days=days, start_date=start_date, end_date=end_date)
 
     def perform_daily_data_update(self):
         """执行每日收盘后数据更新任务"""
-        logger.info("执行每日收盘数据更新...")
-        
-        # 1. 行情与资金流 (默认同步最近3天，防止漏数据)
-        self.sync_express_data(days=120)
-        self.sync_daily_market_data(years=1)
-        self.sync_capital_flow(days=3)
-        self.sync_daily_basic(days=3)
-        try:
-            latest_sync = arrow.get(self._get_latest_trade_date_str())
-            factor_start = latest_sync.shift(days=-5).format("YYYY-MM-DD")
-            factor_end = latest_sync.format("YYYY-MM-DD")
-            self.calculate_technical_factors_batch(factor_start, factor_end)
-        except Exception as e:
-            logger.warning(f"刷新最近因子快照失败: {e}")
-        
-        # 2. 指数同步（覆盖情绪模型依赖指数）
-        self.sync_core_market_indices(years=0, days=5)
+        import time as _time
+        logger.info("========== 每日数据更新开始 ==========")
+        steps: list[dict] = []
+        total_start = _time.time()
 
-        # 2.5. 融资融券数据
-        try:
-            self.sync_margin_trading_data(days=3)
-        except Exception as e:
-            logger.warning(f"融资融券数据同步失败: {e}")
+        def _run_step(label: str, fn, *args, **kwargs):
+            start = _time.time()
+            try:
+                result = fn(*args, **kwargs)
+                elapsed = _time.time() - start
+                status = "[OK]"
+                detail = str(result) if result else "完成"
+            except Exception as e:
+                elapsed = _time.time() - start
+                status = "[FAIL]"
+                detail = str(e)[:80]
+                logger.warning("%s %s | %s | %.1fs", status, label, detail, elapsed)
 
-        # 3. 验证数据完整性
-        self._validate_daily_update()
-        
-        # 4. 刷新主线结果
-        self.refresh_mainline_scores(days=5)
-        
-        # 5. 情绪计算
-        self.calculate_market_sentiment(days=30)
-        
-        logger.info("每日收盘数据更新完成")
+            steps.append({"label": label, "status": status, "detail": detail, "elapsed": elapsed})
+            logger.info("%s %-12s | %s | %5.1fs", status, label, detail, elapsed)
+
+        # ---- 1. 行情与资金流 ----
+        _run_step("业绩快报", self.sync_express_data, days=120)
+        _run_step("业绩预告", self.sync_forecast_data, days=120)
+        _run_step("日线行情", self.sync_daily_market_data, years=1)
+        _run_step("资金流向", self.sync_capital_flow, days=3)
+        _run_step("日频基础数据", self.sync_daily_basic, days=3)
+        _run_step("沪深港通资金", self.sync_moneyflow_hsgt, days=10)
+        _run_step("停复牌数据", self.sync_suspend_data, days=3)
+
+        # ---- 2. 指数 ----
+        _run_step("核心指数", self.sync_core_market_indices, years=0, days=5)
+        _run_step("指数权重", self.sync_index_weight_data, days=90)
+
+        # ---- 3. 融资融券 ----
+        _run_step("融资融券", self.sync_margin_trading_data, days=3)
+
+        # ---- 4. 验证 ----
+        _run_step("完整性校验", self._validate_daily_update)
+
+        total_elapsed = _time.time() - total_start
+        ok_count = sum(1 for s in steps if s["status"] == "[OK]")
+        fail_count = sum(1 for s in steps if s["status"] == "[FAIL]")
+        logger.info(
+            "========== 每日数据更新汇总 | 共 %d 项 成功:%d 失败:%d | 总耗时 %.1fs ==========",
+            len(steps), ok_count, fail_count, total_elapsed,
+        )
 
     def _get_latest_trade_date_str(self) -> str:
         from etl.calendar import trading_calendar
@@ -200,42 +205,6 @@ class SyncEngine:
         """同步概念分类数据。"""
         self._sync_concept_classification_once()
 
-        # 概念库刷新后，顺带回补近期主线落库结果，避免 mainline_scores 长时间停留在旧日期
-        try:
-            self.refresh_mainline_scores(days=30)
-        except Exception as e:
-            logger.warning(f"概念同步完成，但主线评分回补失败: {e}")
-
-
-    def refresh_mainline_scores(self, days: int = 5):
-        """重算最近若干交易日主线并落库。"""
-        from strategy.mainline import mainline_analyst
-
-        mainline_analyst.invalidate_cache()
-        refreshed = mainline_analyst.refresh_recent_scores(days=days)
-        logger.info(f"最近 {refreshed} 个交易日的主线评分已刷新")
-
-    def calculate_technical_factors(self, trade_date: str):
-        """计算指定日期的技术因子
-        
-        Args:
-            trade_date: 交易日期
-        """
-        self.factor_calculator.calculate_daily(trade_date)
-
-    def refresh_factor_snapshot(self, trade_date: str):
-        """重建某一交易日的宽表因子快照。"""
-        self.factor_calculator.refresh_factor_snapshot(trade_date)
-
-    def calculate_technical_factors_batch(self, start_date_str: str, end_date_str: str):
-        """批量计算技术因子
-        
-        Args:
-            start_date_str: 开始日期
-            end_date_str: 结束日期
-        """
-        self.factor_calculator.calculate_batch(start_date_str, end_date_str)
-
     @retry(stop=stop_after_attempt(3), wait=wait_fixed(10))
     def sync_market_index(self, ts_code: str = '000001.SH', years: int = 0, days: int = 3):
         """同步市场指数数据
@@ -250,7 +219,7 @@ class SyncEngine:
     def sync_core_market_indices(self, years: int = 0, days: int = 3):
         """同步核心市场指数
         
-        同步情绪/回测依赖的核心指数:
+        同步常用核心指数:
         - 000001.SH: 上证指数
         - 399006.SZ: 创业板指
         - 000300.SH: 沪深300
@@ -264,48 +233,78 @@ class SyncEngine:
         for code in ("000001.SH", "399006.SZ", "000300.SH", "399001.SZ", "000688.SH"):
             self.sync_market_index(ts_code=code, years=years, days=days)
 
-    def calculate_market_sentiment(self, days: int = 30):
-        """计算市场情绪指标
-        
-        Args:
-            days: 计算的天数
-        """
-        from strategy.sentiment import sentiment_analyst
-        sentiment_analyst.calculate(days=days)
-
-    def run_strategy_plaza_refresh(self, trade_date: str | None = None, strategy_key: str | None = None):
-        from etl.calendar import trading_calendar
-        from strategy.plaza import strategy_plaza_service
-
-        latest = trading_calendar.get_latest_sync_date()
-        target_date = trade_date or (latest.strftime("%Y-%m-%d") if hasattr(latest, "strftime") else str(latest))
-        logger.info(f"执行策略广场刷新: trade_date={target_date}, strategy_key={strategy_key or 'all'}")
-        return strategy_plaza_service.run_for_date(target_date, strategy_key=strategy_key)
-
     def sync_financial_statements(self, limit: int = 1000):
-        """同步财务报表数据（兼容旧接口）
+        """同步财务报表数据（利润表、资产负债表、现金流量表）
         
         Args:
             limit: 同步限制数量
         """
         self.financials_task.sync_quarterly_income()
+        self.financials_task.sync_balance_sheet()
+        self.financials_task.sync_cashflow()
 
     def sync_quarterly_income_statement(self, ts_code: str = None, force: bool = False):
-        """同步季度利润表数据
-        
-        Args:
-            ts_code: 股票代码
-            force: 是否强制重新同步
-        """
+        """同步季度利润表数据"""
         self.financials_task.sync_quarterly_income(ts_code=ts_code, force_sync=force)
 
+    def sync_balance_sheet(self, ts_code: str = None, force: bool = False):
+        """同步资产负债表数据"""
+        self.financials_task.sync_balance_sheet(ts_code=ts_code, force_sync=force)
+
+    def sync_cashflow(self, ts_code: str = None, force: bool = False):
+        """同步现金流量表数据"""
+        self.financials_task.sync_cashflow(ts_code=ts_code, force_sync=force)
+
     def sync_financial_indicators(self, ts_code: str = None):
-        """同步财务指标数据
-        
-        Args:
-            ts_code: 股票代码
-        """
+        """同步财务指标数据"""
         self.financials_task.sync_fina_indicator(ts_code=ts_code)
+
+    def sync_dividend_data(self, ts_code: str = None):
+        """同步分红送股数据"""
+        self.financials_task.sync_dividend(ts_code=ts_code)
+
+    def sync_forecast_data(
+        self,
+        days: int = 120,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        ts_code: str | None = None,
+    ):
+        """同步业绩预告数据"""
+        self.financials_task.sync_forecast(
+            days=days, start_date=start_date, end_date=end_date, ts_code=ts_code
+        )
+
+    def sync_suspend_data(self, years: int = 0, days: int = 3, force: bool = False):
+        """同步每日停复牌数据"""
+        self.daily_market_data_task.sync_suspend_data(years=years, days=days, force=force)
+
+    def sync_namechange_data(self, ts_code: str = None):
+        """同步股票更名历史数据"""
+        self.reference_data_task.sync_namechange(ts_code=ts_code)
+
+    def sync_index_weight_data(
+        self,
+        index_code: str = None,
+        start_date: str = None,
+        end_date: str = None,
+        days: int = 90,
+    ):
+        """同步指数成分股权重数据"""
+        self.reference_data_task.sync_index_weight(
+            index_code=index_code, start_date=start_date, end_date=end_date, days=days
+        )
+
+    def sync_moneyflow_hsgt(
+        self,
+        days: int = 30,
+        start_date: str = None,
+        end_date: str = None,
+    ):
+        """同步沪深港通资金流向数据"""
+        self.capital_flow_task.sync_moneyflow_hsgt(
+            days=days, start_date=start_date, end_date=end_date
+        )
 
     def sync_margin_trading_data(self, days: int = 90):
         """同步融资融券数据
@@ -315,54 +314,6 @@ class SyncEngine:
         """
         self.margin_trading_task.sync_margin_trading(days=days)
 
-    def sync_forex_data(self):
-        """同步外汇/宏观数据 - 已禁用"""
-        logger.info("外汇数据同步已禁用")
-        return
-
-    def fill_missing_technical_factors(self):
-        """补全缺失的技术因子数据"""
-        logger.info("检查并补全缺失的因子数据...")
-        from db.connection import get_db_connection
-        with get_db_connection() as con:
-            # 这里的逻辑：如果 factors 为空，或者虽然有因子但缺少关键的长周期因子 (high_250)，则认为需要重算
-            query = """
-            SELECT DISTINCT trade_date 
-            FROM daily_price 
-            WHERE factors IS NULL 
-               OR factors = '{}' 
-               OR factors = 'null'
-               OR json_extract_path_text(factors, '$.high_250') IS NULL
-            ORDER BY trade_date DESC
-            """
-            dates = con.execute(query).fetchall()
-
-            factor_dates = con.execute(
-                """
-                SELECT DISTINCT trade_date
-                FROM daily_price
-                WHERE trade_date NOT IN (
-                    SELECT DISTINCT trade_date FROM stock_factor_daily
-                )
-                ORDER BY trade_date DESC
-                """
-            ).fetchall()
-        
-        dates = {d[0] for d in dates} | {d[0] for d in factor_dates}
-        dates = sorted(dates, reverse=True)
-        if not dates:
-            logger.info("所有行情因子的数据已完整。")
-            return
-
-        logger.info(f"发现 {len(dates)} 个交易日存在因子缺失或不完整，开始批量修复...")
-        # 建议按月或按周分块，或者调用 calculate_technical_factors_batch
-        # 为了简单且稳妥，这里先逐日补全，如果是海量数据建议外部调用 batch
-        for d in dates:
-            try:
-                d_str = d.strftime("%Y-%m-%d") if hasattr(d, 'strftime') else str(d)
-                self.calculate_technical_factors(d_str)
-            except Exception as e:
-                logger.error(f"计算 {d} 因子失败: {e}")
-
 # Export singleton
 sync_engine = SyncEngine()
+

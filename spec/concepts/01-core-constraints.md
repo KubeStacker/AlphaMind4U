@@ -1,64 +1,27 @@
 # 核心约束
 
-## DuckDB 数据库访问
+## DuckDB
 
-**规则：** 使用 DuckDB 嵌入式单进程模型，通过 `/admin/db/query` API 查询。
+- backend 独占一个进程级共享连接，读写均通过该连接串行执行。
+- MCP 和其他进程不得直接打开 DuckDB 文件。
+- MCP 通过 `/admin/datasets*` 受控 API 读取白名单单表。
+- 不提供任意 SQL、JOIN、聚合或写入工具。
+- `register()` 的 DataFrame 必须在 `finally` 中 `unregister()`。
 
-**原因：**
-- DuckDB 不支持高并发写入
-- 直接 `duckdb.connect()` 会导致 `Unique file handle conflict`
-- 共享连接上 `register()` 后必须及时 `unregister()`
+## 数据边界
 
-**正确方式：**
-```bash
-curl -X POST http://localhost:8000/admin/db/query \
-  -H "Content-Type: application/json" \
-  -d '{"sql": "SELECT * FROM stock_basic LIMIT 5"}'
-```
+- 只采集 Provider 返回的原始数据。
+- 允许 schema、日期、单位规范化、去重和安全 upsert。
+- 禁止生成技术指标、情绪、评分、信号、建议、推荐、策略和预测。
+- 精简代码时不删除已有数据库文件，也不主动 DROP 历史业务表。
 
-**错误方式：**
-```python
-# ❌ 禁止在仓库外直接打开
-import duckdb
-con = duckdb.connect('/root/jarvis/data/jarvis.duckdb')
-```
+## Tushare
 
-## Tushare Pro 数据源
+- 当前 Token 约 2000 积分；使用接口前确认权限。
+- 使用有界限流和重试，高积分接口不可用时明确失败。
+- 不通过替代推测或合成数据填补接口权限。
 
-**规则：** 优先使用 Tushare Pro 接口，实现前确认接口所需积分。
+## 容器
 
-**当前限制：**
-- Token 仅有 2000 积分
-- 高积分接口（如 `stk_factor`、`daily_hf`）无权限调用
-- 如遇积分不足，给出说明即可，不用强求验证
-
-**参考：** `backend/etl/providers/` 中已有的 Tushare 接口封装
-
-## 容器化开发
-
-**规则：** 代码在 Docker 容器中运行，修改后通过 curl 验证。
-
-**正确流程：**
-1. 修改文件（自动同步到容器）
-2. uvicorn `--reload` 自动重载
-3. 使用 curl 调用 API 验证功能
-
-**禁止操作：**
-- 重启容器
-- 手工 copy 文件到容器
-- 在主机执行 `npm run build`
-
-## 验证示例
-
-```bash
-# 测试数据库查询
-curl -X POST http://localhost:8000/admin/db/query \
-  -H "Content-Type: application/json" \
-  -d '{"sql": "SELECT 1"}'
-
-# 测试市场情绪
-curl "http://localhost:8000/admin/market_sentiment?days=30"
-
-# 测试数据完整性
-curl "http://localhost:8000/admin/integrity?start_date=2025-01-01&end_date=2025-12-31"
-```
+- backend 与 MCP 分容器运行。
+- 修改后优先在容器中验证，禁止在宿主机安装项目依赖。

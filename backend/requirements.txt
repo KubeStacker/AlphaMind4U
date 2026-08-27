@@ -1,7 +1,6 @@
 # 核心框架
 fastapi
 uvicorn[standard]
-python-multipart
 pandas
 numpy
 
@@ -18,18 +17,7 @@ chinesecalendar
 arrow
 pytz
 
-# 安全
-passlib
-bcrypt==4.0.1
-python-jose[cryptography]
-
 # 数据源
 tushare
 tenacity
 apscheduler
-
-# 拼音支持
-pypinyin
-
-# HTTP客户端
-httpx

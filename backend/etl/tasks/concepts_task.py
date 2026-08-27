@@ -1,6 +1,7 @@
+import logging
+logger = logging.getLogger(__name__)
 from etl.tasks.base_task import BaseTask
 from db.connection import get_db_connection
-from core.constants import CONCEPT_BLACKLIST
 from core.config import settings
 import pandas as pd
 import time
@@ -313,7 +314,6 @@ class ConceptsTask(BaseTask):
                 self.logger.warning("获取同花顺概念列表失败，可能无权限(需要6000积分)")
                 return False
 
-            df_ths = df_ths[~df_ths["name"].isin(CONCEPT_BLACKLIST)].copy()
             if df_ths.empty:
                 self.logger.warning("THS 概念目录为空")
                 return False
@@ -350,21 +350,14 @@ class ConceptsTask(BaseTask):
             concept_code = row["ts_code"]
             concept_name = row["name"]
 
-            if concept_name in CONCEPT_BLACKLIST:
-                continue
-
             try:
                 df_detail = self.provider.ths_member(ts_code=concept_code)
                 if not df_detail.empty:
-                    df_detail = df_detail[
-                        ~df_detail["con_name"].isin(CONCEPT_BLACKLIST)
-                    ]
-
                     if not df_detail.empty:
                         ths_detail = pd.DataFrame(
                             {
                                 "id": concept_code,
-                                "concept_name": concept_name + "_THS",
+                                "concept_name": concept_name,
                                 "ts_code": df_detail["con_code"],
                                 "name": df_detail["con_name"],
                             }
@@ -401,8 +394,6 @@ class ConceptsTask(BaseTask):
         if all_concepts is None or all_concepts.empty:
             self.logger.warning("概念目录为空，无法同步单只股票概念")
             return
-        all_concepts = all_concepts[~all_concepts["name"].isin(CONCEPT_BLACKLIST)]
-
         found = []
 
         for idx, row in all_concepts.iterrows():
@@ -456,13 +447,6 @@ class ConceptsTask(BaseTask):
                 self.logger.warning("Tushare concept 目录为空")
                 return False
 
-            df_concepts = df_concepts[
-                ~df_concepts["name"].isin(CONCEPT_BLACKLIST)
-            ].copy()
-            if df_concepts.empty:
-                self.logger.warning("Tushare concept 目录过滤黑名单后为空")
-                return False
-
             catalog_df = df_concepts[["code", "name", "src"]].copy()
             self._replace_concept_catalog(catalog_df)
             self._clear_concept_details(STAGING_CONCEPT_DETAILS_TABLE)
@@ -477,12 +461,6 @@ class ConceptsTask(BaseTask):
                 try:
                     df_detail = self.provider.concept_detail(id=concept_code)
                     if df_detail is None or df_detail.empty:
-                        continue
-
-                    df_detail = df_detail[
-                        ~df_detail["concept_name"].isin(CONCEPT_BLACKLIST)
-                    ].copy()
-                    if df_detail.empty:
                         continue
 
                     detail_batches.append(df_detail)

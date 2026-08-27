@@ -126,19 +126,16 @@ class CapitalFlowTask(BaseTask):
         Args:
             df: 包含资金流向数据的DataFrame
         """
-        # 确保DataFrame有net_mf_ratio列（Tushare API可能不返回此列）
         cols = [
             'ts_code', 'trade_date', 'buy_sm_vol', 'buy_sm_amount', 'sell_sm_vol',
             'sell_sm_amount', 'buy_md_vol', 'buy_md_amount', 'sell_md_vol',
             'sell_md_amount', 'buy_lg_vol', 'buy_lg_amount', 'sell_lg_vol',
             'sell_lg_amount', 'buy_elg_vol', 'buy_elg_amount', 'sell_elg_vol',
-            'sell_elg_amount', 'net_mf_vol', 'net_mf_amount', 'net_mf_ratio'
+            'sell_elg_amount', 'net_mf_vol', 'net_mf_amount'
         ]
         for col in cols:
             if col not in df.columns:
                 df[col] = None
-        if 'net_mf_ratio' not in df.columns:
-            df['net_mf_ratio'] = None
         df_to_save = df[cols].copy()
         df_to_save['trade_date'] = pd.to_datetime(df_to_save['trade_date']).dt.date
         df_to_save = dedupe_by_key(
@@ -158,3 +155,51 @@ class CapitalFlowTask(BaseTask):
                 key_cols=['ts_code', 'trade_date'],
                 logger=logger,
             )
+
+    def sync_moneyflow_hsgt(
+        self,
+        days: int = 30,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ):
+        """同步沪深港通资金流向数据"""
+        if not end_date:
+            end_date = arrow.get(trading_calendar.get_latest_sync_date()).format("YYYY-MM-DD")
+        if not start_date:
+            start_date = arrow.get(end_date).shift(days=-days).format("YYYY-MM-DD")
+
+        logger.info(f"开始同步沪深港通资金流向: {start_date} ~ {end_date}")
+        try:
+            df = self.provider.moneyflow_hsgt(start_date=start_date, end_date=end_date)
+            if df.empty:
+                logger.warning("沪深港通资金流向未返回数据")
+                return
+
+            cols = ['trade_date', 'ggt_ss', 'ggt_sz', 'hgt', 'sgt', 'north_money', 'south_money']
+            for col in cols:
+                if col not in df.columns:
+                    df[col] = None
+
+            df['trade_date'] = pd.to_datetime(df['trade_date']).dt.date
+            df_to_save = df[cols].copy()
+            df_to_save = dedupe_by_key(
+                df_to_save,
+                key_cols=['trade_date'],
+                table_name='moneyflow_hsgt',
+                logger=logger,
+            )
+
+            with get_db_connection() as con:
+                update_then_insert_missing(
+                    con,
+                    df=df_to_save,
+                    table_name='moneyflow_hsgt',
+                    view_name='hsgt_view',
+                    columns=cols,
+                    key_cols=['trade_date'],
+                    logger=logger,
+                )
+            logger.info(f"沪深港通资金流向同步完成: {len(df_to_save)} 条")
+        except Exception as e:
+            logger.error(f"同步沪深港通资金流向失败: {e}")
+

@@ -5,7 +5,6 @@ from apscheduler.triggers.cron import CronTrigger
 from etl.sync import sync_engine
 import logging
 import pytz
-from strategy.sentiment.live_monitor import live_sentiment_monitor
 
 logger = logging.getLogger(__name__)
 
@@ -15,49 +14,57 @@ SHANGHAI_TZ = pytz.timezone('Asia/Shanghai')
 # 创建全局调度器实例，指定时区为上海
 scheduler = AsyncIOScheduler(timezone=SHANGHAI_TZ)
 
+# ============================================================
+# 任务分组定义
+# ============================================================
+
+TASK_GROUPS: dict[str, list[str]] = {
+    "基础数据": [
+        "sync_stock_basic",
+        "sync_concept_classification",
+    ],
+    "行情数据": [
+        "daily_data_update",
+        "daily_data_update_fallback",
+    ],
+    "资金融资": [
+        "sync_margin_trading",
+    ],
+    "财务数据": [
+        "sync_financial_statements",
+    ],
+}
+
+
 def start_scheduler():
     """启动定时数据采集任务调度器"""
     if scheduler.running:
         logger.info("定时任务调度器已在运行，跳过重复启动")
         return
-    
-    # 1. 每日凌晨 00:05 更新基础数据 (股票列表)
+
+    # ---- 基础数据 ----
     scheduler.add_job(
         sync_engine.sync_stock_basic,
         CronTrigger(hour=0, minute=5, timezone=SHANGHAI_TZ),
         id="sync_stock_basic",
         name="同步股票基础信息",
-        replace_existing=True
+        replace_existing=True,
     )
-    
-    # 2. 每日凌晨 00:10 更新概念分类
-    # 暂时禁用: 当前概念同步会触发 DuckDB 主键冲突并拖挂服务，先保证持仓/分析接口可用。
+    # 概念分类同步暂禁用: 会触发 DuckDB 主键冲突
     # scheduler.add_job(
     #     sync_engine.sync_concept_classification,
     #     CronTrigger(hour=0, minute=10, timezone=SHANGHAI_TZ),
     #     id="sync_concept_classification",
     #     name="同步概念分类数据",
-    #     replace_existing=True
+    #     replace_existing=True,
     # )
 
-    # 3. 每日收盘后更新（主任务 + 兜底任务，避免数据源延迟）
+    # ---- 行情数据 ----
     scheduler.add_job(
         sync_engine.perform_daily_data_update,
         CronTrigger(hour=16, minute=45, timezone=SHANGHAI_TZ),
         id="daily_data_update",
         name="每日收盘数据更新(主)",
-        misfire_grace_time=3600,
-        coalesce=True,
-        max_instances=1,
-        replace_existing=True
-    )
-    
-    # 4. 每日收盘后更新兜底任务（18:30）
-    scheduler.add_job(
-        sync_engine.run_strategy_plaza_refresh,
-        CronTrigger(hour=18, minute=0, timezone=SHANGHAI_TZ),
-        id="strategy_plaza_refresh",
-        name="策略广场每日刷新",
         misfire_grace_time=3600,
         coalesce=True,
         max_instances=1,
@@ -72,10 +79,10 @@ def start_scheduler():
         misfire_grace_time=3600,
         coalesce=True,
         max_instances=1,
-        replace_existing=True
+        replace_existing=True,
     )
 
-    # 4.5. 每日 19:00 同步融资融券数据（两融数据通常较晚发布）
+    # ---- 资金融资 ----
     scheduler.add_job(
         sync_engine.sync_margin_trading_data,
         CronTrigger(hour=19, minute=7, timezone=SHANGHAI_TZ),
@@ -88,48 +95,81 @@ def start_scheduler():
         replace_existing=True,
     )
 
-    # 5. 每周日凌晨 02:00 同步财务报表数据
+    # ---- 财务数据 ----
     scheduler.add_job(
         sync_engine.sync_financial_statements,
         CronTrigger(day_of_week='sun', hour=2, minute=0, timezone=SHANGHAI_TZ),
         id="sync_financial_statements",
         name="每周财务报表同步",
         kwargs={"limit": 1000},
-        replace_existing=True
+        replace_existing=True,
     )
-
-    # 6. 每日 08:00 同步外汇数据 (美元指数、离岸人民币 - 最近7天)
-    # 已禁用: 该任务会触发 DuckDB fatal error (删除 fx_daily 时失败)
-    # scheduler.add_job(
-    #     sync_engine.sync_forex_data,
-    #     CronTrigger(hour=8, minute=0, timezone=SHANGHAI_TZ),
-    #     id="sync_forex_data",
-    #     name="每日外汇数据同步",
-    #     replace_existing=True
-    # )
-
-    # 7. 每10分钟刷新一次外部风险信号（CNBC 10Y / Pizza 指数）
-    # 已禁用: 避免外部请求失败影响服务稳定性
-    # scheduler.add_job(
-    #     live_sentiment_monitor.refresh_macro_signals,
-    #     CronTrigger(minute="*/10", timezone=SHANGHAI_TZ),
-    #     id="refresh_external_sentiment_signals",
-    #     name="刷新外部风险信号",
-    #     kwargs={"force": True},
-    #     misfire_grace_time=300,
-    #     coalesce=True,
-    #     max_instances=1,
-    #     replace_existing=True,
-    # )
-
 
     scheduler.start()
-    logger.info(
-        "定时任务调度器已启动:\n"
-        "  - 基础数据: 00:05 (股票列表) / 00:10 (概念分类)\n"
-        "  - 收盘数据: 16:45 (主) / 18:30 (兜底)\n"
-        "  - 融资融券: 19:07 (每日)\n"
-        "  - 财务报表: 周日 02:00\n"
-        "  - 外汇数据: 已禁用\n"
-        "  - 外部风险信号: 已禁用"
-    )
+
+    # 启动日志 — 按分组展示
+    _log_startup_summary()
+
+
+def _log_startup_summary():
+    """打印分组启动摘要"""
+    schedule_map = {}
+    for job in scheduler.get_jobs():
+        schedule_map[job.id] = job
+
+    lines = ["定时任务调度器已启动:"]
+
+    for group_name, job_ids in TASK_GROUPS.items():
+        parts = []
+        for jid in job_ids:
+            job = schedule_map.get(jid)
+            if job:
+                trigger = job.trigger
+                if hasattr(trigger, 'fields') and callable(getattr(trigger, 'fields', None)):
+                    fields = trigger.fields
+                else:
+                    fields = []
+                # 生成时间描述
+                time_desc = _describe_trigger(trigger)
+                parts.append(f"{job.name}({time_desc})")
+            else:
+                parts.append(f"{jid}(已禁用)")
+        if parts:
+            lines.append(f"  [{group_name}] {' | '.join(parts)}")
+
+    logger.info("\n".join(lines))
+
+
+def _describe_trigger(trigger) -> str:
+    """生成 CronTrigger 的人类可读描述"""
+    from apscheduler.triggers.cron.expressions import AllExpression, WeekdayRangeExpression
+
+    values: dict[str, str] = {}
+    if hasattr(trigger, 'fields'):
+        for f in trigger.fields:
+            name = f.name
+            exprs = f.expressions
+            if not exprs:
+                values[name] = "*"
+                continue
+            e = exprs[0]
+            if isinstance(e, WeekdayRangeExpression):
+                # Weekday 返回 'sun','mon' 等, 用 str() 获取
+                values[name] = str(e)
+            elif hasattr(e, 'first'):
+                values[name] = str(e.first)
+            elif isinstance(e, AllExpression):
+                values[name] = "*"
+            else:
+                values[name] = str(e)
+
+    hour = values.get("hour", "*")
+    minute = values.get("minute", "*")
+    dow = values.get("day_of_week", "*")
+
+    if dow not in ("*", "?"):
+        dow_map = {"sun": "周日", "mon": "周一", "tue": "周二", "wed": "周三",
+                    "thu": "周四", "fri": "周五", "sat": "周六"}
+        day_label = dow_map.get(dow.lower(), dow)
+        return f"{day_label} {hour}:{minute}"
+    return f"{hour}:{minute}"

@@ -9,20 +9,25 @@ logger = logging.getLogger(__name__)
 
 class TushareProvider(DataProvider):
     def __init__(self):
-        token = settings.tushare_token
-        self.pro = ts.pro_api(token)
-        
-        # Short token 需要特殊处理
-        if settings.tushare_token_type == "short":
-            self.pro._DataApi__token = token
-            self.pro._DataApi__http_url = 'http://lianghua.nanyangqiankun.top'
-            self._is_short_token = True
-        else:
-            self._is_short_token = False
+        self._token = settings.tushare_token
+        self._pro = None
+        self._is_short_token = settings.tushare_token_type == "short"
         
         self.last_call_time = 0
         self.min_interval = 0.5
         self._daily_limit_hit = set()  # 记录每日限额用完的接口
+
+    @property
+    def pro(self):
+        """延迟创建客户端，使 API/schema 检查不依赖采集凭证。"""
+        if self._pro is None:
+            if not self._token:
+                raise RuntimeError("未配置 Tushare token，无法执行数据采集")
+            self._pro = ts.pro_api(self._token)
+            if self._is_short_token:
+                self._pro._DataApi__token = self._token
+                self._pro._DataApi__http_url = 'http://lianghua.nanyangqiankun.top'
+        return self._pro
 
     def _rate_limited_call(self, func, **kwargs):
         # 获取接口名 (处理 partial 对象)
@@ -85,8 +90,14 @@ class TushareProvider(DataProvider):
             logger.error(f"Tushare health check failed: {e}")
             return False
 
-    def stock_basic(self) -> pd.DataFrame:
-        return self._rate_limited_call(self.pro.stock_basic, list_status='L', fields='ts_code,symbol,name,area,industry,market,list_date,fullname,enname,curr_type,list_status,is_hs')
+    def stock_basic(self, list_status: str = "L,D,P") -> pd.DataFrame:
+        fields = (
+            "ts_code,symbol,name,area,industry,market,list_date,fullname,enname,"
+            "curr_type,list_status,is_hs,delist_date,exchange,cnspell"
+        )
+        return self._rate_limited_call(
+            self.pro.stock_basic, list_status=list_status, fields=fields
+        )
 
     def daily(self, trade_date: str = None, ts_code: str = None, start_date: str = None, end_date: str = None) -> pd.DataFrame:
         if trade_date:
@@ -132,67 +143,6 @@ class TushareProvider(DataProvider):
     def index_daily(self, ts_code: str, start_date: str, end_date: str) -> pd.DataFrame:
         return self._rate_limited_call(self.pro.index_daily, ts_code=ts_code, start_date=start_date, end_date=end_date)
 
-    def realtime_quote(self, ts_code: str = None, src: str = "dc") -> pd.DataFrame:
-        """
-        实时行情快照 (用于盘中预估)。
-
-        Args:
-            ts_code: 代码，支持股票/指数（如 000300.SH）
-            src: 数据源，默认 dc
-        """
-        def _normalize_quote_df(df: pd.DataFrame) -> pd.DataFrame:
-            if df is None or df.empty:
-                return pd.DataFrame()
-            rename_map = {c: str(c).lower() for c in df.columns}
-            return df.rename(columns=rename_map)
-
-        params = {"src": src}
-        if ts_code:
-            params["ts_code"] = ts_code
-
-        # pro.realtime_quote 只支持 dc 源，sina 源直接使用 ts.realtime_quote
-        if src == "sina":
-            try:
-                ts.set_token(settings.tushare_token)
-                df = ts.realtime_quote(**params)
-                if df is not None and not df.empty:
-                    return _normalize_quote_df(df)
-            except Exception as e:
-                logger.warning(f"ts.realtime_quote(sina) 失败: {e}")
-                return pd.DataFrame()
-
-        # 优先尝试 pro 接口；若接口不可用，自动回退到 ts.realtime_quote
-        try:
-            df = self._rate_limited_call(self.pro.realtime_quote, **params)
-            if df is not None and not df.empty:
-                return _normalize_quote_df(df)
-        except Exception as e:
-            logger.warning(f"pro.realtime_quote 失败(src={src}): {e}")
-
-        try:
-            ts.set_token(settings.tushare_token)
-            df = ts.realtime_quote(**params)
-            if df is not None and not df.empty:
-                return _normalize_quote_df(df)
-        except Exception as e:
-            logger.warning(f"ts.realtime_quote 失败(src={src}): {e}")
-
-        # 东财源不稳定时，尝试新浪兜底
-        if src != "sina":
-            try:
-                ts.set_token(settings.tushare_token)
-                fb_params = {"src": "sina"}
-                if ts_code:
-                    fb_params["ts_code"] = ts_code
-                df = ts.realtime_quote(**fb_params)
-                if df is not None and not df.empty:
-                    logger.info("realtime_quote 自动回退到 src=sina 成功")
-                    return _normalize_quote_df(df)
-            except Exception as e:
-                logger.warning(f"ts.realtime_quote 回退 sina 失败: {e}")
-
-        return pd.DataFrame()
-    
     def concept(self) -> pd.DataFrame:
         return self._rate_limited_call(self.pro.concept, src='ts')
     
@@ -336,25 +286,113 @@ class TushareProvider(DataProvider):
             params['trade_date'] = trade_date.replace("-", "")
         return self._rate_limited_call(self.pro.margin_detail, **params)
 
-    def fx_daily(self) -> pd.DataFrame:
-        """ 外汇/宏观数据 """
-        return self._rate_limited_call(self.pro.fx_daily)
-
-    def us_tycr(
+    def suspend_d(
         self,
-        date: str = None,
+        trade_date: str = None,
+        ts_code: str = None,
         start_date: str = None,
         end_date: str = None,
-        fields: str = None,
     ) -> pd.DataFrame:
-        """美国国债收益率曲线。"""
+        """每日停复牌信息"""
         params = {}
-        if date:
-            params["date"] = date.replace("-", "")
+        if trade_date:
+            params['trade_date'] = trade_date.replace("-", "")
+        if ts_code:
+            params['ts_code'] = ts_code
         if start_date:
-            params["start_date"] = start_date.replace("-", "")
+            params['start_date'] = start_date.replace("-", "")
         if end_date:
-            params["end_date"] = end_date.replace("-", "")
-        if fields:
-            params["fields"] = fields
-        return self._rate_limited_call(self.pro.us_tycr, **params)
+            params['end_date'] = end_date.replace("-", "")
+        return self._rate_limited_call(self.pro.suspend_d, **params)
+
+    def namechange(
+        self,
+        ts_code: str = None,
+        start_date: str = None,
+        end_date: str = None,
+    ) -> pd.DataFrame:
+        """股票更名记录"""
+        params = {}
+        if ts_code:
+            params['ts_code'] = ts_code
+        if start_date:
+            params['start_date'] = start_date.replace("-", "")
+        if end_date:
+            params['end_date'] = end_date.replace("-", "")
+        return self._rate_limited_call(self.pro.namechange, **params)
+
+    def dividend(
+        self,
+        ts_code: str = None,
+        ann_date: str = None,
+        record_date: str = None,
+        ex_date: str = None,
+    ) -> pd.DataFrame:
+        """分红送股数据"""
+        params = {}
+        if ts_code:
+            params['ts_code'] = ts_code
+        if ann_date:
+            params['ann_date'] = ann_date.replace("-", "")
+        if record_date:
+            params['record_date'] = record_date.replace("-", "")
+        if ex_date:
+            params['ex_date'] = ex_date.replace("-", "")
+        return self._rate_limited_call(self.pro.dividend, **params)
+
+    def index_weight(
+        self,
+        index_code: str = None,
+        trade_date: str = None,
+        start_date: str = None,
+        end_date: str = None,
+    ) -> pd.DataFrame:
+        """指数成分和权重"""
+        params = {}
+        if index_code:
+            params['index_code'] = index_code
+        if trade_date:
+            params['trade_date'] = trade_date.replace("-", "")
+        if start_date:
+            params['start_date'] = start_date.replace("-", "")
+        if end_date:
+            params['end_date'] = end_date.replace("-", "")
+        return self._rate_limited_call(self.pro.index_weight, **params)
+
+    def forecast(
+        self,
+        ts_code: str = None,
+        ann_date: str = None,
+        start_date: str = None,
+        end_date: str = None,
+        period: str = None,
+    ) -> pd.DataFrame:
+        """业绩预告数据"""
+        params = {}
+        if ts_code:
+            params['ts_code'] = ts_code
+        if ann_date:
+            params['ann_date'] = ann_date.replace("-", "")
+        if start_date:
+            params['start_date'] = start_date.replace("-", "")
+        if end_date:
+            params['end_date'] = end_date.replace("-", "")
+        if period:
+            params['period'] = period.replace("-", "")
+        return self._rate_limited_call(self.pro.forecast, **params)
+
+    def moneyflow_hsgt(
+        self,
+        trade_date: str = None,
+        start_date: str = None,
+        end_date: str = None,
+    ) -> pd.DataFrame:
+        """沪深港通资金流向"""
+        params = {}
+        if trade_date:
+            params['trade_date'] = trade_date.replace("-", "")
+        if start_date:
+            params['start_date'] = start_date.replace("-", "")
+        if end_date:
+            params['end_date'] = end_date.replace("-", "")
+        return self._rate_limited_call(self.pro.moneyflow_hsgt, **params)

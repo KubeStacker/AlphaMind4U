@@ -62,24 +62,22 @@ class DailyMarketDataTask(BaseTask):
         # 默认值
         return 1000
 
-    def sync_daily_data(self, years: int = 1, force: bool = False, calc_factors: bool = True):
+    def sync_daily_data(self, years: int = 1, force: bool = False):
         """同步A股日线数据
         
         Args:
             years: 同步的年数，默认1年
             force: 是否强制重新同步已存在的数据
-            calc_factors: 是否计算技术因子
         """
         logger.info(f"开始同步日线数据 (年限: {years})...")
-        self._sync_by_date_range(years, force, calc_factors)
+        self._sync_by_date_range(years, force)
 
-    def _sync_by_date_range(self, years: int, force: bool, calc_factors: bool):
+    def _sync_by_date_range(self, years: int, force: bool):
         """按日期范围同步数据
         
         Args:
             years: 同步的年数
             force: 是否强制重新同步
-            calc_factors: 是否计算技术因子
         """
         # 优化：获取当前可同步的最晚日期 (如果是收盘后则包含今日)
         end_date = arrow.get(trading_calendar.get_latest_sync_date())
@@ -113,14 +111,13 @@ class DailyMarketDataTask(BaseTask):
             return
 
         for date_str in dates_to_sync:
-            self.fetch_and_save_daily_data(date_str, calc_factors)
+            self.fetch_and_save_daily_data(date_str)
 
-    def fetch_and_save_daily_data(self, date_str: str, calc_factors: bool):
+    def fetch_and_save_daily_data(self, date_str: str):
         """获取并保存指定日期的市场数据
         
         Args:
             date_str: 交易日期字符串 (YYYY-MM-DD)
-            calc_factors: 是否计算技术因子
         """
         logger.info(f"正在同步 {date_str} 的行情...")
         try:
@@ -140,24 +137,12 @@ class DailyMarketDataTask(BaseTask):
                 if 'adj_factor' not in df.columns:
                     df['adj_factor'] = 1.0
 
-            df['factors'] = '{}'
             # 确保日期格式
             df['trade_date'] = pd.to_datetime(df['trade_date']).dt.date
             
             # 保存到数据库
             self._upsert_daily_data(df)
             
-            if calc_factors:
-                try:
-                    from etl.tasks.capital_flow_task import CapitalFlowTask
-                    from etl.tasks.factor_data_task import FactorDataTask
-
-                    CapitalFlowTask(self.provider).sync_capital_flow_for_date(date_str)
-                    FactorDataTask(self.provider).sync_daily_basic_for_date(date_str)
-                except Exception as exc:
-                    logger.warning(f"同步 {date_str} 的因子依赖数据失败，因子将使用已有数据: {exc}")
-                self.calculate_technical_factors(date_str)
-                
             time.sleep(0.5) # 避免限流
 
         except Exception as e:
@@ -170,7 +155,7 @@ class DailyMarketDataTask(BaseTask):
         Args:
             df: 包含日线数据的DataFrame
         """
-        cols = ['trade_date', 'ts_code', 'open', 'high', 'low', 'close', 'pre_close', 'change', 'pct_chg', 'vol', 'amount', 'factors', 'adj_factor']
+        cols = ['trade_date', 'ts_code', 'open', 'high', 'low', 'close', 'pre_close', 'change', 'pct_chg', 'vol', 'amount', 'adj_factor']
         for c in cols:
             if c not in df.columns:
                 df[c] = None
@@ -195,22 +180,70 @@ class DailyMarketDataTask(BaseTask):
                 logger=logger,
             )
 
-    def calculate_technical_factors(self, trade_date: str):
-        """计算指定日期的技术因子
-        
-        Args:
-            trade_date: 交易日期字符串
-        """
-        # 使用独立的计算器以避免循环引用
-        from etl.utils.factors import factor_calculator
-        factor_calculator.calculate_daily(trade_date)
+    def sync_suspend_data(self, years: int = 0, days: int = 3, force: bool = False):
+        """同步股票停复牌数据"""
+        logger.info(f"开始同步停复牌数据 (years={years}, days={days}, force={force})...")
+        end_date = arrow.get(trading_calendar.get_latest_sync_date())
+        start_date = end_date.shift(years=-years) if years > 0 else end_date.shift(days=-days)
+        target_dates = {
+            r.format("YYYY-MM-DD")
+            for r in arrow.Arrow.range("day", start_date, end_date)
+            if trading_calendar.is_trading_day(r.date())
+        }
 
-    def calculate_technical_factors_batch(self, start_date: str, end_date: str):
-        """批量计算技术因子
-        
-        Args:
-            start_date: 开始日期
-            end_date: 结束日期
-        """
-        from etl.utils.factors import factor_calculator
-        factor_calculator.calculate_batch(start_date, end_date)
+        existing_dates = set()
+        if not force:
+            try:
+                df_existing = fetch_df(
+                    """
+                    SELECT trade_date FROM stock_suspend
+                    WHERE trade_date BETWEEN ? AND ?
+                    GROUP BY trade_date
+                    """,
+                    params=[start_date.date(), end_date.date()],
+                )
+                if not df_existing.empty:
+                    existing_dates = {d.strftime("%Y-%m-%d") for d in df_existing['trade_date']}
+            except Exception:
+                pass
+
+        dates_to_sync = sorted(list(target_dates - existing_dates), reverse=True)
+        if not dates_to_sync:
+            logger.info("停复牌数据已是最新。")
+            return
+
+        for date_str in dates_to_sync:
+            try:
+                df = self.provider.suspend_d(trade_date=date_str)
+                if not df.empty:
+                    df['trade_date'] = pd.to_datetime(df['trade_date']).dt.date
+                    self._upsert_suspend_data(df)
+                time.sleep(0.5)
+            except Exception as e:
+                logger.error(f"同步停复牌数据 {date_str} 失败: {e}")
+
+    def _upsert_suspend_data(self, df: pd.DataFrame):
+        cols = ['ts_code', 'trade_date', 'suspend_timing', 'suspend_type']
+        for c in cols:
+            if c not in df.columns:
+                df[c] = None
+        df_to_save = df[cols].copy()
+        df_to_save['trade_date'] = pd.to_datetime(df_to_save['trade_date']).dt.date
+        df_to_save = dedupe_by_key(
+            df_to_save,
+            key_cols=['ts_code', 'trade_date'],
+            table_name='stock_suspend',
+            logger=logger,
+        )
+
+        with get_db_connection() as con:
+            update_then_insert_missing(
+                con,
+                df=df_to_save,
+                table_name='stock_suspend',
+                view_name='suspend_view',
+                columns=cols,
+                key_cols=['ts_code', 'trade_date'],
+                logger=logger,
+            )
+

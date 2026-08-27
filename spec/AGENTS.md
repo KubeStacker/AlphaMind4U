@@ -1,38 +1,16 @@
-# AGENTS.md — Jarvis-Quant 项目约束规范
+# Jarvis 规范
 
-> AI 智能体在 Jarvis-Quant 中的工作约束和规范驱动开发流程。
+项目仅包含两个有效模块：
 
-## 项目概述
-
-A股量化交易决策系统，FastAPI + Vue 3，DuckDB 嵌入式数据库。当前有效模块为 4 个（Watchlist / Strategy / Data Sync / Basic）。`Dashboard` 与 `Docs` 已从代码中移除。
-
-## 规范驱动开发
-
-**任何功能变更必须遵循 spec-first 流程：**
-
-1. 阅读对应模块 spec（`modules/` 目录）
-2. 使用 `skills/spec-writer` 技能澄清意图、起草规范
-3. 用户确认规范后实施代码
-4. 实施完成后更新 spec
-
-### 模块 Spec
-
-| 模块 | 目录 |
+| 模块 | Spec |
 |------|------|
-| 盯盘 | [modules/watchlist/](modules/watchlist/spec.md) |
-| 策略广场 | [modules/strategy/](modules/strategy/spec.md) |
-| 数据同步 | [modules/data-sync/](modules/data-sync/spec.md) |
-| 基础设置 | [modules/basic/](modules/basic/spec.md) |
+| 原始数据采集 | [modules/data-sync/spec.md](modules/data-sync/spec.md) |
+| MCP 数据库读取 | [modules/mcp/spec.md](modules/mcp/spec.md) |
 
-每个模块目录包含 `spec.md`（前后端完整视图），后续可扩展子文档。
+任何功能变更继续遵循 spec-first：阅读对应 spec，使用
+`ai/skills/spec-writer` 起草，获得用户确认后实施并更新文档。
 
-## 跨切面约束
+跨切面约束：
 
-见 `concepts/`：
-- [01-core-constraints](concepts/01-core-constraints.md) — DuckDB、Tushare、容器化
-- [02-frontend-guidelines](concepts/02-frontend-guidelines.md) — 克制设计、色彩规范
-- [03-backend-patterns](concepts/03-backend-patterns.md) — FastAPI 模式、ETL 结构
-
-## 技能目录
-
-`skills/` 位于项目根目录，含 6 个项目专属技能，可 softlink 到 Claude Code。
+- [concepts/01-core-constraints.md](concepts/01-core-constraints.md)
+- [concepts/03-backend-patterns.md](concepts/03-backend-patterns.md)
