@@ -1,10 +1,11 @@
+# 运行态与构建产物一律不进仓
 data/
+!.env.example
 node_modules/
 frontend/node_modules/
-backend/.env
-.env.mcp
+frontend/dist/
+.env
 __pycache__/
-backend/__pycache__/
 *.pyc
 .vscode/
 .idea/
@@ -16,9 +17,13 @@ build/
 .coverage
 htmlcov/
 *.log
-backend/logs/
-backend/venv/
-frontend/dist/
 *.tmp
 *.bak
 .codex
+# Go / Node 构建物
+bin/
+services/*/bin/
+frontend/tsconfig.tsbuildinfo
+# 旧后端残留（已删，防回潮）
+backend/venv/
+ai/mcp/wheels/

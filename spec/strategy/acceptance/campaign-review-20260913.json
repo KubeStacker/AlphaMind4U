@@ -1,0 +1,2294 @@
+{
+  "http_review": {
+    "observed_at": "2026-09-13 19:57:48+0800",
+    "mode": "http_read_only",
+    "health": {
+      "http_status": 200,
+      "body": {
+        "service": "quant-backend",
+        "status": "ok"
+      }
+    },
+    "runs": {
+      "http_status": 200,
+      "body": {
+        "runs": [
+          {
+            "created_at": "2026-09-10 20:42:21",
+            "error": "002709.SZ 2026-01-12: 因子变化涉及曾买入证券或待执行买单，权益/订单换算未支持，回放阻断",
+            "input_hash": "47a784a43b82b3b4b9a11d84d161bda85f8fbd869c54077b0156f68e1f3f9435",
+            "model_version": "2026-09-09.7",
+            "progress": 48.72093023255814,
+            "run_id": "7a7b1ceeb7520544caca699b1327f7e4",
+            "status": "BLOCKED",
+            "updated_at": "2026-09-10 20:51:58"
+          },
+          {
+            "created_at": "2026-09-10 20:35:12",
+            "error": "002709.SZ 2026-01-12: 因子变化涉及曾买入证券或待执行买单，权益/订单换算未支持，回放阻断",
+            "input_hash": "e70a9eebe5a4950746742d8b42d27c12c50fc2f81e7bf3f03916b09ce9969726",
+            "model_version": "2026-09-09.7",
+            "progress": 48.72093023255814,
+            "run_id": "cfe710f4b450baa9b1893dee5ed9f143",
+            "status": "BLOCKED",
+            "updated_at": "2026-09-10 20:36:19"
+          },
+          {
+            "created_at": "2026-09-09 22:21:48",
+            "error": "strategy: 601138.SH 2025-11-27: 曾买入证券缺关键行情，权益或估值不可确认",
+            "input_hash": "9fc00dccadbfb647499d53d39ad7b7babf48aa70f2cb3ebaa6febf3a17fcea84",
+            "model_version": "2026-09-09.7",
+            "progress": 39.352159468438536,
+            "run_id": "9a25e6d266d66eff7d66e8139b0a39dc",
+            "status": "BLOCKED",
+            "updated_at": "2026-09-09 22:22:32"
+          },
+          {
+            "created_at": "2026-09-09 22:19:40",
+            "error": "",
+            "input_hash": "bd0a8b4b82674abb8de03eaff003f4799716bb12de942af853adc422cb8a064b",
+            "model_version": "2026-09-09.6",
+            "progress": 100,
+            "run_id": "43bf6f1bde81e63fc33a87ca452b2b7a",
+            "status": "COMPLETED",
+            "updated_at": "2026-09-09 22:19:51"
+          },
+          {
+            "created_at": "2026-09-09 22:18:01",
+            "error": "",
+            "input_hash": "7236ad4516f0d764939ef6650e22c4a4c4a30361ce01b256f9241f379cfa49ba",
+            "model_version": "2026-09-09.6",
+            "progress": 100,
+            "run_id": "df96cd5935dcb9951292600fe13a3058",
+            "status": "COMPLETED",
+            "updated_at": "2026-09-09 22:19:49"
+          }
+        ]
+      }
+    },
+    "tasks": {
+      "http_status": 200,
+      "body": {
+        "tasks": [
+          {
+            "created_at": "2026-09-13 19:07:00",
+            "error": null,
+            "finished_at": "2026-09-13 19:07:02",
+            "progress": 100,
+            "status": "COMPLETED",
+            "task_id": "26651b57b1b26e3dbdeb2794ef16ad6b",
+            "task_type": "SYNC"
+          },
+          {
+            "created_at": "2026-09-13 18:30:00",
+            "error": null,
+            "finished_at": "2026-09-13 18:31:46",
+            "progress": 100,
+            "status": "COMPLETED",
+            "task_id": "8762a177fbe3eaedcfe99a864387c98b",
+            "task_type": "SYNC"
+          },
+          {
+            "created_at": "2026-09-13 16:45:00",
+            "error": null,
+            "finished_at": "2026-09-13 16:46:48",
+            "progress": 100,
+            "status": "COMPLETED",
+            "task_id": "9ac55fcf4d38f91e375c024404f41628",
+            "task_type": "SYNC"
+          },
+          {
+            "created_at": "2026-09-13 07:26:00",
+            "error": null,
+            "finished_at": "2026-09-13 08:10:21",
+            "progress": 100,
+            "status": "COMPLETED",
+            "task_id": "0c036c697ae145b022e298fabfd6ae9b",
+            "task_type": "SYNC"
+          },
+          {
+            "created_at": "2026-09-13 07:26:00",
+            "error": null,
+            "finished_at": "2026-09-13 09:22:23",
+            "progress": 100,
+            "status": "COMPLETED",
+            "task_id": "f984085abb33ae76014a363e92dbe1f1",
+            "task_type": "SYNC"
+          },
+          {
+            "created_at": "2026-09-13 07:26:00",
+            "error": null,
+            "finished_at": "2026-09-13 09:40:40",
+            "progress": 100,
+            "status": "COMPLETED",
+            "task_id": "1cf177a2ad23f14fbca579a06eac0b43",
+            "task_type": "SYNC"
+          },
+          {
+            "created_at": "2026-09-13 07:26:00",
+            "error": null,
+            "finished_at": "2026-09-13 09:53:23",
+            "progress": 100,
+            "status": "COMPLETED",
+            "task_id": "f87f786ab66fa85c0b31e6ca6a89370f",
+            "task_type": "SYNC"
+          },
+          {
+            "created_at": "2026-09-13 07:25:19",
+            "error": null,
+            "finished_at": "2026-09-13 07:25:26",
+            "progress": 100,
+            "status": "COMPLETED",
+            "task_id": "130a6a2e798b8b96e256edce1f11f423",
+            "task_type": "SYNC"
+          },
+          {
+            "created_at": "2026-09-13 07:25:19",
+            "error": null,
+            "finished_at": "2026-09-13 07:40:46",
+            "progress": 100,
+            "status": "COMPLETED",
+            "task_id": "e79d5df94499f9ecb2de582789983ca0",
+            "task_type": "SYNC"
+          },
+          {
+            "created_at": "2026-09-13 02:00:00",
+            "error": null,
+            "finished_at": "2026-09-13 02:16:46",
+            "progress": 100,
+            "status": "COMPLETED",
+            "task_id": "1c1dbaedbccddb253b03fd02f5aeb5a0",
+            "task_type": "SYNC"
+          },
+          {
+            "created_at": "2026-09-13 02:00:00",
+            "error": null,
+            "finished_at": "2026-09-13 02:20:50",
+            "progress": 100,
+            "status": "COMPLETED",
+            "task_id": "1127411e28238ad6e27e57983e2c30e9",
+            "task_type": "SYNC"
+          },
+          {
+            "created_at": "2026-09-13 02:00:00",
+            "error": null,
+            "finished_at": "2026-09-13 02:24:50",
+            "progress": 100,
+            "status": "COMPLETED",
+            "task_id": "375f110a84c5a980c58f043f6beb85f3",
+            "task_type": "SYNC"
+          }
+        ]
+      }
+    },
+    "coverage": {
+      "http_status": 200,
+      "body": {
+        "latest_trading_day": "2026-09-11",
+        "tables": [
+          {
+            "name": "daily_price",
+            "description": "股票日线行情",
+            "min_date": "2016-02-04",
+            "max_date": "2026-09-11",
+            "total": 11093978,
+            "recent": [
+              {
+                "date": "2026-09-11",
+                "count": 5550
+              },
+              {
+                "date": "2026-09-10",
+                "count": 5549
+              },
+              {
+                "date": "2026-09-09",
+                "count": 5550
+              },
+              {
+                "date": "2026-09-08",
+                "count": 5549
+              },
+              {
+                "date": "2026-09-07",
+                "count": 5549
+              },
+              {
+                "date": "2026-09-04",
+                "count": 5548
+              },
+              {
+                "date": "2026-09-03",
+                "count": 5549
+              },
+              {
+                "date": "2026-09-02",
+                "count": 5547
+              },
+              {
+                "date": "2026-09-01",
+                "count": 5546
+              },
+              {
+                "date": "2026-08-31",
+                "count": 5545
+              }
+            ],
+            "as_of": "2026-09-11",
+            "complete": true,
+            "ratio": 0.9978425026968716,
+            "missing": [],
+            "reason": "最近COMPLETED(2026-09-11 22:31:49)",
+            "next": "每日16:45自动"
+          },
+          {
+            "name": "index_weight",
+            "description": "指数成分及权重",
+            "min_date": "2026-05-29",
+            "max_date": "2026-08-31",
+            "total": 7400,
+            "recent": [
+              {
+                "date": "2026-08-31",
+                "count": 1850
+              },
+              {
+                "date": "2026-07-31",
+                "count": 1850
+              },
+              {
+                "date": "2026-06-30",
+                "count": 1850
+              },
+              {
+                "date": "2026-05-29",
+                "count": 1850
+              }
+            ],
+            "as_of": "2026-08-31",
+            "complete": false,
+            "ratio": 0,
+            "missing": [
+              "2026-09-11"
+            ],
+            "reason": "无执行记录",
+            "next": "每日16:45自动"
+          },
+          {
+            "name": "market_index",
+            "description": "市场指数日线",
+            "min_date": "2021-02-05",
+            "max_date": "2026-09-11",
+            "total": 3257,
+            "recent": [
+              {
+                "date": "2026-09-11",
+                "count": 5
+              },
+              {
+                "date": "2026-09-10",
+                "count": 5
+              },
+              {
+                "date": "2026-09-09",
+                "count": 5
+              },
+              {
+                "date": "2026-09-08",
+                "count": 5
+              },
+              {
+                "date": "2026-09-07",
+                "count": 5
+              },
+              {
+                "date": "2026-09-04",
+                "count": 5
+              },
+              {
+                "date": "2026-09-03",
+                "count": 5
+              },
+              {
+                "date": "2026-09-02",
+                "count": 5
+              },
+              {
+                "date": "2026-09-01",
+                "count": 5
+              },
+              {
+                "date": "2026-08-31",
+                "count": 5
+              }
+            ],
+            "as_of": "2026-09-11",
+            "complete": true,
+            "ratio": 1,
+            "missing": [],
+            "reason": "最近COMPLETED(2026-09-10 20:51:11)",
+            "next": "每日16:45自动"
+          },
+          {
+            "name": "moneyflow_hsgt",
+            "description": "沪深港通资金流向",
+            "min_date": "2014-11-17",
+            "max_date": "2026-09-11",
+            "total": 2786,
+            "recent": [
+              {
+                "date": "2026-09-11",
+                "count": 1
+              },
+              {
+                "date": "2026-09-10",
+                "count": 1
+              },
+              {
+                "date": "2026-09-09",
+                "count": 1
+              },
+              {
+                "date": "2026-09-08",
+                "count": 1
+              },
+              {
+                "date": "2026-09-07",
+                "count": 1
+              },
+              {
+                "date": "2026-09-04",
+                "count": 1
+              },
+              {
+                "date": "2026-09-03",
+                "count": 1
+              },
+              {
+                "date": "2026-09-02",
+                "count": 1
+              },
+              {
+                "date": "2026-09-01",
+                "count": 1
+              },
+              {
+                "date": "2026-08-31",
+                "count": 1
+              }
+            ],
+            "as_of": "2026-09-11",
+            "complete": true,
+            "ratio": 1,
+            "missing": [],
+            "reason": "无执行记录",
+            "next": "每日16:45自动"
+          },
+          {
+            "name": "stock_balance_sheet",
+            "description": "资产负债表",
+            "min_date": "1991-12-31",
+            "max_date": "2026-06-30",
+            "total": 108438,
+            "recent": [
+              {
+                "date": "2026-06-30",
+                "count": 4022
+              },
+              {
+                "date": "2026-03-31",
+                "count": 5556
+              },
+              {
+                "date": "2025-12-31",
+                "count": 5680
+              },
+              {
+                "date": "2025-09-30",
+                "count": 5554
+              },
+              {
+                "date": "2025-06-30",
+                "count": 5702
+              },
+              {
+                "date": "2025-03-31",
+                "count": 5504
+              },
+              {
+                "date": "2024-12-31",
+                "count": 5695
+              },
+              {
+                "date": "2024-09-30",
+                "count": 5454
+              },
+              {
+                "date": "2024-06-30",
+                "count": 5552
+              },
+              {
+                "date": "2024-03-31",
+                "count": 5399
+              }
+            ],
+            "as_of": "2026-03-31",
+            "complete": false,
+            "ratio": 0.9989212513484358,
+            "missing": [
+              "2026-06-30"
+            ],
+            "reason": "最近COMPLETED(2026-09-13 02:20:50)",
+            "next": "每周日02:00自动"
+          },
+          {
+            "name": "stock_basic",
+            "description": "股票基础信息",
+            "min_date": "",
+            "max_date": "",
+            "total": 5902,
+            "recent": null,
+            "as_of": "",
+            "complete": true,
+            "ratio": 0,
+            "missing": [],
+            "reason": "最近COMPLETED(2026-09-13 02:07:02)",
+            "next": "每日00:05自动"
+          },
+          {
+            "name": "stock_cashflow",
+            "description": "现金流量表",
+            "min_date": "2005-12-31",
+            "max_date": "2026-06-30",
+            "total": 109490,
+            "recent": [
+              {
+                "date": "2026-06-30",
+                "count": 4859
+              },
+              {
+                "date": "2026-03-31",
+                "count": 5551
+              },
+              {
+                "date": "2025-12-31",
+                "count": 5677
+              },
+              {
+                "date": "2025-09-30",
+                "count": 5545
+              },
+              {
+                "date": "2025-06-30",
+                "count": 5694
+              },
+              {
+                "date": "2025-03-31",
+                "count": 5484
+              },
+              {
+                "date": "2024-12-31",
+                "count": 5696
+              },
+              {
+                "date": "2024-09-30",
+                "count": 5440
+              },
+              {
+                "date": "2024-06-30",
+                "count": 5548
+              },
+              {
+                "date": "2024-03-31",
+                "count": 5430
+              }
+            ],
+            "as_of": "2026-03-31",
+            "complete": false,
+            "ratio": 0.998022294138799,
+            "missing": [
+              "2026-06-30"
+            ],
+            "reason": "最近COMPLETED(2026-09-13 02:24:50)",
+            "next": "每周日02:00自动"
+          },
+          {
+            "name": "stock_concept_details",
+            "description": "概念成分",
+            "min_date": "",
+            "max_date": "",
+            "total": 73754,
+            "recent": null,
+            "as_of": "",
+            "complete": true,
+            "ratio": 0,
+            "missing": [],
+            "reason": "最近COMPLETED(2026-09-13 07:40:46)",
+            "next": "手动 concepts"
+          },
+          {
+            "name": "stock_concepts",
+            "description": "概念分类",
+            "min_date": "",
+            "max_date": "",
+            "total": 412,
+            "recent": null,
+            "as_of": "",
+            "complete": true,
+            "ratio": 0,
+            "missing": [],
+            "reason": "最近COMPLETED(2026-09-13 07:40:46)",
+            "next": "手动 concepts"
+          },
+          {
+            "name": "stock_daily_basic",
+            "description": "日频基础指标",
+            "min_date": "2016-09-12",
+            "max_date": "2026-09-11",
+            "total": 10624893,
+            "recent": [
+              {
+                "date": "2026-09-11",
+                "count": 5550
+              },
+              {
+                "date": "2026-09-10",
+                "count": 5549
+              },
+              {
+                "date": "2026-09-09",
+                "count": 5550
+              },
+              {
+                "date": "2026-09-08",
+                "count": 5549
+              },
+              {
+                "date": "2026-09-07",
+                "count": 5549
+              },
+              {
+                "date": "2026-09-04",
+                "count": 5548
+              },
+              {
+                "date": "2026-09-03",
+                "count": 5549
+              },
+              {
+                "date": "2026-09-02",
+                "count": 5547
+              },
+              {
+                "date": "2026-09-01",
+                "count": 5546
+              },
+              {
+                "date": "2026-08-31",
+                "count": 5545
+              }
+            ],
+            "as_of": "2026-09-11",
+            "complete": true,
+            "ratio": 0.9978425026968716,
+            "missing": [],
+            "reason": "最近COMPLETED(2026-09-13 08:10:21)",
+            "next": "每日16:45自动"
+          },
+          {
+            "name": "stock_dividend",
+            "description": "分红送股数据",
+            "min_date": "1990-12-31",
+            "max_date": "2026-08-26",
+            "total": 267744,
+            "recent": [
+              {
+                "date": "2026-08-26",
+                "count": 1
+              },
+              {
+                "date": "2026-08-10",
+                "count": 1
+              },
+              {
+                "date": "2026-07-23",
+                "count": 1
+              },
+              {
+                "date": "2026-07-15",
+                "count": 2
+              },
+              {
+                "date": "2026-06-30",
+                "count": 11328
+              },
+              {
+                "date": "2026-06-02",
+                "count": 2
+              },
+              {
+                "date": "2026-06-01",
+                "count": 2
+              },
+              {
+                "date": "2026-04-22",
+                "count": 1
+              },
+              {
+                "date": "2026-04-10",
+                "count": 3
+              },
+              {
+                "date": "2026-03-31",
+                "count": 36
+              }
+            ],
+            "as_of": "2026-08-26",
+            "complete": true,
+            "ratio": 0,
+            "missing": [],
+            "reason": "最近COMPLETED(2026-09-13 00:16:12)",
+            "next": "手动 dividend"
+          },
+          {
+            "name": "stock_express",
+            "description": "业绩快报",
+            "min_date": "2025-12-31",
+            "max_date": "2026-06-30",
+            "total": 1234,
+            "recent": [
+              {
+                "date": "2026-06-30",
+                "count": 66
+              },
+              {
+                "date": "2026-03-31",
+                "count": 19
+              },
+              {
+                "date": "2025-12-31",
+                "count": 1149
+              }
+            ],
+            "as_of": "2026-06-30",
+            "complete": true,
+            "ratio": 0,
+            "missing": [],
+            "reason": "无执行记录",
+            "next": "每日16:45自动"
+          },
+          {
+            "name": "stock_fina_indicator",
+            "description": "财务指标",
+            "min_date": "1990-12-31",
+            "max_date": "2026-06-30",
+            "total": 246729,
+            "recent": [
+              {
+                "date": "2026-06-30",
+                "count": 2305
+              },
+              {
+                "date": "2026-03-31",
+                "count": 2849
+              },
+              {
+                "date": "2025-12-31",
+                "count": 2870
+              },
+              {
+                "date": "2025-09-30",
+                "count": 5514
+              },
+              {
+                "date": "2025-06-30",
+                "count": 5539
+              },
+              {
+                "date": "2025-03-31",
+                "count": 5530
+              },
+              {
+                "date": "2024-12-31",
+                "count": 5543
+              },
+              {
+                "date": "2024-09-30",
+                "count": 5513
+              },
+              {
+                "date": "2024-06-30",
+                "count": 5501
+              },
+              {
+                "date": "2024-03-31",
+                "count": 5473
+              }
+            ],
+            "as_of": "2025-09-30",
+            "complete": false,
+            "ratio": 0.9913700107874865,
+            "missing": [
+              "2026-06-30",
+              "2026-03-31",
+              "2025-12-31"
+            ],
+            "reason": "最近COMPLETED(2026-09-12 22:55:12)",
+            "next": "手动 fina_indicator"
+          },
+          {
+            "name": "stock_forecast",
+            "description": "业绩预告",
+            "min_date": "2006-06-30",
+            "max_date": "2026-12-31",
+            "total": 1969,
+            "recent": [
+              {
+                "date": "2026-12-31",
+                "count": 6
+              },
+              {
+                "date": "2026-09-30",
+                "count": 29
+              },
+              {
+                "date": "2026-06-30",
+                "count": 1913
+              },
+              {
+                "date": "2026-03-31",
+                "count": 1
+              },
+              {
+                "date": "2025-12-31",
+                "count": 4
+              },
+              {
+                "date": "2015-12-31",
+                "count": 1
+              },
+              {
+                "date": "2011-12-31",
+                "count": 1
+              },
+              {
+                "date": "2011-09-30",
+                "count": 1
+              },
+              {
+                "date": "2011-06-30",
+                "count": 1
+              },
+              {
+                "date": "2011-03-31",
+                "count": 1
+              }
+            ],
+            "as_of": "2026-12-31",
+            "complete": true,
+            "ratio": 0,
+            "missing": [],
+            "reason": "无执行记录",
+            "next": "每日16:45自动"
+          },
+          {
+            "name": "stock_income",
+            "description": "利润表",
+            "min_date": "1990-12-31",
+            "max_date": "2026-06-30",
+            "total": 326992,
+            "recent": [
+              {
+                "date": "2026-06-30",
+                "count": 7009
+              },
+              {
+                "date": "2026-03-31",
+                "count": 5812
+              },
+              {
+                "date": "2025-12-31",
+                "count": 6272
+              },
+              {
+                "date": "2025-09-30",
+                "count": 5452
+              },
+              {
+                "date": "2025-06-30",
+                "count": 5477
+              },
+              {
+                "date": "2025-03-31",
+                "count": 5445
+              },
+              {
+                "date": "2024-12-31",
+                "count": 5478
+              },
+              {
+                "date": "2024-09-30",
+                "count": 5390
+              },
+              {
+                "date": "2024-06-30",
+                "count": 5363
+              },
+              {
+                "date": "2024-03-31",
+                "count": 5334
+              }
+            ],
+            "as_of": "2026-06-30",
+            "complete": true,
+            "ratio": 1.260158216468896,
+            "missing": null,
+            "reason": "最近COMPLETED(2026-09-13 02:16:46)",
+            "next": "每周日02:00自动"
+          },
+          {
+            "name": "stock_index_member_all",
+            "description": "申万行业成分",
+            "min_date": "",
+            "max_date": "",
+            "total": 3000,
+            "recent": null,
+            "as_of": "",
+            "complete": true,
+            "ratio": 0,
+            "missing": [],
+            "reason": "最近COMPLETED(2026-09-10 20:51:12)",
+            "next": "手动 index_members"
+          },
+          {
+            "name": "stock_margin",
+            "description": "融资融券明细",
+            "min_date": "2016-09-12",
+            "max_date": "2026-09-11",
+            "total": 5979976,
+            "recent": [
+              {
+                "date": "2026-09-11",
+                "count": 2000
+              },
+              {
+                "date": "2026-09-10",
+                "count": 4444
+              },
+              {
+                "date": "2026-09-09",
+                "count": 4443
+              },
+              {
+                "date": "2026-09-08",
+                "count": 4443
+              },
+              {
+                "date": "2026-09-07",
+                "count": 4443
+              },
+              {
+                "date": "2026-09-04",
+                "count": 2000
+              },
+              {
+                "date": "2026-09-03",
+                "count": 4440
+              },
+              {
+                "date": "2026-09-02",
+                "count": 4439
+              },
+              {
+                "date": "2026-09-01",
+                "count": 4438
+              },
+              {
+                "date": "2026-08-31",
+                "count": 4436
+              }
+            ],
+            "as_of": "2026-09-10",
+            "complete": false,
+            "ratio": 0.7989931679252068,
+            "missing": [
+              "2026-09-11",
+              "2026-09-04"
+            ],
+            "reason": "最近COMPLETED(2026-09-13 19:07:02)",
+            "next": "每日19:07自动"
+          },
+          {
+            "name": "stock_moneyflow",
+            "description": "个股资金流向",
+            "min_date": "2016-09-12",
+            "max_date": "2026-09-11",
+            "total": 10371231,
+            "recent": [
+              {
+                "date": "2026-09-11",
+                "count": 5550
+              },
+              {
+                "date": "2026-09-10",
+                "count": 5549
+              },
+              {
+                "date": "2026-09-09",
+                "count": 5550
+              },
+              {
+                "date": "2026-09-08",
+                "count": 5549
+              },
+              {
+                "date": "2026-09-07",
+                "count": 5549
+              },
+              {
+                "date": "2026-09-04",
+                "count": 5548
+              },
+              {
+                "date": "2026-09-03",
+                "count": 5549
+              },
+              {
+                "date": "2026-09-02",
+                "count": 5547
+              },
+              {
+                "date": "2026-09-01",
+                "count": 5546
+              },
+              {
+                "date": "2026-08-31",
+                "count": 5545
+              }
+            ],
+            "as_of": "2026-09-11",
+            "complete": true,
+            "ratio": 0.9978425026968716,
+            "missing": [],
+            "reason": "最近COMPLETED(2026-09-13 09:22:23)",
+            "next": "每日16:45自动（含 daily_update）"
+          },
+          {
+            "name": "stock_namechange",
+            "description": "股票更名历史",
+            "min_date": "1991-04-03",
+            "max_date": "2026-09-11",
+            "total": 9918,
+            "recent": [
+              {
+                "date": "2026-09-11",
+                "count": 1
+              },
+              {
+                "date": "2026-09-08",
+                "count": 1
+              },
+              {
+                "date": "2026-09-07",
+                "count": 2
+              },
+              {
+                "date": "2026-09-04",
+                "count": 1
+              },
+              {
+                "date": "2026-09-03",
+                "count": 2
+              },
+              {
+                "date": "2026-09-02",
+                "count": 1
+              },
+              {
+                "date": "2026-09-01",
+                "count": 2
+              },
+              {
+                "date": "2026-08-31",
+                "count": 2
+              },
+              {
+                "date": "2026-08-28",
+                "count": 3
+              },
+              {
+                "date": "2026-08-26",
+                "count": 2
+              }
+            ],
+            "as_of": "2026-09-11",
+            "complete": true,
+            "ratio": 0,
+            "missing": [],
+            "reason": "最近COMPLETED(2026-09-12 19:51:33)",
+            "next": "手动 namechange"
+          },
+          {
+            "name": "stock_suspend",
+            "description": "每日停复牌信息",
+            "min_date": "2016-09-12",
+            "max_date": "2026-09-11",
+            "total": 158349,
+            "recent": [
+              {
+                "date": "2026-09-11",
+                "count": 13
+              },
+              {
+                "date": "2026-09-10",
+                "count": 12
+              },
+              {
+                "date": "2026-09-09",
+                "count": 10
+              },
+              {
+                "date": "2026-09-08",
+                "count": 10
+              },
+              {
+                "date": "2026-09-07",
+                "count": 10
+              },
+              {
+                "date": "2026-09-04",
+                "count": 8
+              },
+              {
+                "date": "2026-09-03",
+                "count": 7
+              },
+              {
+                "date": "2026-09-02",
+                "count": 8
+              },
+              {
+                "date": "2026-09-01",
+                "count": 9
+              },
+              {
+                "date": "2026-08-31",
+                "count": 8
+              }
+            ],
+            "as_of": "2026-09-11",
+            "complete": true,
+            "ratio": 0,
+            "missing": [],
+            "reason": "最近COMPLETED(2026-09-13 09:53:23)",
+            "next": "每日16:45自动"
+          },
+          {
+            "name": "strategy_pool_entry",
+            "description": "月度Top20股票池明细",
+            "min_date": "2026-09",
+            "max_date": "2026-09",
+            "total": 20,
+            "recent": [
+              {
+                "date": "2026-09",
+                "count": 20
+              }
+            ],
+            "as_of": "2026-09",
+            "complete": false,
+            "ratio": 0.003595828838547285,
+            "missing": [],
+            "reason": "无执行记录",
+            "next": ""
+          },
+          {
+            "name": "strategy_pool_month",
+            "description": "月度Top20股票池快照",
+            "min_date": "2026-09",
+            "max_date": "2026-09",
+            "total": 1,
+            "recent": [
+              {
+                "date": "2026-09",
+                "count": 1
+              }
+            ],
+            "as_of": "2026-09",
+            "complete": false,
+            "ratio": 0.00017979144192736425,
+            "missing": [],
+            "reason": "无执行记录",
+            "next": ""
+          }
+        ],
+        "universe": 5562
+      },
+      "elapsed_seconds": 43.371
+    }
+  },
+  "latest_annual_task": {
+    "created_at": "2026-09-10 20:42:21",
+    "data_quality": {
+      "policy": "available_candidates",
+      "unavailable_rows": 539,
+      "samples_truncated": true,
+      "samples": [
+        {
+          "ts_code": "000592.SZ",
+          "date": "2025-11-18",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "000592.SZ",
+          "date": "2025-11-19",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "000592.SZ",
+          "date": "2025-11-20",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001221.SZ",
+          "date": "2025-06-16",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001221.SZ",
+          "date": "2025-06-17",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001221.SZ",
+          "date": "2025-06-18",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001221.SZ",
+          "date": "2025-06-19",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001221.SZ",
+          "date": "2025-06-20",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001221.SZ",
+          "date": "2025-06-23",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001221.SZ",
+          "date": "2025-06-24",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001221.SZ",
+          "date": "2025-06-25",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001221.SZ",
+          "date": "2025-06-26",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001221.SZ",
+          "date": "2025-06-27",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001221.SZ",
+          "date": "2025-06-30",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001221.SZ",
+          "date": "2025-07-01",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001221.SZ",
+          "date": "2025-07-02",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001221.SZ",
+          "date": "2025-07-03",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001221.SZ",
+          "date": "2025-07-04",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001221.SZ",
+          "date": "2025-07-07",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001221.SZ",
+          "date": "2025-07-08",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001221.SZ",
+          "date": "2025-07-09",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001221.SZ",
+          "date": "2025-07-10",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001221.SZ",
+          "date": "2025-07-11",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001221.SZ",
+          "date": "2025-07-14",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001221.SZ",
+          "date": "2025-07-15",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001221.SZ",
+          "date": "2025-07-16",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001221.SZ",
+          "date": "2025-07-17",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001221.SZ",
+          "date": "2025-07-18",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001221.SZ",
+          "date": "2025-07-21",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001221.SZ",
+          "date": "2025-07-22",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001221.SZ",
+          "date": "2025-07-23",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001221.SZ",
+          "date": "2025-07-24",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001221.SZ",
+          "date": "2025-07-25",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001221.SZ",
+          "date": "2025-07-28",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001221.SZ",
+          "date": "2025-07-29",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-06-16",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-06-17",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-06-18",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-06-19",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-06-20",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-06-23",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-06-24",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-06-25",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-06-26",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-06-27",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-06-30",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-07-01",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-07-02",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-07-03",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-07-04",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-07-07",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-07-08",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-07-09",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-07-10",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-07-11",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-07-14",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-07-15",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-07-16",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-07-17",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-07-18",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-07-21",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-07-22",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-07-23",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-07-24",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-07-25",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-07-28",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-07-29",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-07-30",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-07-31",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-08-01",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-08-04",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-08-05",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-08-06",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-08-07",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-08-08",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-08-11",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-08-12",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-08-13",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-08-14",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-08-15",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-08-18",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-08-19",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-08-20",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-08-21",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-08-22",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-08-25",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-08-26",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-08-27",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-08-28",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-08-29",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-09-01",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-09-02",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-09-03",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-09-04",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-09-05",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-09-08",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-09-09",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-09-10",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-09-11",
+          "reason": "缺行情记录，未确认为停牌"
+        },
+        {
+          "ts_code": "001369.SZ",
+          "date": "2025-09-12",
+          "reason": "缺行情记录，未确认为停牌"
+        }
+      ]
+    },
+    "error": "002709.SZ 2026-01-12: 因子变化涉及曾买入证券或待执行买单，权益/订单换算未支持，回放阻断",
+    "input_hash": "47a784a43b82b3b4b9a11d84d161bda85f8fbd869c54077b0156f68e1f3f9435",
+    "model_version": "2026-09-09.7",
+    "progress": 48.72093023255814,
+    "request": {
+      "data_policy": "available_candidates",
+      "account": {
+        "initial_capital": 500000,
+        "gross_cap_mode": "nav_fraction",
+        "gross_cap_ratio": 0.8,
+        "gross_cap_amount": 0,
+        "cash_reserve": 0,
+        "single_cap_ratio": 0.4,
+        "single_risk": 0.01,
+        "total_risk": 0.02,
+        "max_positions": 2,
+        "dd_reduce": 0.1,
+        "dd_freeze": 0.15,
+        "dd_halt": 0.2,
+        "target_multiple": 2
+      },
+      "version": "S1",
+      "effect_months": [
+        "2025-09",
+        "2025-10",
+        "2025-11",
+        "2025-12",
+        "2026-01",
+        "2026-02",
+        "2026-03",
+        "2026-04",
+        "2026-05",
+        "2026-06",
+        "2026-07",
+        "2026-08",
+        "2026-09"
+      ],
+      "from": "2025-09-05",
+      "to": "2026-09-04"
+    },
+    "run_id": "7a7b1ceeb7520544caca699b1327f7e4",
+    "status": "BLOCKED",
+    "updated_at": "2026-09-10 20:51:58"
+  },
+  "single_day_diagnostic": {
+    "observed_at": "2026-09-13 20:00:59+0800",
+    "as_of": "2026-09-11",
+    "kind": "single_day_price_and_risk_diagnostic_not_backtest",
+    "calendar": "000300.SH observed dates, not official-calendar certification",
+    "risk": "ignores lots, fees, account eligibility, market state and existing holdings; static upper-bound illustration only",
+    "input_sha256": "5fa89a5513304d5f2703f912b31be136e42fd92968b4415e22a01f2f43ff57dd",
+    "summary": {
+      "pool_count": 20,
+      "overlap_aug_sep": 13,
+      "entered_sep": [
+        "000636.SZ",
+        "300394.SZ",
+        "300476.SZ",
+        "600183.SH",
+        "601138.SH",
+        "601899.SH",
+        "603259.SH"
+      ],
+      "exited_aug": [
+        "000977.SZ",
+        "001309.SZ",
+        "002156.SZ",
+        "002371.SZ",
+        "688012.SH",
+        "688525.SH",
+        "688981.SH"
+      ],
+      "valid_price_windows": 19,
+      "invalid_price_windows": 1,
+      "median_atr_pct": 0.05484375000000001,
+      "median_stop_distance_pct": 0.13710937500000003,
+      "median_static_single_weight_cap": 0.07293447293447292,
+      "static_single_weight_cap_min": 0.05643865129807174,
+      "static_single_weight_cap_max": 0.13322986999899225,
+      "price_only_signal_count": 0,
+      "sequential_price_funnel": {
+        "valid_price_windows": 19,
+        "trend": 0,
+        "relative_strength": 0,
+        "breakout": 0,
+        "amount_band": 0,
+        "extension": 0
+      },
+      "independent_gate_pass_count": {
+        "trend": 0,
+        "relative_strength": 7,
+        "breakout": 0,
+        "amount_band": 5,
+        "extension": 19
+      }
+    },
+    "metrics": [
+      {
+        "ts_code": "300308.SZ",
+        "rank": 1,
+        "rows": 74,
+        "missing_dates_in_index_60": [],
+        "available": true,
+        "close": 926.0,
+        "ma20": 885.4975000000001,
+        "ma60": 1012.6968333333333,
+        "atr20": 49.1945,
+        "atr_pct": 0.05312580993520518,
+        "stop_distance_pct": 0.13281452483801295,
+        "static_single_weight_cap": 0.07529296974255252,
+        "rs20": 0.015347860267622582,
+        "amount_ratio20": 1.2408116312874204,
+        "hc20": 1001.0300000000001,
+        "extension_atr": 0.8233135818028426,
+        "price_flags": {
+          "trend": false,
+          "relative_strength": true,
+          "breakout": false,
+          "amount_band": true,
+          "extension": true
+        },
+        "all_price_flags": false
+      },
+      {
+        "ts_code": "688825.SH",
+        "rank": 2,
+        "rows": 35,
+        "missing_dates_in_index_60": [
+          "2026-06-22",
+          "2026-06-23",
+          "2026-06-24",
+          "2026-06-25",
+          "2026-06-26",
+          "2026-06-29",
+          "2026-06-30",
+          "2026-07-01",
+          "2026-07-02",
+          "2026-07-03",
+          "2026-07-06",
+          "2026-07-07",
+          "2026-07-08",
+          "2026-07-09",
+          "2026-07-10",
+          "2026-07-13",
+          "2026-07-14",
+          "2026-07-15",
+          "2026-07-16",
+          "2026-07-17",
+          "2026-07-20",
+          "2026-07-21",
+          "2026-07-22",
+          "2026-07-23",
+          "2026-07-24"
+        ],
+        "available": false
+      },
+      {
+        "ts_code": "603986.SH",
+        "rank": 3,
+        "rows": 74,
+        "missing_dates_in_index_60": [],
+        "available": true,
+        "close": 371.32000000000005,
+        "ma20": 396.1435,
+        "ma60": 488.1773333333333,
+        "atr20": 18.8655,
+        "atr_pct": 0.050806581923947,
+        "stop_distance_pct": 0.12701645480986748,
+        "static_single_weight_cap": 0.07872995679944875,
+        "rs20": -0.07719273908265767,
+        "amount_ratio20": 0.721825289342383,
+        "hc20": 444.00000000000006,
+        "extension_atr": -1.3158145821738076,
+        "price_flags": {
+          "trend": false,
+          "relative_strength": false,
+          "breakout": false,
+          "amount_band": false,
+          "extension": true
+        },
+        "all_price_flags": false
+      },
+      {
+        "ts_code": "300502.SZ",
+        "rank": 4,
+        "rows": 74,
+        "missing_dates_in_index_60": [],
+        "available": true,
+        "close": 423.0,
+        "ma20": 412.53,
+        "ma60": 466.8073333333333,
+        "atr20": 25.147499999999997,
+        "atr_pct": 0.05945035460992907,
+        "stop_distance_pct": 0.14862588652482267,
+        "static_single_weight_cap": 0.06728303012227857,
+        "rs20": -0.022596715983058235,
+        "amount_ratio20": 1.1146317630462395,
+        "hc20": 466.68,
+        "extension_atr": 0.4163435729197745,
+        "price_flags": {
+          "trend": false,
+          "relative_strength": false,
+          "breakout": false,
+          "amount_band": false,
+          "extension": true
+        },
+        "all_price_flags": false
+      },
+      {
+        "ts_code": "688256.SH",
+        "rank": 5,
+        "rows": 74,
+        "missing_dates_in_index_60": [],
+        "available": true,
+        "close": 1040.0,
+        "ma20": 1065.0185,
+        "ma60": 1212.2648333333334,
+        "atr20": 57.03750000000001,
+        "atr_pct": 0.05484375000000001,
+        "stop_distance_pct": 0.13710937500000003,
+        "static_single_weight_cap": 0.07293447293447292,
+        "rs20": -0.015114961564939633,
+        "amount_ratio20": 0.9763515939798962,
+        "hc20": 1162.5,
+        "extension_atr": -0.4386324786324769,
+        "price_flags": {
+          "trend": false,
+          "relative_strength": false,
+          "breakout": false,
+          "amount_band": false,
+          "extension": true
+        },
+        "all_price_flags": false
+      },
+      {
+        "ts_code": "002384.SZ",
+        "rank": 6,
+        "rows": 74,
+        "missing_dates_in_index_60": [],
+        "available": true,
+        "close": 194.42,
+        "ma20": 194.5745,
+        "ma60": 213.0745,
+        "atr20": 11.592000000000004,
+        "atr_pct": 0.05962349552515176,
+        "stop_distance_pct": 0.1490587388128794,
+        "static_single_weight_cap": 0.06708764665286401,
+        "rs20": -0.019112506160988696,
+        "amount_ratio20": 1.242606061742343,
+        "hc20": 217.66,
+        "extension_atr": -0.013328157349897594,
+        "price_flags": {
+          "trend": false,
+          "relative_strength": false,
+          "breakout": false,
+          "amount_band": true,
+          "extension": true
+        },
+        "all_price_flags": false
+      },
+      {
+        "ts_code": "600487.SH",
+        "rank": 7,
+        "rows": 74,
+        "missing_dates_in_index_60": [],
+        "available": true,
+        "close": 65.24,
+        "ma20": 64.7725,
+        "ma60": 70.33634883886035,
+        "atr20": 4.073499999999999,
+        "atr_pct": 0.06243868792152053,
+        "stop_distance_pct": 0.15609671980380133,
+        "static_single_weight_cap": 0.06406284521909907,
+        "rs20": 0.06925983959617765,
+        "amount_ratio20": 0.8287933565167228,
+        "hc20": 71.3,
+        "extension_atr": 0.11476617159690713,
+        "price_flags": {
+          "trend": false,
+          "relative_strength": true,
+          "breakout": false,
+          "amount_band": false,
+          "extension": true
+        },
+        "all_price_flags": false
+      },
+      {
+        "ts_code": "300394.SZ",
+        "rank": 8,
+        "rows": 74,
+        "missing_dates_in_index_60": [],
+        "available": true,
+        "close": 261.96,
+        "ma20": 263.621,
+        "ma60": 250.88383333333334,
+        "atr20": 18.566000000000003,
+        "atr_pct": 0.07087341578867004,
+        "stop_distance_pct": 0.1771835394716751,
+        "static_single_weight_cap": 0.05643865129807174,
+        "rs20": 0.011896966343969528,
+        "amount_ratio20": 0.9910532530699661,
+        "hc20": 291.44,
+        "extension_atr": -0.08946461273295277,
+        "price_flags": {
+          "trend": false,
+          "relative_strength": true,
+          "breakout": false,
+          "amount_band": false,
+          "extension": true
+        },
+        "all_price_flags": false
+      },
+      {
+        "ts_code": "603259.SH",
+        "rank": 9,
+        "rows": 74,
+        "missing_dates_in_index_60": [],
+        "available": true,
+        "close": 151.24,
+        "ma20": 158.0421595219738,
+        "ma60": 138.81023883320483,
+        "atr20": 5.604597918272937,
+        "atr_pct": 0.03705764294018075,
+        "stop_distance_pct": 0.09264410735045188,
+        "static_single_weight_cap": 0.10793994659770689,
+        "rs20": -0.013777652667622986,
+        "amount_ratio20": 0.6461342174322947,
+        "hc20": 167.35629915188898,
+        "extension_atr": -1.213674847181521,
+        "price_flags": {
+          "trend": false,
+          "relative_strength": false,
+          "breakout": false,
+          "amount_band": false,
+          "extension": true
+        },
+        "all_price_flags": false
+      },
+      {
+        "ts_code": "300476.SZ",
+        "rank": 10,
+        "rows": 74,
+        "missing_dates_in_index_60": [],
+        "available": true,
+        "close": 228.99,
+        "ma20": 242.0135,
+        "ma60": 261.19416666666666,
+        "atr20": 13.303999999999995,
+        "atr_pct": 0.058098606926066616,
+        "stop_distance_pct": 0.14524651731516655,
+        "static_single_weight_cap": 0.0688484666265785,
+        "rs20": -0.11640364957658877,
+        "amount_ratio20": 0.7325963567446839,
+        "hc20": 276.0,
+        "extension_atr": -0.978916115453998,
+        "price_flags": {
+          "trend": false,
+          "relative_strength": false,
+          "breakout": false,
+          "amount_band": false,
+          "extension": true
+        },
+        "all_price_flags": false
+      },
+      {
+        "ts_code": "600176.SH",
+        "rank": 11,
+        "rows": 74,
+        "missing_dates_in_index_60": [],
+        "available": true,
+        "close": 44.66,
+        "ma20": 42.401,
+        "ma60": 47.83283333333333,
+        "atr20": 2.7539999999999987,
+        "atr_pct": 0.061665920286609915,
+        "stop_distance_pct": 0.15416480071652477,
+        "static_single_weight_cap": 0.06486564996368921,
+        "rs20": 0.03945788285016416,
+        "amount_ratio20": 1.2216498283229646,
+        "hc20": 46.32,
+        "extension_atr": 0.8202614379084947,
+        "price_flags": {
+          "trend": false,
+          "relative_strength": true,
+          "breakout": false,
+          "amount_band": true,
+          "extension": true
+        },
+        "all_price_flags": false
+      },
+      {
+        "ts_code": "600584.SH",
+        "rank": 12,
+        "rows": 74,
+        "missing_dates_in_index_60": [],
+        "available": true,
+        "close": 67.74,
+        "ma20": 74.054,
+        "ma60": 82.13898910839899,
+        "atr20": 3.7079999999999993,
+        "atr_pct": 0.054738706820194855,
+        "stop_distance_pct": 0.13684676705048712,
+        "static_single_weight_cap": 0.07307443365695795,
+        "rs20": -0.10599694777370883,
+        "amount_ratio20": 0.6122555584362935,
+        "hc20": 85.85,
+        "extension_atr": -1.7028047464940692,
+        "price_flags": {
+          "trend": false,
+          "relative_strength": false,
+          "breakout": false,
+          "amount_band": false,
+          "extension": true
+        },
+        "all_price_flags": false
+      },
+      {
+        "ts_code": "600183.SH",
+        "rank": 13,
+        "rows": 74,
+        "missing_dates_in_index_60": [],
+        "available": true,
+        "close": 148.43,
+        "ma20": 140.0925,
+        "ma60": 141.31816666666666,
+        "atr20": 10.107000000000006,
+        "atr_pct": 0.06809270363134141,
+        "stop_distance_pct": 0.17023175907835353,
+        "static_single_weight_cap": 0.05874344513703371,
+        "rs20": 0.06982540042529939,
+        "amount_ratio20": 1.123250853309181,
+        "hc20": 153.4,
+        "extension_atr": 0.8249233204709607,
+        "price_flags": {
+          "trend": false,
+          "relative_strength": true,
+          "breakout": false,
+          "amount_band": false,
+          "extension": true
+        },
+        "all_price_flags": false
+      },
+      {
+        "ts_code": "000725.SZ",
+        "rank": 14,
+        "rows": 74,
+        "missing_dates_in_index_60": [],
+        "available": true,
+        "close": 5.33,
+        "ma20": 5.807,
+        "ma60": 6.378833333333334,
+        "atr20": 0.21700000000000014,
+        "atr_pct": 0.0407129455909944,
+        "stop_distance_pct": 0.10178236397748598,
+        "static_single_weight_cap": 0.09824884792626723,
+        "rs20": -0.049240747154034925,
+        "amount_ratio20": 0.7243303878334195,
+        "hc20": 6.470000000000001,
+        "extension_atr": -2.19815668202765,
+        "price_flags": {
+          "trend": false,
+          "relative_strength": false,
+          "breakout": false,
+          "amount_band": false,
+          "extension": true
+        },
+        "all_price_flags": false
+      },
+      {
+        "ts_code": "000636.SZ",
+        "rank": 15,
+        "rows": 74,
+        "missing_dates_in_index_60": [],
+        "available": true,
+        "close": 55.99,
+        "ma20": 53.344500000000004,
+        "ma60": 56.875475434106335,
+        "atr20": 3.3720000000000017,
+        "atr_pct": 0.06022504018574748,
+        "stop_distance_pct": 0.1505626004643687,
+        "static_single_weight_cap": 0.06641755634638194,
+        "rs20": -0.07406917201011698,
+        "amount_ratio20": 1.583829518373211,
+        "hc20": 63.44,
+        "extension_atr": 0.7845492289442458,
+        "price_flags": {
+          "trend": false,
+          "relative_strength": false,
+          "breakout": false,
+          "amount_band": true,
+          "extension": true
+        },
+        "all_price_flags": false
+      },
+      {
+        "ts_code": "601899.SH",
+        "rank": 16,
+        "rows": 74,
+        "missing_dates_in_index_60": [],
+        "available": true,
+        "close": 32.26,
+        "ma20": 33.67245926671138,
+        "ma60": 30.97584904240256,
+        "atr20": 1.2502166554884864,
+        "atr_pct": 0.03875439105667968,
+        "stop_distance_pct": 0.0968859776416992,
+        "static_single_weight_cap": 0.1032141104771807,
+        "rs20": 0.037375694963017736,
+        "amount_ratio20": 1.5829748105164976,
+        "hc20": 34.74,
+        "extension_atr": -1.129771596395428,
+        "price_flags": {
+          "trend": false,
+          "relative_strength": true,
+          "breakout": false,
+          "amount_band": true,
+          "extension": true
+        },
+        "all_price_flags": false
+      },
+      {
+        "ts_code": "000938.SZ",
+        "rank": 17,
+        "rows": 74,
+        "missing_dates_in_index_60": [],
+        "available": true,
+        "close": 32.84,
+        "ma20": 36.097500000000004,
+        "ma60": 35.474666666666664,
+        "atr20": 1.8905,
+        "atr_pct": 0.05756699147381242,
+        "stop_distance_pct": 0.14391747868453106,
+        "static_single_weight_cap": 0.06948426342237503,
+        "rs20": -0.14459703373429122,
+        "amount_ratio20": 0.5969647522611032,
+        "hc20": 41.03,
+        "extension_atr": -1.7230891298598254,
+        "price_flags": {
+          "trend": false,
+          "relative_strength": false,
+          "breakout": false,
+          "amount_band": false,
+          "extension": true
+        },
+        "all_price_flags": false
+      },
+      {
+        "ts_code": "300750.SZ",
+        "rank": 18,
+        "rows": 74,
+        "missing_dates_in_index_60": [],
+        "available": true,
+        "close": 330.51,
+        "ma20": 365.3025,
+        "ma60": 377.4526208559065,
+        "atr20": 9.922999999999998,
+        "atr_pct": 0.0300232973283713,
+        "stop_distance_pct": 0.07505824332092825,
+        "static_single_weight_cap": 0.13322986999899225,
+        "rs20": -0.12761763798705605,
+        "amount_ratio20": 1.0249390589609797,
+        "hc20": 399.98,
+        "extension_atr": -3.5062481104504712,
+        "price_flags": {
+          "trend": false,
+          "relative_strength": false,
+          "breakout": false,
+          "amount_band": false,
+          "extension": true
+        },
+        "all_price_flags": false
+      },
+      {
+        "ts_code": "601138.SH",
+        "rank": 19,
+        "rows": 74,
+        "missing_dates_in_index_60": [],
+        "available": true,
+        "close": 64.07,
+        "ma20": 63.562999999999995,
+        "ma60": 64.13508066301401,
+        "atr20": 2.398000000000002,
+        "atr_pct": 0.03742781332917125,
+        "stop_distance_pct": 0.09356953332292813,
+        "static_single_weight_cap": 0.1068723936613844,
+        "rs20": 0.0013464244447551899,
+        "amount_ratio20": 0.7058731965243591,
+        "hc20": 68.23,
+        "extension_atr": 0.21142618849040762,
+        "price_flags": {
+          "trend": false,
+          "relative_strength": true,
+          "breakout": false,
+          "amount_band": false,
+          "extension": true
+        },
+        "all_price_flags": false
+      },
+      {
+        "ts_code": "688008.SH",
+        "rank": 20,
+        "rows": 74,
+        "missing_dates_in_index_60": [],
+        "available": true,
+        "close": 191.96,
+        "ma20": 200.6835,
+        "ma60": 225.19145877719671,
+        "atr20": 10.3075,
+        "atr_pct": 0.053696082517191074,
+        "stop_distance_pct": 0.13424020629297767,
+        "static_single_weight_cap": 0.07449333009944217,
+        "rs20": -0.06076830841940828,
+        "amount_ratio20": 0.767675614285556,
+        "hc20": 224.37,
+        "extension_atr": -0.8463254911472231,
+        "price_flags": {
+          "trend": false,
+          "relative_strength": false,
+          "breakout": false,
+          "amount_band": false,
+          "extension": true
+        },
+        "all_price_flags": false
+      }
+    ]
+  },
+  "listing_metadata": {
+    "status": "NOT_OBTAINED",
+    "reason": "Optional follow-up HTTP request: connection refused. No listing-date inference in the diagnostic."
+  },
+  "code_sha256": {
+    "services/quant-backend/internal/api/strategy.go": "81c379e21c694f204b13ee20848e2744bd7b7f4d7946200e174c1e469f75ccee",
+    "services/quant-backend/internal/api/strategy_jobs.go": "0a0a11bd960bd759cbe28345f7075b95f53ddda308b1863ceef6d16fd68a9224",
+    "services/quant-backend/internal/api/strategy_worker.go": "af40b276d35316e14fc75fb235976f174f12419a307de3ec91dbd663abd750cf",
+    "services/quant-backend/internal/engine/task_strategy.go": "0ae1b5ca93daef68515ef12a24aa29727e8c1e8680b7616d04f1feaf2cac58bc",
+    "services/quant-backend/internal/strategy/s0.go": "6c4de6a5408b37a430cc728c13649cae535c2a009898f7c69bbe59c618c02bcc",
+    "services/quant-backend/internal/strategy/params.go": "243185302828e2972b437a9be4ce984705a2a131803ccc70a871ff6b50812915",
+    "services/quant-backend/internal/strategy/corporate_action.go": "1a7103bcc7b43e789513c5d63ac91fdd926a48f55272304fdbee15ce27f87362",
+    "services/quant-backend/internal/api/etl.go": "7133ecb460537841faa028d2d69bac06c20df1f6f1b5a34788ce13d65ea7db29",
+    "services/quant-backend/internal/api/quality.go": "23f6badeb357352d0128f5b3aecba0230708a54cbde841f38528a0bfa9632f9c",
+    "services/quant-backend/internal/db/db.go": "8347527f340517905a4967005372b0a48b45c8461735705de22e82d453c6a08d",
+    "services/quant-backend/internal/strategy/trade_cycles.go": "7516948104aa11dc84a5f4459f4aea567cc7195852c9389bca9d7db38eae3279",
+    "services/quant-backend/internal/strategy/s1s2.go": "1a6bb055cc7654b28382b77a24c18242732c72dfabc2c55b100d0799f8081417",
+    "shared/contracts/openapi-quant.yaml": "c14ff8e960b8953acd9c6bd72b6ab39c6345ade5944541dbffd80cf7982f845b"
+  },
+  "diagnostic_inputs": "campaign-inputs-20260913.json",
+  "scope": "Read-only review and documentary plan; no new backtest or deployed optimizer.",
+  "verification": {
+    "input_hash_matches": true,
+    "markdown_links_and_line_limits": "checked; no issues",
+    "research_budget_blocks": 167,
+    "new_backtest_runs": 0,
+    "business_code_changed": false,
+    "unit_tests_run": false
+  }
+}

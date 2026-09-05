@@ -9,6 +9,7 @@
 | 规范编写 | `spec-writer/` | 数据采集/MCP 变更的规范流程 |
 | Tushare数据获取 | `tushare-data-fetcher/` | 接口封装、积分检查、重试逻辑 |
 | DuckDB查询优化 | `duckdb-query-optimizer/` | 连接管理、批量导入、临时视图清理 |
+| 前端视觉设计 | `frontend-design/` | 官方高赞前端设计技能，避免模版化与 AI Slop，构建独特性格与高品质 UI |
 
 ## 安装到 Claude Code
 

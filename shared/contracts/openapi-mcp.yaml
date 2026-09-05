@@ -1,0 +1,8 @@
+openapi: 3.0.3
+info: {title: 只读代理 MCP, version: 2.0.0}
+servers: [{url: 'http://127.0.0.1:8081'}]
+paths:
+  /health:
+    get: {responses: {'200': {description: 健康}}}
+  /mcp:
+    post: {responses: {'200': {description: MCP JSON-RPC}, '401': {description: 未鉴权}}}

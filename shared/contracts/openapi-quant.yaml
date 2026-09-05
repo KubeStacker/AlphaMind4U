@@ -1,0 +1,380 @@
+openapi: 3.0.3
+info: {title: 量化后端, version: 2.8.1}
+servers: [{url: 'http://127.0.0.1:8000'}]
+components:
+  securitySchemes: {staticBearer: {type: http, scheme: bearer}}
+  schemas:
+    Error: {type: object, required: [detail], properties: {detail: {type: string}}}
+    DatasetInfo:
+      type: object
+      required: [name, description, date_column]
+      properties:
+        name: {type: string}
+        description: {type: string}
+        date_column: {type: string, nullable: true}
+    DatasetColumn:
+      type: object
+      required: [name, type, nullable, primary_key]
+      properties:
+        name: {type: string}
+        type: {type: string}
+        nullable: {type: boolean}
+        primary_key: {type: boolean}
+    DatasetQuery:
+      type: object
+      required: [dataset]
+      properties:
+        dataset: {type: string, description: 白名单之一（见 datasets.json）}
+        columns: {type: array, items: {type: string}, nullable: true}
+        filters: {type: object, additionalProperties: true, default: {}}
+        start_date: {type: string, nullable: true}
+        end_date: {type: string, nullable: true}
+        order_by: {type: string, nullable: true}
+        descending: {type: boolean, default: false}
+        limit: {type: integer, minimum: 1, maximum: 1000, default: 100}
+        offset: {type: integer, minimum: 0, maximum: 1000000, default: 0}
+    SyncTask:
+      type: object
+      required: [task]
+      properties:
+        task:
+          type: string
+          enum: [basic, calendar, price, daily, moneyflow, daily_basic, concepts,
+            index, index_members, express, income, financials, balancesheet,
+            balance_sheet, cashflow, fina_indicator, dividend, forecast, suspend,
+            namechange, index_weight, moneyflow_hsgt, hsgt, margin, daily_update]
+        years: {type: integer, minimum: 0, maximum: 20, default: 0}
+        days: {type: integer, minimum: 1, maximum: 3650, default: 3}
+        start_date: {type: string, nullable: true}
+        end_date: {type: string, nullable: true}
+        ts_code: {type: string, nullable: true}
+        force: {type: boolean, default: false}
+    TaskStatus:
+      type: object
+      properties:
+        task_id: {type: string}
+        task_type: {type: string}
+        status: {type: string, enum: [PENDING, RUNNING, COMPLETED, FAILED, SKIPPED]}
+        error: {type: string, nullable: true}
+        progress: {type: number}
+        created_at: {type: string, nullable: true}
+        finished_at: {type: string, nullable: true}
+    BacktestReq:
+      type: object
+      additionalProperties: false
+      required: [version, effect_months, from, to]
+      properties:
+        data_policy: {type: string, enum: [strict, available_candidates], default: strict, description: 受限模式只禁用缺窗口候选，持仓权益缺失仍阻断}
+        version: {type: string, enum: [S0, S1, S2, F1], description: S1/S2/F1为研究候选，S0仅为研究基准；S3已停用，新请求返回400，历史结果仍可读取}
+        effect_months: {type: array, items: {type: string}, minItems: 1, maxItems: 13, description: 覆盖起止区间全部月份，不重复}
+        from: {type: string, description: 回放起始日 YYYY-MM-DD}
+        to: {type: string, description: 回放结束日 YYYY-MM-DD；与from相隔不超过366天}
+        account: {$ref: '#/components/schemas/StrategyAccount'}
+        params: {$ref: '#/components/schemas/StrategyParams'}
+    StrategyRun:
+      type: object
+      properties:
+        data_quality: {type: object, description: 已冻结任务即使BLOCKED也可返回缺口诊断，不包含部分绩效}
+        run_id: {type: string}
+        status: {type: string, enum: [PENDING, RUNNING, COMPLETED, BLOCKED, FAILED, CANCELLED]}
+        progress: {type: number, minimum: 0, maximum: 100}
+        error: {type: string}
+        input_hash: {type: string}
+        model_version: {type: string}
+        created_at: {type: string}
+        updated_at: {type: string}
+        request: {type: object}
+        result: {$ref: '#/components/schemas/BacktestResp'}
+    StrategyAccount:
+      type: object
+      nullable: true
+      additionalProperties: false
+      description: 可局部覆盖默认账户；null使用默认。回撤须严格递增，fixed_amount/both须有正金额额度。
+      properties:
+        initial_capital: {type: number, exclusiveMinimum: true, minimum: 0, default: 500000}
+        gross_cap_mode: {type: string, enum: [nav_fraction, fixed_amount, both], default: nav_fraction}
+        gross_cap_ratio: {type: number, minimum: 0, maximum: 1, default: 0.8}
+        gross_cap_amount: {type: number, minimum: 0, default: 0}
+        cash_reserve: {type: number, minimum: 0, default: 0, description: 必须小于initial_capital}
+        single_cap_ratio: {type: number, minimum: 0, maximum: 1, default: 0.4}
+        single_risk: {type: number, minimum: 0, maximum: 1, default: 0.01}
+        total_risk: {type: number, minimum: 0, maximum: 1, default: 0.02}
+        max_positions: {type: integer, enum: [1, 2], default: 2}
+        dd_reduce: {type: number, minimum: 0, maximum: 1, default: 0.1}
+        dd_freeze: {type: number, minimum: 0, maximum: 1, default: 0.15}
+        dd_halt: {type: number, minimum: 0, maximum: 1, default: 0.2}
+        target_multiple: {type: number, exclusiveMinimum: true, minimum: 0, default: 2}
+    BacktestPoint:
+      type: object
+      properties:
+        date: {type: string}
+        nav: {type: number}
+        drawdown: {type: number}
+        held: {type: integer}
+        cash_rate: {type: number}
+    StrategyFill:
+      type: object
+      required: [date, signal_date, side, ts_code, shares, price, fee, reason, cash_after]
+      properties:
+        date: {type: string, format: date}
+        signal_date: {type: string, format: date}
+        side: {type: string, enum: [buy, sell]}
+        ts_code: {type: string}
+        shares: {type: integer, minimum: 1}
+        price: {type: number, exclusiveMinimum: 0}
+        fee: {type: number, minimum: 0}
+        reason: {type: string}
+        cash_after: {type: number}
+    ClosingPosition:
+      type: object
+      properties:
+        ts_code: {type: string}
+        shares: {type: integer}
+        avg_cost: {type: number, description: 不含佣金的持仓均价}
+        stop: {type: number}
+    TradeCycle:
+      type: object
+      properties:
+        ts_code: {type: string}
+        entry_date: {type: string, format: date}
+        exit_date: {type: string, description: 未完成周期为空}
+        shares_remaining: {type: integer}
+        buy_amount: {type: number, description: 含滑点的买入金额，不含费用}
+        sell_amount: {type: number, description: 含滑点的卖出金额，不含费用}
+        fees: {type: number}
+        dividends: {type: number, default: 0, description: 周期现金分红到账金额}
+        net_pnl: {type: number, nullable: true, description: 未完全退出时不提供净盈亏}
+    StrategyParams:
+      type: object
+      nullable: true
+      additionalProperties: false
+      description: 策略调优参数（突破周期、跟踪ATR等），未传使用默认
+      properties:
+        ma_fast: {type: integer, default: 20}
+        ma_slow: {type: integer, default: 60}
+        atr_n: {type: integer, default: 20}
+        momentum_n: {type: integer, default: 20}
+        slope_n: {type: integer, default: 5}
+        breakout_n: {type: integer, default: 20}
+        amount_n: {type: integer, default: 20}
+        amount_low: {type: number, default: 1.2}
+        amount_high: {type: number, default: 2.5}
+        max_extension: {type: number, default: 3}
+        init_stop_atr: {type: number, default: 2.5}
+        trail_atr: {type: number, default: 2.5}
+        ma_exit_days: {type: integer, default: 2}
+        cooldown_days: {type: integer, default: 5}
+        gap_up_limit: {type: number, default: 0.03}
+        commission: {type: number, default: 0.0003}
+        min_commission: {type: number, default: 5}
+        slippage_bps: {type: number, default: 10}
+        stamp_rate: {type: number, default: 0.0005}
+    TradeSummary:
+      type: object
+      properties:
+        closed_count: {type: integer}
+        open_count: {type: integer}
+        wins: {type: integer}
+        losses: {type: integer}
+        flats: {type: integer}
+        closed_net_pnl: {type: number}
+        win_rate: {type: number, nullable: true, description: 赢/全部闭合周期；零样本为null}
+        profit_factor: {type: number, nullable: true, description: 盈利和/亏损绝对值和；无亏损为null}
+    BacktestResp:
+      type: object
+      properties:
+        data_quality:
+          type: object
+          properties:
+            policy: {type: string}
+            unavailable_rows: {type: integer, description: 仅受限模式统计加载证券/日历范围不可用行；严格模式未统计，不是全市场缺失数}
+            samples_truncated: {type: boolean}
+            samples:
+              type: array
+              maxItems: 100
+              items:
+                type: object
+                properties:
+                  ts_code: {type: string}
+                  date: {type: string}
+                  reason: {type: string}
+        evidence_level: {type: string, enum: [engineering_replay, limited_research], description: 计算完成不等于历史研究验证通过；旧结果可能未保存}
+        limitations: {type: array, items: {type: string}, description: 本模型已知未验收范围，不是完整逐行缺口报告}
+        cycles: {type: array, items: {$ref: '#/components/schemas/TradeCycle'}}
+        trade_summary: {$ref: '#/components/schemas/TradeSummary'}
+        fills: {type: array, items: {$ref: '#/components/schemas/StrategyFill'}, description: 旧任务可能未保存}
+        corporate_actions:
+          type: array
+          items:
+            type: object
+            properties:
+              date: {type: string}
+              ts_code: {type: string}
+              old_factor: {type: number}
+              new_factor: {type: number}
+              shares_before: {type: integer}
+              shares_after: {type: integer}
+              cash_div: {type: number}
+              cash_after: {type: number}
+              reason: {type: string}
+        dividends_received: {type: number, default: 0}
+        final_cash: {type: number}
+        fees_paid: {type: number}
+        closing_positions: {type: array, items: {$ref: '#/components/schemas/ClosingPosition'}}
+        account: {$ref: '#/components/schemas/StrategyAccount'}
+        params: {$ref: '#/components/schemas/StrategyParams'}
+        input_hash: {type: string}
+        model_version: {type: string}
+        pools: {type: object, description: 本次冻结月池；月末结束时可额外包含下一生效月, additionalProperties: {$ref: '#/components/schemas/PoolResp'}}
+        version: {type: string}
+        effect_months: {type: array, items: {type: string}}
+        points: {type: integer}
+        trades: {type: integer}
+        halted: {type: boolean}
+        final_nav: {type: number}
+        total_return: {type: number}
+        max_drawdown: {type: number}
+        funnel: {type: object}
+        series: {type: array, items: {$ref: '#/components/schemas/BacktestPoint'}}
+        open_intents:
+          type: array
+          description: 区间末仍未执行的冻结意图（方向/代码/股数/信号日/理由）
+          items:
+            type: object
+            properties:
+              side: {type: string, enum: [buy, sell]}
+              ts_code: {type: string}
+              shares: {type: integer}
+              signal_date: {type: string}
+              ref_price: {type: number}
+              stop_price: {type: number}
+              market_cap: {type: number, minimum: 0, maximum: 1, description: 买单冻结的市场/回撤上限比例；卖单为0}
+              reason: {type: string, description: 退出主原因；halt/offpool/market/stop/ma/risk，买单可为空}
+    PoolResp:
+      type: object
+      properties:
+        month: {type: string}
+        range_from: {type: string}
+        range_to: {type: string}
+        dataset_v: {type: string}
+        entries: {type: array, items: {type: object}}
+    AuthLoginReq:
+      type: object
+      required: [username, password, token]
+      properties:
+        username: {type: string, description: 管理员账号}
+        password: {type: string, description: 管理员密码}
+        token: {type: string, description: 共享静态令牌（与 Bearer 同值）}
+    AuthLoginResp:
+      type: object
+      properties:
+        username: {type: string}
+        token: {type: string, description: 后续 /admin 调用共用的 Bearer 令牌}
+security: [{staticBearer: []}]
+paths:
+  /:
+    get:
+      security: []
+      responses: {'200': {description: 健康}}
+  /admin/datasets:
+    get:
+      responses:
+        '200': {description: 白名单数据集}
+        '401': {description: 未鉴权, content: {'application/json': {schema: {$ref: '#/components/schemas/Error'}}}}
+  /admin/datasets/{name}/schema:
+    get:
+      parameters: [{name: name, in: path, required: true, schema: {type: string}}]
+      responses:
+        '200': {description: 表结构}
+        '404': {description: 无权或未初始化}
+  /admin/datasets/query:
+    post:
+      requestBody: {required: true, content: {'application/json': {schema: {$ref: '#/components/schemas/DatasetQuery'}}}}
+      responses:
+        '200': {description: 行查询（count 为本页条数）}
+        '400': {description: 参数非法}
+  /admin/etl/sync:
+    post:
+      requestBody: {required: true, content: {'application/json': {schema: {$ref: '#/components/schemas/SyncTask'}}}}
+      responses:
+        '202': {description: 已入队或复用队列中任务，返回 task_id}
+        '400': {description: 不支持的任务}
+        '503': {description: 磁盘≥90% 拒绝全量任务}
+  /admin/tasks/status:
+    get:
+      parameters: [{name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 20}}]
+      responses: {'200': {description: 任务状态倒序}}
+  /admin/quality/coverage:
+    get:
+      responses:
+        '200':
+          description: 每表覆盖边界、总量与近 10 日计数
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [universe, latest_trading_day, tables]
+                properties:
+                  universe: {type: integer, description: 上市股票池}
+                  latest_trading_day: {type: string}
+                  tables:
+                    type: array
+                    items:
+                      type: object
+                      required: [name, as_of, complete, total, missing, reason, next]
+                      properties:
+                        name: {type: string}
+                        description: {type: string}
+                        min_date: {type: string}
+                        max_date: {type: string}
+                        total: {type: integer}
+                        recent: {type: array, items: {type: object, properties: {date: {type: string}, count: {type: integer}}}}
+                        as_of: {type: string, description: 最新完整口径日期}
+                        complete: {type: boolean}
+                        ratio: {type: number}
+                        missing: {type: array, items: {type: string}, description: 缺口日期或季度}
+                        reason: {type: string, description: 最近归属任务状态}
+                        next: {type: string, description: 下次补采提示}
+  /admin/strategy/backtests:
+    get:
+      parameters: [{name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 20}}]
+      responses:
+        '200': {description: 已保存任务列表；不触发计算}
+    post:
+      description: 提交后台回测；跨度≤366天、全部月份≤13，活动任务最多20个。缺数据保留BLOCKED，不返回部分收益。
+      requestBody: {required: true, content: {'application/json': {schema: {$ref: '#/components/schemas/BacktestReq'}}}}
+      responses:
+        '202': {description: 已入队或复用活动请求，返回run_id和status}
+        '400': {description: 参数非法, content: {'application/json': {schema: {$ref: '#/components/schemas/Error'}}}}
+        '429': {description: 活动研究任务已满}
+        '500':
+          description: 研究任务入队或队列读取失败；计算期的数据阻断由任务状态及error报告
+          content: {'application/json': {schema: {$ref: '#/components/schemas/Error'}}}
+  /admin/strategy/backtests/{id}:
+    parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+    get:
+      responses:
+        '200': {description: 保存的任务及完成结果, content: {'application/json': {schema: {$ref: '#/components/schemas/StrategyRun'}}}}
+        '404': {description: 任务不存在}
+    delete:
+      description: 标记活动任务取消；不删除历史，已完成任务不能取消
+      responses:
+        '200': {description: 已标记取消}
+        '409': {description: 非活动任务或任务不存在}
+  /admin/strategy/pools:
+    get:
+      parameters: [{name: month, in: query, required: true, schema: {type: string, pattern: '^[0-9]{4}-[0-9]{2}$'}}]
+      responses:
+        '200': {description: 月份快照, content: {'application/json': {schema: {$ref: '#/components/schemas/PoolResp'}}}}
+        '404': {description: 无快照, content: {'application/json': {schema: {$ref: '#/components/schemas/Error'}}}}
+  /admin/auth/login:
+    post:
+      security: []
+      description: 单用户控制台登录；用户名、密码、共享令牌三者须同时匹配服务端配置
+      requestBody: {required: true, content: {'application/json': {schema: {$ref: '#/components/schemas/AuthLoginReq'}}}}
+      responses:
+        '200':
+          description: 登录成功，返回共用令牌
+          content: {'application/json': {schema: {$ref: '#/components/schemas/AuthLoginResp'}}}
+        '401': {description: 任一不匹配, content: {'application/json': {schema: {$ref: '#/components/schemas/Error'}}}}
+        '503': {description: 服务端未配置管理员账号, content: {'application/json': {schema: {$ref: '#/components/schemas/Error'}}}}
